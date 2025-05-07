@@ -1,0 +1,32 @@
+# Byte-code files
+*.pyc
+__pycache__/
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+
+# Environments
+.env
+venv/
+env/
+.ipynb_checkpoints/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# MyPy
+.mypy_cache/
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+
+# OS generated files
+.DS_Store
+thumbs.db

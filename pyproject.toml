@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "equinox"
+version = "0.1.0"
+description = "Equinox is the Python library for computing estimated time of arrival (ETA) for a given route, or for the whole route graph."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name="Thinh Hoang", email="dthoang@intuelle.com" },
+]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "cartopy",
+    "shapely",
+    "xarray",
+]
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: OS Independent",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.optional-dependencies]
+dev = [ "pytest>=7.0", "flake8", "black", "mypy" ]
+docs = [ "sphinx>=4.0", "sphinx-rtd-theme" ]
+
+[project.urls]
+
+[project.scripts]
+"my-command" = "my_package.cli:main_function"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["tests*"]

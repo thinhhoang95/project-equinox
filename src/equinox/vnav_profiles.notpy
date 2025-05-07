@@ -1,0 +1,210 @@
+"""
+===============================================================================
+                     CLIMB AND DESCENT SPEED PROFILES
+===============================================================================
+This file contains predefined vertical navigation (VNAV) profiles for various
+aircraft categories. These profiles describe typical true airspeed (TAS) schedules
+for climb and descent phases of flight.
+
+Each profile is a list of tuples: `[(altitude_threshold_ft, speed_kts), ...]`
+- `altitude_threshold_ft`: The upper boundary (exclusive) of an altitude segment in feet.
+                           `float('inf')` can be used for the last segment's upper boundary.
+- `speed_kts`: The true airspeed in knots for that segment.
+
+These profiles are intended for use with flight simulation or planning tools
+that model aircraft performance based on such segmented profiles, like the
+ACPerformance class.
+"""
+from typing import List, Tuple
+
+# 1. General Aviation (Light Piston Aircraft)
+# Typically unpressurized, lower cruise altitudes, slower speeds.
+# Example: Cessna 172, Piper PA-28
+
+LIGHT_AIRCRAFT_CLIMB_PROFILE: List[Tuple[float, float]] = [
+    (5000, 80),         # Up to 5,000 ft: 80 kts TAS
+    (float('inf'), 90)  # Above 5,000 ft: 90 kts TAS
+]
+
+LIGHT_AIRCRAFT_DESCENT_PROFILE: List[Tuple[float, float]] = [
+    (5000, 95),         # Below 5,000 ft: 95 kts TAS (during descent)
+    (10000, 85),        # 5,000 to <10,000 ft: 85 kts TAS (typical max cruise for simple GA)
+    (float('inf'), 85)  # Above 10,000 ft: 85 kts TAS (typical max cruise for simple GA)
+]
+
+# 2. Turboprop (Regional)
+# Pressurized, medium cruise altitudes (FL180-FL250), moderate speeds.
+# Example: ATR 72, De Havilland Canada Dash 8
+
+TURBOPROP_CLIMB_PROFILE: List[Tuple[float, float]] = [
+    (10000, 200),       # Up to 10,000 ft: 200 kts TAS
+    (18000, 220),       # 10,000 to <18,000 ft: 220 kts TAS
+    (float('inf'), 240) # Above 18,000 ft: 240 kts TAS
+]
+
+TURBOPROP_DESCENT_PROFILE: List[Tuple[float, float]] = [
+    (10000, 210),       # Below 10,000 ft: 210 kts TAS (slowing for approach)
+    (25000, 240),       # 10,000 to <25,000 ft: 240 kts TAS (typical cruise altitude FL250)
+    (float('inf'), 240) # Above 25,000 ft: 240 kts TAS (typical cruise altitude FL250)
+]
+
+# 3. Narrow-Body Jet (Short/Medium Haul)
+# High subsonic speeds, cruise altitudes FL300-FL390.
+# Example: Boeing 737 series, Airbus A320 family
+
+NARROW_BODY_JET_CLIMB_PROFILE: List[Tuple[float, float]] = [
+    (10000, 250),       # Below 10,000 ft: 250 kts TAS (standard restriction)
+    (28000, 300),       # 10,000 to <28,000 ft: 300 kts TAS (transition to Mach)
+    (float('inf'), 450) # Above 28,000 ft: approx. 450 kts TAS (e.g., M0.78)
+]
+
+NARROW_BODY_JET_DESCENT_PROFILE: List[Tuple[float, float]] = [
+    (10000, 250),       # Below 10,000 ft: 250 kts TAS
+    (28000, 300),       # 10,000 to <28,000 ft: 300 kts TAS
+    (39000, 450),        # 28,000 to <39,000 ft: approx. 450 kts TAS (typical max cruise FL390)
+    (float('inf'), 450) # Above 39,000 ft: approx. 450 kts TAS (e.g., M0.78)
+]
+
+# 4. Wide-Body Jet (Long Haul)
+# High subsonic speeds, cruise altitudes FL320-FL410.
+# Example: Boeing 777, Boeing 787, Airbus A330, Airbus A350
+
+WIDE_BODY_JET_CLIMB_PROFILE: List[Tuple[float, float]] = [
+    (10000, 250),       # Below 10,000 ft: 250 kts TAS
+    (30000, 320),       # 10,000 to <30,000 ft: 320 kts TAS
+    (float('inf'), 480) # Above 30,000 ft: approx. 480 kts TAS (e.g., M0.82-M0.85)
+]
+
+WIDE_BODY_JET_DESCENT_PROFILE: List[Tuple[float, float]] = [
+    (10000, 250),       # Below 10,000 ft: 250 kts TAS
+    (30000, 320),       # 10,000 to <30,000 ft: 320 kts TAS
+    (41000, 480),        # 30,000 to <41,000 ft: approx. 480 kts TAS (typical max cruise FL410)
+    (float('inf'), 480) # Above 41,000 ft: approx. 480 kts TAS (e.g., M0.82-M0.85)
+]
+
+# 5. Business Jet (High Performance)
+# Capable of rapid climbs to high altitudes (FL410-FL510).
+# Example: Gulfstream G650, Bombardier Global series
+
+BUSINESS_JET_CLIMB_PROFILE: List[Tuple[float, float]] = [
+    (10000, 250),       # Below 10,000 ft: 250 kts TAS
+    (25000, 330),       # 10,000 to <25,000 ft: 330 kts TAS
+    (float('inf'), 470) # Above 25,000 ft: approx. 470 kts TAS (e.g., M0.80-M0.85)
+]
+
+BUSINESS_JET_DESCENT_PROFILE: List[Tuple[float, float]] = [
+    (10000, 250),       # Below 10,000 ft: 250 kts TAS
+    (25000, 330),       # 10,000 to <25,000 ft: 330 kts TAS
+    (45000, 470),       # 25,000 to <45,000 ft: approx. 470 kts TAS (typical cruise up to FL450)
+    (float('inf'), 470) # Above 45,000 ft: approx. 470 kts TAS (e.g., M0.80-M0.85)
+]
+
+# Example of a profile for a specific, high-altitude, fast climb scenario
+# (e.g., for some military or specialized aircraft, or a very aggressive bizjet profile)
+FAST_JET_HIGH_ALT_CLIMB_PROFILE: List[Tuple[float, float]] = [
+    (10000, 280),       # Faster initial climb below 10k if ATC permits
+    (30000, 350),       # Aggressive climb speed
+    (float('inf'), 480) # Maintaining high TAS to very high altitudes
+]
+
+# A more conservative descent profile, perhaps for fuel efficiency or passenger comfort
+CONSERVATIVE_DESCENT_PROFILE: List[Tuple[float, float]] = [
+    (10000, 230),       # Slower below 10,000 ft
+    (20000, 260),       # Moderate speed in mid-descent
+    (35000, 420),       # Slower high-altitude descent speed
+    (float('inf'), 420) # Above 35,000 ft: approx. 420 kts TAS (e.g., M0.80-M0.85)
+] 
+
+
+'''
+===============================================================================
+                 CLIMB AND DESCENT VERTICAL RATE PROFILES
+===============================================================================
+'''
+# These profiles describe typical vertical speed (VS) in feet per minute (fpm)
+# for the climb phase, corresponding to the aircraft categories above.
+# Each profile is a list of tuples: `[(altitude_threshold_ft, climb_rate_fpm), ...]`
+
+# 1. General Aviation (Light Piston Aircraft) Climb Vertical Speed
+LIGHT_AIRCRAFT_CLIMB_VS_PROFILE: List[Tuple[float, float]] = [
+    (5000, 600),         # Up to 5,000 ft: avg 600 fpm
+    (float('inf'), 400)  # Above 5,000 ft: avg 400 fpm
+]
+
+# 2. Turboprop (Regional) Climb Vertical Speed
+TURBOPROP_CLIMB_VS_PROFILE: List[Tuple[float, float]] = [
+    (10000, 2000),       # Up to 10,000 ft: avg 2000 fpm
+    (18000, 1400),       # 10,000 to <18,000 ft: avg 1400 fpm
+    (float('inf'), 1000) # Above 18,000 ft: avg 1000 fpm
+]
+
+# 3. Narrow-Body Jet (Short/Medium Haul) Climb Vertical Speed
+NARROW_BODY_JET_CLIMB_VS_PROFILE: List[Tuple[float, float]] = [
+    (10000, 2750),       # Up to 10,000 ft: avg 2750 fpm
+    (28000, 1800),       # 10,000 to <28,000 ft: simplified 1800 fpm
+    (float('inf'), 1200) # Above 28,000 ft: simplified 1200 fpm
+]
+
+# 4. Wide-Body Jet (Long Haul) Climb Vertical Speed
+WIDE_BODY_JET_CLIMB_VS_PROFILE: List[Tuple[float, float]] = [
+    (10000, 2400),       # Up to 10,000 ft: avg 2400 fpm
+    (30000, 1600),       # 10,000 to <30,000 ft: simplified 1600 fpm
+    (float('inf'), 1000)  # Above 30,000 ft: simplified 1000 fpm
+]
+
+# 5. Business Jet (High Performance) Climb Vertical Speed
+BUSINESS_JET_CLIMB_VS_PROFILE: List[Tuple[float, float]] = [
+    (10000, 3750),       # Up to 10,000 ft: avg 3750 fpm
+    (25000, 2800),       # 10,000 to <25,000 ft: simplified 2800 fpm
+    (float('inf'), 1800) # Above 25,000 ft: simplified 1800 fpm
+]
+
+# These profiles describe typical vertical speed (VS) in feet per minute (fpm)
+# for the descent phase, corresponding to the aircraft categories above.
+# Each profile is a list of tuples: `[(altitude_threshold_ft, descent_rate_fpm), ...]`
+
+# 1. General Aviation (Light Piston Aircraft) Descent Vertical Speed
+LIGHT_AIRCRAFT_DESCENT_VS_PROFILE: List[Tuple[float, float]] = [
+    (5000, 750),         # Below 5,000 ft: avg 750 fpm
+    (10000, 650),        # 5,000 to <10,000 ft: avg 650 fpm
+    (float('inf'), 500)  # Above 10,000 ft: avg 500 fpm
+]
+
+# 2. Turboprop (Regional) Descent Vertical Speed
+TURBOPROP_DESCENT_VS_PROFILE: List[Tuple[float, float]] = [
+    (10000, 1200),       # Below 10,000 ft: avg 1200 fpm
+    (25000, 1500),       # 10,000 to <25,000 ft: avg 1500 fpm
+    (float('inf'), 1800) # Above 25,000 ft: avg 1800 fpm
+]
+
+# 3. Narrow-Body Jet (Short/Medium Haul) Descent Vertical Speed
+NARROW_BODY_JET_DESCENT_VS_PROFILE: List[Tuple[float, float]] = [
+    (10000, 1500),       # Below 10,000 ft: avg 1500 fpm
+    (28000, 2200),       # 10,000 to <28,000 ft: avg 2200 fpm
+    (39000, 2400),       # 28,000 to <39,000 ft: avg 2400 fpm
+    (float('inf'), 2400) # Above 39,000 ft: avg 2400 fpm
+]
+
+# 4. Wide-Body Jet (Long Haul) Descent Vertical Speed
+WIDE_BODY_JET_DESCENT_VS_PROFILE: List[Tuple[float, float]] = [
+    (10000, 1500),       # Below 10,000 ft: avg 1500 fpm
+    (30000, 2200),       # 10,000 to <30,000 ft: avg 2200 fpm
+    (41000, 2400),       # 30,000 to <41,000 ft: avg 2400 fpm
+    (float('inf'), 2400) # Above 41,000 ft: avg 2400 fpm
+]
+
+# 5. Business Jet (High Performance) Descent Vertical Speed
+BUSINESS_JET_DESCENT_VS_PROFILE: List[Tuple[float, float]] = [
+    (10000, 2000),       # Below 10,000 ft: avg 2000 fpm
+    (25000, 2500),       # 10,000 to <25,000 ft: avg 2500 fpm
+    (45000, 3000),       # 25,000 to <45,000 ft: avg 3000 fpm
+    (float('inf'), 3000) # Above 45,000 ft: avg 3000 fpm
+]
+
+# 6. Conservative Descent Vertical Speed (Generic Example)
+CONSERVATIVE_DESCENT_VS_PROFILE: List[Tuple[float, float]] = [
+    (10000, 1200),       # Below 10,000 ft: avg 1200 fpm
+    (20000, 1500),       # 10,000 to <20,000 ft: avg 1500 fpm
+    (35000, 2100),       # 20,000 to <35,000 ft: avg 2100 fpm
+    (float('inf'), 2100) # Above 35,000 ft: avg 2100 fpm
+]
