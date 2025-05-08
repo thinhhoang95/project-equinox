@@ -10,7 +10,7 @@ os.makedirs(output_dir, exist_ok=True)
 # Global parameters that remain the same
 times = [f'{h:02d}:00' for h in range(24)]
 pressure_levels = ['850', '300']  # 300 hPa for cruise altitude, 850 hPa for top of boundary layer 
-vars_single = ['10u', '10v', 'cape', 'cin', 'hcct'] # Single-level variables
+vars_single = ['10u', '10v', 'cape', 'hcct'] # Single-level variables
 vars_pressure = ['u', 'v', 'w'] # Pressure-level variables
 area = [72, -15, 30, 41] # N, W, S, E
 
