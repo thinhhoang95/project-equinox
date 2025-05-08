@@ -12,7 +12,7 @@ def sec2Formatted(seconds: float) -> str:
     return f'{minutes}:{seconds:02d}'
 
 # Only functions starting with 'test_' will be tested by pytest
-def test_climb_eta():
+def test_narrow_body_jet():
     # Case 1: an ordinary narrow-body jet
     print('Case 1: an ordinary narrow-body jet')
     flight_performance = Performance(
@@ -48,4 +48,4 @@ def test_climb_eta():
     assert 1260 <= descent_etas[-1][1] <= 1380
 
 if __name__ == '__main__':
-    test_climb_eta()
+    test_narrow_body_jet()
