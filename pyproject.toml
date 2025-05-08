@@ -17,6 +17,8 @@ dependencies = [
     "cartopy",
     "shapely",
     "xarray",
+    "scipy",
+    "cdsapi>=0.7.4"
 ]
 
 classifiers = [
