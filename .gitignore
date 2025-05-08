@@ -30,3 +30,6 @@ htmlcov/
 # OS generated files
 .DS_Store
 thumbs.db
+
+# data
+data/era5/

@@ -1,5 +1,5 @@
-from equinox.vnav_performance import Performance
-from equinox.vnav_profiles_rev1 import (
+from equinox.vnav.vnav_performance import Performance
+from equinox.vnav.vnav_profiles_rev1 import (
     NARROW_BODY_JET_CLIMB_PROFILE,
     NARROW_BODY_JET_CLIMB_VS_PROFILE,
     NARROW_BODY_JET_DESCENT_PROFILE,
