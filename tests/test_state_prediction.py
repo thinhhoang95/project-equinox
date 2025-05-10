@@ -1,4 +1,4 @@
-from equinox.route.value_iteration_torch import get_next_state
+from equinox.route.forward_state import get_next_state_fw
 from equinox.vnav.vnav_performance import Performance, get_eta_and_distance_climb
 from equinox.wind.wind_free import WindFree 
 from equinox.vnav.vnav_profiles_rev1 import NARROW_BODY_JET_CLIMB_PROFILE, NARROW_BODY_JET_CLIMB_VS_PROFILE, NARROW_BODY_JET_DESCENT_PROFILE, NARROW_BODY_JET_DESCENT_VS_PROFILE
@@ -46,7 +46,7 @@ def test_one_climb_phase_wind_free():
     print(f"Distance between SFO and TIPRE: {dist_nm:.2f} nautical miles")
 
     # Get the next state
-    alt_tgt, eta_tgt, phase_tgt = get_next_state(coords_src, alts_src, eta_src, phase_src, coords_tgt, performance_table, wind_model)
+    alt_tgt, eta_tgt, phase_tgt = get_next_state_fw(coords_src, alts_src, eta_src, phase_src, coords_tgt, performance_table, wind_model)
 
     # Convert to numpy on cpu before displaying
     alt_tgt_np = alt_tgt.cpu().numpy()
@@ -101,7 +101,7 @@ def test_two_climb_phases_wind_free():
     print(f"Distance between SFO and INSLO: {dist_nm:.2f} nautical miles")
 
     # Get the next state
-    alt_tgt, eta_tgt, phase_tgt = get_next_state(coords_src, alts_src, eta_src, phase_src, coords_tgt, performance_table, wind_model)
+    alt_tgt, eta_tgt, phase_tgt = get_next_state_fw(coords_src, alts_src, eta_src, phase_src, coords_tgt, performance_table, wind_model)
 
     # Convert to numpy on cpu before displaying
     alt_tgt_np = alt_tgt.cpu().numpy()
