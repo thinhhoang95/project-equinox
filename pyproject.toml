@@ -18,7 +18,12 @@ dependencies = [
     "shapely",
     "xarray",
     "scipy",
-    "cdsapi>=0.7.4"
+    "cdsapi>=0.7.4",
+    "netcdf4",
+    "matplotlib",
+    "networkx",
+    "torch",
+    "torch_scatter"
 ]
 
 classifiers = [

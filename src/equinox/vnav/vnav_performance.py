@@ -302,6 +302,81 @@ class Performance:
                     results[-1] = (current_alt_ft, elapsed_time_sec)
 
         return results
+    
+    def get_along_track_wind_adjusted_distance(
+        self, origin_airport_elevation_ft: float
+    ) -> List[Tuple[float, float]]:
+        """
+        Calculates the cumulative along-track distance (in nautical miles) covered
+        during climb at each significant altitude level, up to cruise altitude.
+        The distance is calculated based on True Airspeed (TAS) and time spent in each
+        climb segment. The term "wind-adjusted" in the method name suggests this
+        is the air distance, which forms a basis before ground speed calculations
+        incorporating actual wind effects.
+
+        A "significant altitude" (or "knot point") is an altitude at which there is a 
+        change in target true airspeed or vertical speed as defined in the climb profiles, 
+        or the cruise altitude itself.
+
+        Args:
+            origin_airport_elevation_ft: The elevation of the origin airport in feet.
+
+        Returns:
+            A list of tuples (altitude_ft, cumulative_distance_nm). The first entry
+            is always (origin_airport_elevation_ft, 0.0). Subsequent entries
+            represent significant altitudes reached and the cumulative air distance covered.
+        """
+        results: List[Tuple[float, float]] = []
+        current_alt_ft = float(origin_airport_elevation_ft)
+        cumulative_distance_nm = 0.0
+
+        results.append((current_alt_ft, cumulative_distance_nm))
+
+        # If already at or above cruise altitude, no further climb distance is covered.
+        if current_alt_ft >= self.cruise_altitude_ft:
+            return results
+
+        # Iterate through the segments defined in the combined climb profile.
+        # Each tuple is (segment_upper_alt_ft, segment_tas_kts, segment_vs_fpm)
+        # where segment_tas_kts and segment_vs_fpm apply for the climb up to segment_upper_alt_ft.
+        for segment_upper_alt, segment_tas_kts, segment_vs_fpm in self._combined_climb_profile:
+            # Stop if we've effectively reached or climbed past the cruise altitude.
+            if current_alt_ft >= self.cruise_altitude_ft:
+                break
+
+            # If vertical speed is not positive, we cannot climb further using this segment's parameters.
+            # This implies an issue with the profile for climb or that the aircraft is "stuck".
+            if segment_vs_fpm <= 0:
+                break 
+
+            # Determine the target altitude for this specific processing step.
+            climb_target_for_this_segment_step = min(segment_upper_alt, self.cruise_altitude_ft)
+
+            # Only calculate if there's altitude to gain to reach climb_target_for_this_segment_step.
+            if current_alt_ft < climb_target_for_this_segment_step:
+                alt_delta_ft = climb_target_for_this_segment_step - current_alt_ft
+                
+                # Time to climb this altitude delta in hours.
+                # segment_vs_fpm is in ft/min. (segment_vs_fpm * 60) is ft/hr.
+                # alt_delta_ft / (ft/hr) = hours.
+                # segment_vs_fpm is guaranteed positive due to the check above.
+                time_delta_hr = alt_delta_ft / (segment_vs_fpm * 60.0)
+
+                # Distance covered in this step (TAS is in knots, i.e., nm/hr).
+                distance_step_nm = segment_tas_kts * time_delta_hr
+                cumulative_distance_nm += distance_step_nm
+
+                # Update current altitude to the altitude reached in this step.
+                current_alt_ft = climb_target_for_this_segment_step
+
+                # Add the new point (altitude, cumulative_distance) to results.
+                # If current_alt_ft is the same as the last recorded altitude, update its distance.
+                if not results or results[-1][0] != current_alt_ft:
+                    results.append((current_alt_ft, cumulative_distance_nm))
+                elif results[-1][0] == current_alt_ft:
+                    results[-1] = (current_alt_ft, cumulative_distance_nm)
+        
+        return results
 
     def get_descent_eta(
         self, destination_airport_elevation_ft: float
@@ -410,6 +485,50 @@ class Performance:
 
         return results
 
+
+# Some helper functions for type conversion
+def get_eta_and_distance_climb(perf: Performance, origin_airport_elevation_ft: float):
+    eta_climb = perf.get_climb_eta(origin_airport_elevation_ft) # (alt_ft, time_sec)
+    along_track_wind_adjusted_distance = perf.get_along_track_wind_adjusted_distance(origin_airport_elevation_ft) # (alt_ft, distance_nm)
+
+    # Merge eta_climb and along_track_wind_adjusted_distance into a single list of (altitude, eta, along_track_distance)
+    # Both inputs are expected to be sorted by altitude ascending, and have the same "knot" structure (altitude thresholds)
+    # But if not, we need to merge them as described.
+
+    def merge_eta_and_distance_profiles(
+        eta_climb: list, along_track_wind_adjusted_distance: list
+    ) -> list:
+        """
+        Merge two profiles: eta_climb [(alt_ft, eta_sec)], along_track_wind_adjusted_distance [(alt_ft, dist_nm)]
+        into [(alt_ft, eta_sec, dist_nm)].
+
+        If an altitude exists in only one, use the most recent value for the other.
+        The altitude threshold is valid for altitudes above it, up to the next knot point.
+        """
+        # Defensive: sort by altitude just in case
+        eta_climb = sorted(eta_climb, key=lambda x: x[0])
+        along_track_wind_adjusted_distance = sorted(along_track_wind_adjusted_distance, key=lambda x: x[0])
+
+        # Collect all unique knot points
+        altitudes = sorted(set([a for a, _ in eta_climb] + [a for a, _ in along_track_wind_adjusted_distance]))
+
+        # Build dicts for fast lookup
+        eta_dict = {a: v for a, v in eta_climb}
+        dist_dict = {a: v for a, v in along_track_wind_adjusted_distance}
+
+        merged = []
+        last_eta = None
+        last_dist = None
+
+        for alt in altitudes:
+            if alt in eta_dict:
+                last_eta = eta_dict[alt]
+            if alt in dist_dict:
+                last_dist = dist_dict[alt]
+            merged.append((alt, last_eta, last_dist))
+        return merged
+    
+    return merge_eta_and_distance_profiles(eta_climb, along_track_wind_adjusted_distance)
 
 # Example Usage (for testing - not part of the class itself):
 if __name__ == "__main__":

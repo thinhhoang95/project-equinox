@@ -53,5 +53,25 @@ def test_narrow_body_jet():
     # Assert last descent time is within 21-23 minutes (1260-1380 seconds)
     assert 1260 <= descent_etas[-1][1] <= 1380
 
+def test_narrow_body_jet_distance():
+    flight_performance = Performance(
+        climb_speed_profile=NARROW_BODY_JET_CLIMB_PROFILE,
+        descent_speed_profile=NARROW_BODY_JET_DESCENT_PROFILE,
+        climb_vertical_speed_profile=NARROW_BODY_JET_CLIMB_VS_PROFILE,
+        descent_vertical_speed_profile=NARROW_BODY_JET_DESCENT_VS_PROFILE,
+        cruise_altitude_ft=35000,
+        cruise_speed_kts=450,
+    )
+
+    origin_airport_elevation_ft = 0
+    along_track_wind_adjusted_distance = flight_performance.get_along_track_wind_adjusted_distance(
+        origin_airport_elevation_ft=origin_airport_elevation_ft
+    ) # example: [(0.0, 0.0), (10000, 13.888888888888888), (20000, 41.388888888888886), (28000, 67.38888888888889), (35000, 112.11111111111111)] (alt (ft), distance (nm))
+    print(f"{'Alt (ft)':<10} {'Distance (nm)':<15}")
+    print("-" * 25)
+    for alt, dist in along_track_wind_adjusted_distance:
+        print(f"{alt:<10} {dist:<15.2f}")
+
 if __name__ == '__main__':
-    test_narrow_body_jet()
+    # test_narrow_body_jet()
+    test_narrow_body_jet_distance()

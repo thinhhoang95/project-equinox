@@ -52,7 +52,7 @@ class WindModel:
         except FileNotFoundError:
             raise FileNotFoundError(f"Data file not found: {file_path}")
 
-        required_vars = ['u10', 'v10', 'u', 'v', 'cape', 'cin']
+        required_vars = ['u10', 'v10', 'u', 'v', 'cape']
         for var in required_vars:
             if var not in self.data:
                 raise ValueError(f"Variable '{var}' not found in dataset {file_path}.")
@@ -221,8 +221,8 @@ class WindModel:
         
         try:
             cape_val = self.data['cape'].interp(coords_to_interp, method=method, kwargs={"fill_value": None}).item()
-            cin_val = self.data['cin'].interp(coords_to_interp, method=method, kwargs={"fill_value": None}).item()
-            return cape_val, cin_val
+            # cin_val = self.data['cin'].interp(coords_to_interp, method=method, kwargs={"fill_value": None}).item()
+            return cape_val, np.nan
         except Exception: # Broad exception if interpolation fails
             return np.nan, np.nan
 
