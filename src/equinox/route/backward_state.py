@@ -164,26 +164,26 @@ def batched_interp1d_torch(
 
 def get_backward_state(
     coords_src: torch.Tensor,
-    alts_src: torch.Tensor,
-    eta_src: torch.Tensor,
-    phase_src: torch.Tensor,
+    alts_t: torch.Tensor,
+    eta_t: torch.Tensor,
+    phase_t: torch.Tensor,
     coords_tgt: torch.Tensor,
-    climb_performance: List[Tuple[float, float, float]],
+    descent_performance: List[Tuple[float, float, float]],
     wind_model: WindModel,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Args:
         coords_src (torch.Tensor): Source coordinates for each segment, shape [batch_size, 2].
                                    Format is (latitude, longitude) in degrees.
-        alts_src (torch.Tensor): Source altitudes for each segment, shape [batch_size].
+        alts_t (torch.Tensor): Source altitudes for each segment, shape [batch_size].
                                  Altitude is in feet.
-        eta_src (torch.Tensor): Estimated Time of Arrival (ETA) at the source point for each segment,
+        eta_t (torch.Tensor): Estimated Time of Arrival (ETA) at the source point for each segment,
                                 shape [batch_size]. Time is in seconds (e.g., since midnight, depending on the min timestamp in the wind model).
-        phase_src (torch.Tensor): The current flight phase for each segment, shape [batch_size].
+        phase_t (torch.Tensor): The current flight phase for each segment, shape [batch_size].
                                   Uses integer identifiers: CLIMB (0), CRUISE (1), DESCENT (2).
         coords_tgt (torch.Tensor): Target coordinates for each segment, shape [batch_size, 2].
                                    Format is (latitude, longitude) in degrees.
-        climb_performance (List[Tuple[float, float, float]]): A list defining the aircraft's climb
+        descent_performance (List[Tuple[float, float, float]]): A list defining the aircraft's climb
                                    profile. Each tuple represents a point in the profile with
                                    (altitude in feet, elapsed time from profile start in seconds,
                                    wind-free distance covered from profile start in nautical miles).
@@ -199,78 +199,6 @@ def get_backward_state(
             - eta_tgt (torch.Tensor): Target Estimated Time of Arrival in seconds.
             - phase_tgt (torch.Tensor): Target flight phase (CLIMB, CRUISE, or DESCENT, potentially transitioning
                                         to CRUISE if ToC is reached within the segment).
-
-    Examples:
-
-    Assuming necessary imports and `WindModel`, `Performance`, `get_eta_and_distance_climb` are available.
-
-    1.  **Climbing Segment (Wind-Free):**
-        ```python
-        from equinox.wind.wind_free import WindFree
-        from equinox.vnav.vnav_performance import Performance, get_eta_and_distance_climb
-        from equinox.vnav.vnav_profiles_rev1 import NARROW_BODY_JET_CLIMB_PROFILE, NARROW_BODY_JET_DESCENT_PROFILE, NARROW_BODY_JET_CLIMB_VS_PROFILE, NARROW_BODY_JET_DESCENT_VS_PROFILE
-        import torch
-
-        wind_model = WindFree()
-        performance = Performance(
-            NARROW_BODY_JET_CLIMB_PROFILE,
-            NARROW_BODY_JET_DESCENT_PROFILE,
-            NARROW_BODY_JET_CLIMB_VS_PROFILE,
-            NARROW_BODY_JET_DESCENT_VS_PROFILE,
-            cruise_altitude_ft=35000,
-            cruise_speed_kts=450,
-        )
-        climb_perf_table = get_eta_and_distance_climb(performance, 1000)
-
-        coords_src = torch.tensor([[37.7749, -122.4194]]) # SFO
-        alts_src = torch.tensor([1000]) # 1000 ft
-        eta_src = torch.tensor([0]) # 0 seconds
-        phase_src = torch.tensor([0]) # CLIMB
-        coords_tgt = torch.tensor([[38.123, -121.021]]) # TIPRE waypoint
-
-        alt_tgt, eta_tgt, phase_tgt = get_next_state_fw(
-            coords_src, alts_src, eta_src, phase_src, coords_tgt, climb_perf_table, wind_model
-        )
-        # Expected output will show altitude and ETA consistent with the climb profile
-        # covering the distance to TIPRE, phase remains CLIMB if ToC not reached.
-        print(f"Target Altitude: {alt_tgt.item():.0f} ft, Target ETA: {eta_tgt.item():.1f} s, Target Phase: {phase_tgt.item()}")
-        ```
-
-    2.  **Cruise Segment (Wind-Free):**
-        ```python
-        from equinox.wind.wind_free import WindFree
-        from equinox.vnav.vnav_performance import Performance, get_eta_and_distance_climb
-        from equinox.vnav.vnav_profiles_rev1 import NARROW_BODY_JET_CLIMB_PROFILE, NARROW_BODY_JET_DESCENT_PROFILE, NARROW_BODY_JET_CLIMB_VS_PROFILE, NARROW_BODY_JET_DESCENT_VS_PROFILE
-        import torch
-
-        wind_model = WindFree()
-        performance = Performance(
-            NARROW_BODY_JET_CLIMB_PROFILE,
-            NARROW_BODY_JET_DESCENT_PROFILE,
-            NARROW_BODY_JET_CLIMB_VS_PROFILE,
-            NARROW_BODY_JET_DESCENT_VS_PROFILE,
-            cruise_altitude_ft=35000,
-            cruise_speed_kts=450,
-        )
-        # While performance_table is used to derive cruise speed internally,
-        # for a purely cruise segment, the full table might not be strictly necessary if cruise speed is known.
-        # However, the function expects it, so pass a valid one.
-        climb_perf_table = get_eta_and_distance_climb(performance, 1000)
-
-
-        coords_src = torch.tensor([[37.7749, -122.4194]]) # SFO
-        alts_src = torch.tensor([35000]) # 35000 ft (cruise altitude)
-        eta_src = torch.tensor([0]) # 0 seconds
-        phase_src = torch.tensor([1]) # CRUISE
-        coords_tgt = torch.tensor([[38.407, -117.179]]) # INSLO waypoint
-
-        alt_tgt, eta_tgt, phase_tgt = get_next_state_fw(
-            coords_src, alts_src, eta_src, phase_src, coords_tgt, climb_perf_table, wind_model
-        )
-        # Expected output will show altitude remaining 35000 ft, ETA based on cruise speed and distance,
-        # and phase remaining CRUISE.
-        print(f"Target Altitude: {alt_tgt.item():.0f} ft, Target ETA: {eta_tgt.item():.1f} s, Target Phase: {phase_tgt.item()}")
-        ```
     """
     device = coords_src.device
     dtype = (
@@ -282,389 +210,286 @@ def get_backward_state(
     MPS_TO_KNOTS = 1.0 / KNOTS_TO_MPS
     DEFAULT_CRUISE_TAS_KTS = 450.0  # Fallback if cannot derive from climb_performance
 
-    # Initialize output tensors
-    num_segments = coords_src.shape[0]
-    alt_tgt = torch.zeros(num_segments, device=device, dtype=dtype)
-    eta_tgt = torch.zeros(num_segments, device=device, dtype=dtype)
-    phase_tgt = torch.full(
-        (num_segments,), -1, device=device, dtype=torch.long
-    )  # Init with invalid
+    # Args mapping based on backward logic:
+    # coords_src -> p_s (point for which state is being calculated)
+    # alts_t -> alt_t_actual (known altitude at p_t)
+    # eta_t -> eta_t_actual (known ETA at p_t, also proxy for wind lookup time at p_s)
+    # phase_t -> phase_t_actual (known phase at p_t)
+    # coords_tgt -> p_t (known target point)
+    # descent_performance -> descent_profile_raw (the raw table to be processed)
 
-    # --- Derive cruise TAS from climb_performance (last segment behavior) ---
-    if len(climb_performance) >= 2:
-        perf_last_dist_wf_nm = climb_performance[-1][2]
-        perf_second_last_dist_wf_nm = climb_performance[-2][2]
-        perf_last_time_s = climb_performance[-1][1]
-        perf_second_last_time_s = climb_performance[-2][1]
+    p_s_coords = coords_src # to be calculated
+    alt_t_actual = alts_t
+    eta_t_actual = eta_t # Also used as eta_s_for_wind_approx
+    phase_t_actual = phase_t
+    p_t_coords = coords_tgt # known, given
+    descent_profile_raw = descent_performance # Interpret as descent profile
 
-        delta_dist_wf_cruise_segment = (
-            perf_last_dist_wf_nm - perf_second_last_dist_wf_nm
-        )
-        delta_time_s_cruise_segment = perf_last_time_s - perf_second_last_time_s
+    # Initialize output tensors (state at p_s)
+    num_segments = p_s_coords.shape[0]
+    alt_s_out = torch.zeros(num_segments, device=device, dtype=dtype)
+    eta_s_out = torch.zeros(num_segments, device=device, dtype=dtype)
+    phase_s_out = torch.full((num_segments,), -1, device=device, dtype=torch.long)
 
-        if delta_time_s_cruise_segment > 1e-6:
-            tas_cruise_kts = delta_dist_wf_cruise_segment / (
-                delta_time_s_cruise_segment / 3600.0
-            )
+    # --- Derive cruise TAS from descent_profile ---
+    # Assumes descent_profile[0] and [1] can define cruise speed before descent starts.
+    # E.g. first segment of descent profile is at cruise altitude/speed.
+    if len(descent_profile_raw) >= 2:
+        # (alt, time_from_ToD, dist_wf_from_ToD)
+        # Using the first two points of the descent profile to infer TAS.
+        # This assumes these points represent level flight at cruise before descent initiation.
+        perf_alt0, perf_time0_from_tod, perf_dist0_wf_from_tod = descent_profile_raw[0]
+        perf_alt1, perf_time1_from_tod, perf_dist1_wf_from_tod = descent_profile_raw[1]
+
+        delta_dist_wf_cruise = perf_dist1_wf_from_tod - perf_dist0_wf_from_tod
+        delta_time_s_cruise = perf_time1_from_tod - perf_time0_from_tod
+
+        if delta_time_s_cruise > 1e-6: # Avoid division by zero
+            tas_cruise_kts = delta_dist_wf_cruise / (delta_time_s_cruise / 3600.0)
         else:
+            # If time delta is zero, check if dist delta is also zero (implies first point is ToD)
+            # Or if alt0 == alt1, could be level cruise segment.
+            # Fallback if ambiguous.
             tas_cruise_kts = DEFAULT_CRUISE_TAS_KTS
     else:
         tas_cruise_kts = DEFAULT_CRUISE_TAS_KTS
 
-    # --- 0. Cruise Phase Handling ---
-    cruise_mask = phase_src == CRUISE
+
+    # --- 1. Cruise Phase Handling (Backward) ---
+    # If phase_t_actual is CRUISE, then phase_s_out is CRUISE, alt_s_out is alt_t_actual.
+    # Calculate eta_s_out = eta_t_actual - time_taken_for_segment_S_to_T.
+    cruise_mask = phase_t_actual == CRUISE
     if cruise_mask.any():
         num_cruise = cruise_mask.sum().item()
         if num_cruise > 0:
-            alt_tgt[cruise_mask] = alts_src[cruise_mask]
-            phase_tgt[cruise_mask] = CRUISE
+            alt_s_out[cruise_mask] = alt_t_actual[cruise_mask]
+            phase_s_out[cruise_mask] = CRUISE
 
-            coords_src_cruise = coords_src[cruise_mask]
-            alts_src_cruise = alts_src[cruise_mask]
-            eta_src_cruise = eta_src[cruise_mask]
-            coords_tgt_cruise = coords_tgt[cruise_mask]
+            p_s_cruise = p_s_coords[cruise_mask]
+            p_t_cruise = p_t_coords[cruise_mask]
+            alt_s_cruise_for_wind = alt_s_out[cruise_mask] # Altitude at S is same as T for cruise
+            eta_s_approx_for_wind = eta_t_actual[cruise_mask] # Use eta_T as proxy for eta_S for wind
 
-            dist_nm_cruise = haversinet(
-                coords_src_cruise[:, 0],
-                coords_src_cruise[:, 1],
-                coords_tgt_cruise[:, 0],
-                coords_tgt_cruise[:, 1],
+            dist_nm_leg_ST = haversinet(
+                p_s_cruise[:, 0], p_s_cruise[:, 1],
+                p_t_cruise[:, 0], p_t_cruise[:, 1]
             )
 
-            wind_mps_cruise = get_wind(
-                coords_src_cruise,
-                coords_tgt_cruise,
-                alts_src_cruise,
-                eta_src_cruise,
-                wind_model,
+            # Wind along track S -> T, estimated using conditions at S (alt_S, eta_S_approx)
+            wind_mps_at_s = get_wind(
+                p_s_cruise, p_t_cruise,
+                alt_s_cruise_for_wind,
+                eta_s_approx_for_wind, # Using eta_t_actual as proxy for eta_s for wind
+                wind_model
             )
-            wind_kts_cruise = wind_mps_cruise * MPS_TO_KNOTS
+            wind_kts_at_s = wind_mps_at_s * MPS_TO_KNOTS
 
-            gs_kts_cruise = tas_cruise_kts + wind_kts_cruise
+            gs_kts_ST = tas_cruise_kts + wind_kts_at_s # Ground speed from S to T
 
-            time_hours_cruise = torch.zeros_like(dist_nm_cruise)
-            # Handle cases with very low or zero ground speed to prevent division by zero or very large times
-            valid_gs_mask = gs_kts_cruise > 1.0  # Min 1 knot GS to proceed
-            time_hours_cruise[valid_gs_mask] = (
-                dist_nm_cruise[valid_gs_mask] / gs_kts_cruise[valid_gs_mask]
-            )
-            # For invalid GS, eta_tgt will remain eta_src + 0 effectively, or handle as error/very long time
-            # For now, time_hours_cruise for invalid GS is 0, so eta_tgt = eta_src.
-            # A more robust solution might involve setting a max time or specific error handling.
-            time_hours_cruise[~valid_gs_mask] = (
-                torch.finfo(dtype).max / 3600.0
-            )  # Effectively infinite time
+            time_hours_ST = torch.zeros_like(dist_nm_leg_ST)
+            valid_gs_mask = gs_kts_ST > 1.0
+            time_hours_ST[valid_gs_mask] = dist_nm_leg_ST[valid_gs_mask] / gs_kts_ST[valid_gs_mask]
+            time_hours_ST[~valid_gs_mask] = torch.finfo(dtype).max / 3600.0 # Effectively infinite time
 
-            time_secs_cruise = time_hours_cruise * 3600.0
-            eta_tgt[cruise_mask] = eta_src_cruise + time_secs_cruise
+            time_secs_ST = time_hours_ST * 3600.0
+            eta_s_out[cruise_mask] = eta_t_actual[cruise_mask] - time_secs_ST
 
-    # --- Non-Cruise Phase Handling (e.g., CLIMB) ---
-    # Assuming DESCENT would use a similar logic with a descent_performance table or reversed climb_performance
-    non_cruise_mask = (
-        phase_src == CLIMB
-    )  # | (phase_src == DESCENT) # Add DESCENT if applicable
+    # --- Non-Cruise Phase Handling (e.g., DESCENT from T back to S) ---
+    # phase_t_actual == DESCENT (or CLIMB if profile is misused for climb with backward logic)
+    # For robust handling, assume any non-cruise phase uses the descent_profile logic backward.
+    non_cruise_mask = (phase_t_actual == DESCENT) | (phase_t_actual == CLIMB) # CLIMB here implies backward from a "climb state at T"
+    # More accurate: non_cruise_mask = phase_t_actual != CRUISE, if profile is always descent.
+    # For now, let's assume phase_t_actual tells us if T is in a profiled segment.
 
     if non_cruise_mask.any():
         num_nc = non_cruise_mask.sum().item()
         if num_nc > 0:
-            coords_src_nc = coords_src[non_cruise_mask]
-            alts_src_nc = alts_src[non_cruise_mask]
-            eta_src_nc = eta_src[non_cruise_mask]
-            phase_src_nc = phase_src[
-                non_cruise_mask
-            ]  # To carry over CLIMB or DESCENT status
-            coords_tgt_nc = coords_tgt[non_cruise_mask]
+            p_s_nc = p_s_coords[non_cruise_mask]
+            alt_t_nc = alt_t_actual[non_cruise_mask]
+            eta_t_nc = eta_t_actual[non_cruise_mask] # Actual ETA at T
+            # eta_s_for_wind_nc is eta_t_nc, used as proxy for eta at S for wind lookup
+            phase_t_nc = phase_t_actual[non_cruise_mask]
+            p_t_nc = p_t_coords[non_cruise_mask]
 
-            # 1. Compute Haversine distance for the leg
-            dist_leg_nm_nc = haversinet(
-                coords_src_nc[:, 0],
-                coords_src_nc[:, 1],
-                coords_tgt_nc[:, 0],
-                coords_tgt_nc[:, 1],
+            if not descent_profile_raw:
+                alt_s_out[non_cruise_mask] = alt_t_nc # Fallback: no change
+                eta_s_out[non_cruise_mask] = eta_t_nc
+                phase_s_out[non_cruise_mask] = phase_t_nc
+                raise ValueError("Descent performance data is not specified for non-cruise backward calculation.")
+
+            # Unpack descent_profile: (alt_ft, time_sec_from_ToD, dist_nm_wf_from_ToD)
+            # P_alt decreases, P_time_from_ToD increases, P_dist_wf_from_ToD increases.
+            prof_alts_list, prof_times_s_list, prof_dist_wf_nm_list = zip(*descent_profile_raw)
+            
+            P_alt_prof = torch.tensor(prof_alts_list, dtype=dtype, device=device)         # [ProfPoints]
+            P_time_prof = torch.tensor(prof_times_s_list, dtype=dtype, device=device)     # [ProfPoints]
+            P_dist_wf_prof = torch.tensor(prof_dist_wf_nm_list, dtype=dtype, device=device) # [ProfPoints]
+
+            if len(prof_alts_list) < 2:
+                alt_s_out[non_cruise_mask] = alt_t_nc
+                eta_s_out[non_cruise_mask] = eta_t_nc
+                phase_s_out[non_cruise_mask] = phase_t_nc
+                # Consider logging an error, for now, just pass through state
+                # This was handled as a raise in fwd, let's be consistent if critical
+                raise ValueError("Descent profile must have at least two points.")
+
+            # Leg distance S -> T
+            dist_leg_ST_nm_nc = haversinet(
+                p_s_nc[:, 0], p_s_nc[:, 1],
+                p_t_nc[:, 0], p_t_nc[:, 1]
             )
 
-            # Prepare climb_performance tensors
-            if not climb_performance:
-                # Cannot proceed without climb performance data for non-cruise phases
-                # Set to error state or skip these segments?
-                # Defaulting to keep current state for these problematics segments
-                alt_tgt[non_cruise_mask] = alts_src_nc
-                eta_tgt[non_cruise_mask] = eta_src_nc
-                phase_tgt[non_cruise_mask] = phase_src_nc
-                raise ValueError("Climb performance data is not specified.")
-
-            # Unpack climb_performance into separate lists for each profile attribute:
-            #   perf_alts_list: List of altitudes (in feet) at each profile point.
-            #   perf_times_s_list: List of elapsed times (in seconds) from profile start to each altitude.
-            #   perf_dist_wf_nm_list: List of wind-free distances covered (in nautical miles) to each altitude.
-            perf_alts_list, perf_times_s_list, perf_dist_wf_nm_list = zip(
-                *climb_performance
+            # Wind at S for S->T leg: Use alt_t_nc as proxy for alt_s_nc for wind calc.
+            # This is an approximation as alt_s_nc is what we are solving for.
+            wind_mps_at_s_nc = get_wind(
+                p_s_nc, p_t_nc,
+                alt_t_nc, # Using Target's altitude as proxy for Source's altitude for wind
+                eta_t_nc, # Using Target's ETA as proxy for Source's ETA for wind
+                wind_model
             )
-            # Convert lists to Torch tensors
-            perf_alts_prof = torch.tensor(
-                perf_alts_list, dtype=dtype, device=device
-            )  # [P] Altitude profile (ft)
-            perf_times_s_prof = torch.tensor(
-                perf_times_s_list, dtype=dtype, device=device
-            )  # [P] Time profile (s)
-            perf_dist_wf_nm_prof = torch.tensor(
-                perf_dist_wf_nm_list, dtype=dtype, device=device
-            )  # [P] Wind-free distance profile (nm)
+            wind_kts_at_s_nc = wind_mps_at_s_nc * MPS_TO_KNOTS # Shape [num_nc]
 
-            # Ensure profile has at least two points for interpolation to be meaningful
-            if len(perf_alts_list) < 2:
-                # Cannot interpolate with less than 2 profile points
-                alt_tgt[non_cruise_mask] = alts_src_nc
-                eta_tgt[non_cruise_mask] = eta_src_nc
-                phase_tgt[non_cruise_mask] = phase_src_nc
-                # Again, consider logging or raising an error
-                # This structure assumes we continue after this if-block, so let's structure to skip calculations
-                # For the edit, we'll assume a valid profile length and proceed.
+            # Create effective ground distance profile from ToD, considering wind at S
+            # P_ground_dist_from_ToD = P_dist_wf + W_s * (P_time_from_ToD / 3600.0)
+            # P_ground_dist_from_ToD should be [num_nc, ProfPoints]
+            P_ground_dist_prof_nc = P_dist_wf_prof.unsqueeze(0) + \
+                                    wind_kts_at_s_nc.unsqueeze(1) * (P_time_prof.unsqueeze(0) / 3600.0)
 
-            # 2. Interpolate to find current aircraft state within the wind-free climb profile
-            # Using alts_src_nc to find its corresponding time and wind-free distance in the profile
-            # batched_interp1d_torch expects batched x_known and y_known.
-            # Here, perf_alts_prof is 1D, alts_src_nc is [B]. Need to expand profile for batched call or use a loop/smarter 1D interp.
-            # For simplicity, let's use a standard 1D interpolation, assuming a single profile for all nc segments.
-            # This implies a loop for each nc segment if we were to use the current batched_interp1d_torch as is for this step.
-            # Or, adapt interp1d for 1D x_known, batched x_new.
 
-            # Corrected interpolation for step 2 (using a simpler 1D approach for this part)
-            # This will use broadcasting if alts_src_nc is a tensor and perf_alts_prof is 1D.
+            # Interpolate to find current state at T within the descent profile
+            # We need to interpolate alt_t_nc against P_alt_prof to find time_T_profile and dist_wf_T_profile.
+            # numpy.interp requires x-coordinates (P_alt_prof) to be sorted.
+            # P_alt_prof is typically sorted descending for a descent profile.
+            # We'll flip for interp if needed, or use searchsorted carefully.
+            
+            # For simplicity with batched_interp1d_torch, P_alt_prof needs to be sorted ascending for x_known.
+            # Let's sort the profile by altitude (ascending) for interpolation.
+            # This assumes P_alt_prof might not be sorted or is descending.
+            sorted_indices = torch.argsort(P_alt_prof)
+            P_alt_prof_sorted = P_alt_prof[sorted_indices]
+            P_time_prof_sorted = P_time_prof[sorted_indices]
+            P_dist_wf_prof_sorted = P_dist_wf_prof[sorted_indices]
 
-            # current_time_s_profile_src: For each non-cruise segment, this tensor will hold the interpolated elapsed time (in seconds)
-            #   from the start of the climb (takeoff) profile up to the current source altitude (alts_src_nc[i]).
-            current_time_s_profile_src = torch.zeros_like(alts_src_nc)
-            # current_dist_wf_nm_profile_src: For each non-cruise segment, this tensor will hold the interpolated wind-free distance (in nautical miles)
-            #   covered from the start of the profile (i.e., from takeoff) up to the current source altitude (alts_src_nc[i]).
-            current_dist_wf_nm_profile_src = torch.zeros_like(alts_src_nc)
-            for i in range(num_nc):  # iterate over each non-cruise segment
-                # Crude 1D interp for each item; ideally vectorize or use a more robust 1D PyTorch interp.
-                # For now, using a PyTorch-idiomatic equivalent of np.interp:
-                # torch.from_numpy fails if numpy.interp returns a scalar (np.float64), so wrap in float() and use torch.tensor directly
-                current_time_s_profile_src[i] = torch.tensor(
-                    float(
-                        numpy.interp(
-                            alts_src_nc[i].cpu().numpy(),
-                            perf_alts_prof.cpu().numpy(),
-                            perf_times_s_prof.cpu().numpy(),
-                        )
-                    ),
-                    device=device,
-                    dtype=dtype,
-                )
-                # Output: covered distance at source nodes
-                # by interpolating from the altitude column, using the performance table 
-                current_dist_wf_nm_profile_src[i] = torch.tensor(
-                    float(
-                        numpy.interp(
-                            alts_src_nc[i].cpu().numpy(),
-                            perf_alts_prof.cpu().numpy(),
-                            perf_dist_wf_nm_prof.cpu().numpy(),
-                        )
-                    ),
-                    device=device,
-                    dtype=dtype,
-                )
+            # Interpolate to find profile time and wind-free distance at alt_t_nc
+            # This gives time from ToD (or profile start if sorted alt) and dist_wf from ToD (or profile start)
+            time_T_profile_val = batched_interp1d_torch(alt_t_nc, P_alt_prof_sorted.unsqueeze(0).expand(num_nc, -1), P_time_prof_sorted.unsqueeze(0).expand(num_nc, -1), device)
+            dist_wf_T_profile_val = batched_interp1d_torch(alt_t_nc, P_alt_prof_sorted.unsqueeze(0).expand(num_nc, -1), P_dist_wf_prof_sorted.unsqueeze(0).expand(num_nc, -1), device)
+            
+            # Ground distance covered from ToD to reach p_t (T)
+            ground_dist_T_from_ToD_val = dist_wf_T_profile_val + wind_kts_at_s_nc * (time_T_profile_val / 3600.0)
 
-            # 3. Get wind at source for non-cruise segments
-            wind_mps_src_nc = get_wind(
-                coords_src_nc, coords_tgt_nc, alts_src_nc, eta_src_nc, wind_model
+            # Target total ground distance from ToD to reach p_s (S)
+            # Moving backward from T to S, so subtract leg distance.
+            target_ground_dist_S_from_ToD = ground_dist_T_from_ToD_val - dist_leg_ST_nm_nc
+            
+            # ToD parameters from original (potentially unsorted by alt for interp, but first entry is ToD)
+            alt_ToD_prof = P_alt_prof[0] # Highest altitude in profile
+            # Ground distance from ToD to ToD itself (should be 0 if P_dist_wf[0] and P_time[0] are 0)
+            # Use the first point of the calculated P_ground_dist_prof_nc for consistency
+            ground_dist_at_ToD_prof = P_ground_dist_prof_nc[:, 0] # Value for each batch item's wind
+
+            # Interpolate for target altitude (alt_s_out) and profile time (time_S_profile) at S
+            # using target_ground_dist_S_from_ToD on the P_ground_dist_prof_nc.
+            # P_ground_dist_prof_nc should be sorted for batched_interp1d_torch's x_known.
+            # P_dist_wf_prof and P_time_prof increase, so P_ground_dist_prof_nc should be sorted if wind is not excessively negative.
+            # Assuming P_ground_dist_prof_nc is sorted as x_known.
+            # y_known are P_alt_prof and P_time_prof (original order, co-sorted with P_ground_dist_prof_nc's P_dist_wf_prof part).
+
+            alt_s_interp = batched_interp1d_torch(
+                target_ground_dist_S_from_ToD, P_ground_dist_prof_nc, P_alt_prof.unsqueeze(0).expand(num_nc, -1), device
             )
-            wind_kts_src_nc = (
-                wind_mps_src_nc * MPS_TO_KNOTS
-            )  # Convert m/s to kts; Shape: [num_nc]
-
-            # 4. Create the effective ground distance profile (batched)
-            # This profile shows ground distance covered vs. altitude and time, considering wind_kts_src_nc.
-            # Equivalently, another "distance" column (adjusted for wind) in the performance table.
-            # If I look at the whole climb profile, for every possible altitude, how far would I have gone along the ground (with wind)?
-            # perf_dist_wf_nm_prof is [P], wind_kts_src_nc is [B], perf_times_s_prof is [P]
-            # We want perf_ground_dist_profile to be [B, P]
-            perf_ground_dist_profile = perf_dist_wf_nm_prof.unsqueeze(
-                0
-            ) + wind_kts_src_nc.unsqueeze(1) * (perf_times_s_prof.unsqueeze(0) / 3600.0)
-
-            # Current ground distance covered by aircraft, based on its wind condition and profile progress
-            # i.e., Given where I am right now (my current altitude), how far have I actually gone along the ground (with wind)?
-            current_ground_dist_profile_src = (
-                current_dist_wf_nm_profile_src
-                + wind_kts_src_nc * (current_time_s_profile_src / 3600.0)
+            time_S_profile_interp = batched_interp1d_torch(
+                target_ground_dist_S_from_ToD, P_ground_dist_prof_nc, P_time_prof.unsqueeze(0).expand(num_nc, -1), device
             )
 
-            # 5. Target total ground distance from profile start, after traversing the current leg
-            target_total_ground_dist_from_takeoff = (
-                current_ground_dist_profile_src + dist_leg_nm_nc
-            )
+            # --- Edge Case: Top of Descent (ToD) ---
+            # Mask for segments where S is still descending (after ToD)
+            is_S_in_descent_mask = target_ground_dist_S_from_ToD > ground_dist_at_ToD_prof
+            
+            # Mask for segments where ToD is crossed on leg S->T
+            # (S is at or before ToD, T was after ToD)
+            is_ToD_crossed_mask = (target_ground_dist_S_from_ToD <= ground_dist_at_ToD_prof) & \
+                                  (ground_dist_T_from_ToD_val > ground_dist_at_ToD_prof)
 
-            # ToC parameters from original profile
-            alt_toc_profile = perf_alts_prof[-1]
-            # time_s_toc_profile = perf_times_s_prof[-1] # Not directly used in this logic flow for eta_at_toc
+            # Initialize with fallback (e.g. if no mask matches, though one should)
+            alt_s_out_nc_final = torch.full_like(alt_t_nc, -1.0) # alt_t_nc.clone() 
+            eta_s_out_nc_final = torch.full_like(eta_t_nc, -1.0) # eta_t_nc.clone()
+            phase_s_out_nc_final = torch.full_like(phase_t_nc, -1) # phase_t_nc.clone()
 
-            # Ground distance to reach ToC for each segment's wind condition
-            dist_toc_ground_profile_b = perf_ground_dist_profile[
-                :, -1
-            ]  # Shape: [num_nc]
 
-            # --- Interpolate for target altitude and profile time using the ground distance profile ---
-            # y_known needs to be broadcasted to [B, P] for batched_interp1d_torch
-            num_profile_points = perf_alts_prof.shape[0]
-            perf_alts_prof_b = perf_alts_prof.unsqueeze(0).expand(
-                num_nc, num_profile_points
-            )
-            perf_times_s_prof_b = perf_times_s_prof.unsqueeze(0).expand(
-                num_nc, num_profile_points
-            )
+            # Case 1: S is still in descent (after ToD)
+            if is_S_in_descent_mask.any():
+                mask = is_S_in_descent_mask
+                alt_s_out_nc_final[mask] = alt_s_interp[mask]
+                phase_s_out_nc_final[mask] = DESCENT # Or phase_t_nc[mask] if it could be CLIMB backward
+                
+                time_taken_ST_descent = time_T_profile_val[mask] - time_S_profile_interp[mask]
+                # Ensure time_taken is non-negative; if S is "before" T in profile time, something is wrong.
+                time_taken_ST_descent = torch.clamp(time_taken_ST_descent, min=0)
+                eta_s_out_nc_final[mask] = eta_t_nc[mask] - time_taken_ST_descent
+            
+            # Case 2: ToD is crossed on leg S->T (S is at/before ToD, T is after ToD)
+            if is_ToD_crossed_mask.any():
+                mask = is_ToD_crossed_mask
+                alt_s_out_nc_final[mask] = alt_ToD_prof # S is at ToD altitude (cruise alt)
+                phase_s_out_nc_final[mask] = CRUISE
 
-            # Interpolate target altitude and profile time assuming continuous climb/descent
-            alt_tgt_nc_cont = batched_interp1d_torch(
-                target_total_ground_dist_from_takeoff,
-                perf_ground_dist_profile,
-                perf_alts_prof_b,
-                device,
-            )
-            time_tgt_profile_s_nc_cont = batched_interp1d_torch(
-                target_total_ground_dist_from_takeoff,
-                perf_ground_dist_profile,
-                perf_times_s_prof_b,
-                device,
-            )
+                # Time spent in descent (from ToD to T)
+                time_desc_ToD_to_T = time_T_profile_val[mask] - P_time_prof[0] # P_time_prof[0] is time at ToD (0)
+                time_desc_ToD_to_T = torch.clamp(time_desc_ToD_to_T, min=0)
 
-            # ETA calculation base: offset between absolute source ETA and source profile time
-            eta_offset = eta_src_nc - current_time_s_profile_src
+                # Ground distance covered in descent (from ToD to T)
+                dist_desc_ToD_to_T_ground = ground_dist_T_from_ToD_val[mask] - ground_dist_at_ToD_prof[mask]
+                dist_desc_ToD_to_T_ground = torch.clamp(dist_desc_ToD_to_T_ground, min=0)
+                
+                # Remaining distance for cruise part (S to ToD)
+                dist_cruise_S_to_ToD = dist_leg_ST_nm_nc[mask] - dist_desc_ToD_to_T_ground
+                dist_cruise_S_to_ToD = torch.clamp(dist_cruise_S_to_ToD, min=0)
 
-            # --- Edge Case: Top of Climb (ToC) or end of profile ---
-            # Mask for segments that are still climbing/descending within the profile
-            is_still_in_profile_mask = (
-                target_total_ground_dist_from_takeoff < dist_toc_ground_profile_b
-            )
+                # GS for cruise part (S to ToD) using tas_cruise_kts and wind_kts_at_s_nc
+                # (wind_kts_at_s_nc was based on alt_t_nc, an approximation for this cruise part at alt_ToD_prof)
+                gs_cruise_S_to_ToD = tas_cruise_kts + wind_kts_at_s_nc[mask]
 
-            # Mask for segments that reach or pass ToC (or end of defined profile) on this leg
-            # And were not already at/beyond ToC at the source of this leg
-            is_toc_reached_on_leg_mask = (~is_still_in_profile_mask) & (
-                current_ground_dist_profile_src < dist_toc_ground_profile_b
-            )
+                time_cruise_S_to_ToD_hours = torch.zeros_like(dist_cruise_S_to_ToD)
+                valid_gs_cruise_mask = gs_cruise_S_to_ToD > 1.0
+                time_cruise_S_to_ToD_hours[valid_gs_cruise_mask] = \
+                    dist_cruise_S_to_ToD[valid_gs_cruise_mask] / gs_cruise_S_to_ToD[valid_gs_cruise_mask]
+                time_cruise_S_to_ToD_hours[~valid_gs_cruise_mask] = torch.finfo(dtype).max / 3600.0
+                
+                time_cruise_S_to_ToD_secs = time_cruise_S_to_ToD_hours * 3600.0
+                
+                eta_s_out_nc_final[mask] = eta_t_nc[mask] - time_desc_ToD_to_T - time_cruise_S_to_ToD_secs
 
-            # Initialize temporary holders for non_cruise results
-            alt_tgt_nc_final = torch.zeros_like(alts_src_nc)
-            eta_tgt_nc_final = torch.zeros_like(eta_src_nc)
-            phase_tgt_nc_final = torch.full_like(phase_src_nc, -1, dtype=torch.long)
+            # Case 3: S is before ToD, and T was also at/before ToD (i.e. entire leg S-T is cruise)
+            # This should have been caught by the main CRUISE block if phase_t_actual was CRUISE.
+            # If phase_t_actual was DESCENT but alt_t_actual was above or at ToD_alt in profile,
+            # then ground_dist_T_from_ToD_val might be <= ground_dist_at_ToD_prof.
+            # These are segments that effectively are fully cruise backward from T.
+            already_cruise_mask = ~(is_S_in_descent_mask | is_ToD_crossed_mask)
+            if already_cruise_mask.any():
+                # Treat as full cruise segment S->T
+                mask = already_cruise_mask
+                alt_s_out_nc_final[mask] = alt_t_nc[mask] # Maintain altitude from T (cruise)
+                phase_s_out_nc_final[mask] = CRUISE
 
-            # Case 1: Still climbing/descending within the profile
-            if is_still_in_profile_mask.any():
-                alt_tgt_nc_final[is_still_in_profile_mask] = alt_tgt_nc_cont[
-                    is_still_in_profile_mask
-                ]
-                eta_tgt_nc_final[is_still_in_profile_mask] = (
-                    eta_offset[is_still_in_profile_mask]
-                    + time_tgt_profile_s_nc_cont[is_still_in_profile_mask]
-                )
-                phase_tgt_nc_final[is_still_in_profile_mask] = phase_src_nc[
-                    is_still_in_profile_mask
-                ]  # Retain CLIMB/DESCENT
+                # Recalculate time for cruise using dist_leg_ST_nm_nc[mask]
+                # Wind is wind_kts_at_s_nc[mask]
+                gs_kts_ST_case3 = tas_cruise_kts + wind_kts_at_s_nc[mask]
+                
+                time_hours_ST_case3 = torch.zeros_like(dist_leg_ST_nm_nc[mask])
+                valid_gs_mask_c3 = gs_kts_ST_case3 > 1.0
+                time_hours_ST_case3[valid_gs_mask_c3] = dist_leg_ST_nm_nc[mask][valid_gs_mask_c3] / gs_kts_ST_case3[valid_gs_mask_c3]
+                time_hours_ST_case3[~valid_gs_mask_c3] = torch.finfo(dtype).max / 3600.0
+                
+                time_secs_ST_case3 = time_hours_ST_case3 * 3600.0
+                eta_s_out_nc_final[mask] = eta_t_nc[mask] - time_secs_ST_case3
 
-            # Case 2: ToC (or end of profile) is reached on this leg
-            if is_toc_reached_on_leg_mask.any():
-                alt_tgt_nc_final[is_toc_reached_on_leg_mask] = (
-                    alt_toc_profile  # Target alt is ToC/profile end altitude
-                )
-                phase_tgt_nc_final[is_toc_reached_on_leg_mask] = (
-                    CRUISE  # Transition to CRUISE
-                )
-
-                # Calculate ETA at ToC
-                # Time to reach ToC based on the wind-adjusted ground distance profile
-                time_to_reach_toc_s_profile = batched_interp1d_torch(
-                    # Interpolate: for each segment, find the time (s) at which the ground distance profile reaches ToC
-                    # dist_toc_ground_profile_b[is_toc_reached_on_leg_mask]: scalar ground distance at ToC for each batch element (shape: [N_toc])
-                    # perf_ground_dist_profile[is_toc_reached_on_leg_mask]: 1D array of ground distances from performance table for each batch (shape: [N_toc, n_profile])
-                    # perf_times_s_prof_b[is_toc_reached_on_leg_mask]: 1D array of times (s) from performance table for each batch (shape: [N_toc, n_profile])
-                    dist_toc_ground_profile_b[is_toc_reached_on_leg_mask],
-                    perf_ground_dist_profile[is_toc_reached_on_leg_mask],
-                    perf_times_s_prof_b[is_toc_reached_on_leg_mask],
-                    device,
-                )
-                eta_at_toc = (
-                    eta_offset[is_toc_reached_on_leg_mask] + time_to_reach_toc_s_profile
-                )
-
-                # Distance climbed/descended on this leg until ToC (i.e., in profile means climbing/descending)
-                dist_in_profile_on_leg = (
-                    dist_toc_ground_profile_b[is_toc_reached_on_leg_mask]
-                    - current_ground_dist_profile_src[is_toc_reached_on_leg_mask]
-                )
-
-                # Distance remaining to cruise
-                dist_cruise_on_leg = (
-                    dist_leg_nm_nc[is_toc_reached_on_leg_mask] - dist_in_profile_on_leg
-                )
-                dist_cruise_on_leg = torch.clamp(
-                    dist_cruise_on_leg, min=0
-                )  # Ensure non-negative
-
-                # Ground speed for the remaining cruise portion of the leg
-                # Using the same tas_cruise_kts derived earlier, and wind at source of this leg for simplicity
-                gs_cruise_kts_toc = (
-                    tas_cruise_kts + wind_kts_src_nc[is_toc_reached_on_leg_mask]
-                )
-
-                time_cruise_on_leg_hours = torch.zeros_like(dist_cruise_on_leg)
-                valid_gs_toc_mask = gs_cruise_kts_toc > 1.0
-                time_cruise_on_leg_hours[valid_gs_toc_mask] = (
-                    dist_cruise_on_leg[valid_gs_toc_mask]
-                    / gs_cruise_kts_toc[valid_gs_toc_mask]
-                )
-                time_cruise_on_leg_hours[~valid_gs_toc_mask] = (
-                    torch.finfo(dtype).max / 3600.0
-                )  # Infinite time
-
-                time_cruise_on_leg_s = time_cruise_on_leg_hours * 3600.0
-                eta_tgt_nc_final[is_toc_reached_on_leg_mask] = (
-                    eta_at_toc + time_cruise_on_leg_s
-                )
-
-            # Case 3: Aircraft was already at/beyond ToC at the source of this leg (should be CRUISE phase)
-            # This case implies phase_src might not have been CRUISE, or alts_src is above profile.
-            # For robustness, handle segments that don't fall into above two masks:
-            # These might be segments where current_ground_dist_profile_src >= dist_toc_ground_profile_b
-            # Such segments should ideally be handled by the main CRUISE logic if phase_src was correct.
-            # If they reach here, it implies they started non-cruise but effectively at or beyond ToC.
-            already_at_or_beyond_toc_mask = ~(
-                is_still_in_profile_mask | is_toc_reached_on_leg_mask
-            )
-            if already_at_or_beyond_toc_mask.any():
-                # Treat as if cruising from source altitude (which is ToC alt or above)
-                alt_tgt_nc_final[already_at_or_beyond_toc_mask] = alts_src_nc[
-                    already_at_or_beyond_toc_mask
-                ]  # Maintain alt
-                phase_tgt_nc_final[already_at_or_beyond_toc_mask] = CRUISE
-
-                gs_cruise_kts_post_toc = (
-                    tas_cruise_kts + wind_kts_src_nc[already_at_or_beyond_toc_mask]
-                )
-                time_hours_post_toc = torch.zeros_like(
-                    dist_leg_nm_nc[already_at_or_beyond_toc_mask]
-                )
-
-                valid_gs_post_toc_mask = gs_cruise_kts_post_toc > 1.0
-                time_hours_post_toc[valid_gs_post_toc_mask] = (
-                    dist_leg_nm_nc[already_at_or_beyond_toc_mask][
-                        valid_gs_post_toc_mask
-                    ]
-                    / gs_cruise_kts_post_toc[valid_gs_post_toc_mask]
-                )
-                time_hours_post_toc[~valid_gs_post_toc_mask] = (
-                    torch.finfo(dtype).max / 3600.0
-                )
-
-                eta_tgt_nc_final[already_at_or_beyond_toc_mask] = (
-                    eta_src_nc[already_at_or_beyond_toc_mask]
-                    + time_hours_post_toc * 3600.0
-                )
 
             # Update main output tensors for non_cruise_mask segments
-            alt_tgt[non_cruise_mask] = alt_tgt_nc_final
-            eta_tgt[non_cruise_mask] = eta_tgt_nc_final
-            phase_tgt[non_cruise_mask] = phase_tgt_nc_final
-
-    return alt_tgt, eta_tgt, phase_tgt
+            alt_s_out[non_cruise_mask] = alt_s_out_nc_final
+            eta_s_out[non_cruise_mask] = eta_s_out_nc_final
+            phase_s_out[non_cruise_mask] = phase_s_out_nc_final
+            
+    # The function is defined to return (alt_tgt, eta_tgt, phase_tgt)
+    # In our backward context, this means (alt_s_out, eta_s_out, phase_s_out)
+    return alt_s_out, eta_s_out, phase_s_out

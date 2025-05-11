@@ -57,6 +57,25 @@ def clear_lru_caches():
                 pass
     print(f"Cleared {removed} lru_cache(s)")
 
+def clear_macos_dot_underscore_files(root_dir='.'):
+    """
+    Recursively remove all macOS metadata files starting with '._' under root_dir.
+    """
+
+    removed = 0
+    for dirpath, _, filenames in os.walk(root_dir):
+        for filename in filenames:
+            if filename.startswith('._'):
+                file_path = os.path.join(dirpath, filename)
+                try:
+                    os.remove(file_path)
+                    print(f"Removed macOS meta file: {file_path}")
+                    removed += 1
+                except Exception as e:
+                    print(f"Failed to remove {file_path}: {e}")
+    print(f"Removed {removed} macOS ._ files")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Efface Python caches to ensure breakpoints are hit reliably."
@@ -71,6 +90,6 @@ def main():
     clear_import_and_linecache()
     clear_sys_modules(args.module_prefix)
     clear_lru_caches()
-
+    clear_macos_dot_underscore_files(args.root)
 if __name__ == '__main__':
     main()

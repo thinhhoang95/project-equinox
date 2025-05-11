@@ -3,21 +3,18 @@ Please help me implement the `get_next_state_bw` function to solve the problem s
 
 ## Algorithm Draft
 
-0. If the phase at 
+> Because we are going backward, there could be confusion about which nodes are sources, which nodes are targets. We define a source node the node where we fly from, and a target node is the node we fly to (same direction as the directed route graph). 
 
+> We start from the targets and work our way back to the sources.
 
-## Prompt
+1. If the phases at the target node is `CRUISE`, the phase at the source node is also `CRUISE`. The altitude of the source node is the same as of the target node. The ETA at the source node will be calculated later. 
 
-0. If the phase is `cruise` (or 1), then the altitude at targets is the same as the sources.
-1. Compute the haversine distance between the source nodes and the target nodes, and the track between the source nodes and target nodes.
-2. Given the time of arrival at source nodes `eta_src`, interpolate from the `climb_performance` table (using the second time column) to obtain the altitude at source nodes `alt_src`.
-3. Using the `wind_model`, find the along-track wind at the source nodes (at the time `eta_src` and the `alt_src` as well). Positive means tail-wind, negative means head-wind.
-4. From the time values given in `climb_performance`, compute the vector of distance covered by the wind. This value will be subtracted from the wind_free_covered_distance in climb_performance, so we can use them to find out the remaining distance to be covered by TAS (true air speed). This is another column in the `climb_performance` table.
-5. Linearly interpolate this column with the haversine distance found from step 1, read out the altitude and the time reaching the target.
-6. If from step 0, aircraft is crusing, we estimate the ETA at targets by dividing the adjusted distance (for wind) by the cruising TAS (last line of the performance table).
+2. Follow the same logic as `get_next_state_fw`, only this time the `performance_table` is given as descent performance.
+
+3. The ETA at the sources will be given (in fact, they are heuristically estimated) in order to pick the correct wind condition.
 
 ### Edge case
-It is possible that the top of climb may be between the source and target node. In this case, the top of climb is the last row in `climb_performance`. Thus the distance to be covered by TAS from haversine distance (adjusted by the wind) will be the distance until the top of climb, plus the remaining distance. This distance will be traveled by the cruising TAS, which is given by the last row of the climb performance table. This allows us to compute the ETA at the target (the altitude is of course the cruise altitude).
+It is possible that the top of descent may be between the source and target node. In this case, the top of descent is the first row in `descent_performance`. Thus the distance to be covered by TAS from haversine distance (adjusted by the wind) will be the distance until the top of descent (we are talking in a backward sense, going from the target to the source), plus the remaining distance traveled at the cruising TAS, which is given by the first row of the descent performance table. This allows us to compute the ETA at the target (the altitude is of course the cruise altitude).
 
 ### Requirements
 - Because the inputs are torch.tensor, implement a torch vectorized algorithm of everything.
