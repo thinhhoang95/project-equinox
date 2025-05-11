@@ -34,6 +34,7 @@ def haversine(lat1, lon1, lat2, lon2):
     c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
     return R_NM * c
 
+# Here is a Torch version of the same haversine function
 def haversinet(lat1, lon1, lat2, lon2):
     """
     Calculate the great-circle distance between two points on the Earth using the haversine formula.
