@@ -3,6 +3,7 @@ from equinox.route.forward_state import get_next_state_fw
 from equinox.vnav.vnav_performance import Performance, get_eta_and_distance_climb
 from equinox.wind.wind_free import WindFree 
 from equinox.wind.wind_model import WindModel
+from equinox.wind.wind_date import WindDate
 from equinox.vnav.vnav_profiles_rev1 import NARROW_BODY_JET_CLIMB_PROFILE, NARROW_BODY_JET_CLIMB_VS_PROFILE, NARROW_BODY_JET_DESCENT_PROFILE, NARROW_BODY_JET_DESCENT_VS_PROFILE
 import torch
 from equinox.helpers.haversine import haversine
@@ -175,7 +176,7 @@ def test_cruise_only_wind_free():
 
 def test_one_climb_phase_wind():
     # Create a wind-free wind model
-    wind_model = WindModel(
+    wind_model = WindDate(
         date_str="2024-04-01",
         data_dir="data/era5"
     )

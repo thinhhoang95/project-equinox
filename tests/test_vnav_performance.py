@@ -1,4 +1,4 @@
-from equinox.vnav.vnav_performance import Performance
+from equinox.vnav.vnav_performance import Performance, get_eta_and_distance_climb, get_eta_and_distance_descent
 from equinox.vnav.vnav_profiles_rev1 import (
     NARROW_BODY_JET_CLIMB_PROFILE,
     NARROW_BODY_JET_CLIMB_VS_PROFILE,
@@ -64,7 +64,7 @@ def test_narrow_body_jet_distance():
     )
 
     origin_airport_elevation_ft = 0
-    along_track_wind_adjusted_distance = flight_performance.get_along_track_wind_adjusted_distance(
+    along_track_wind_adjusted_distance = flight_performance.get_along_track_wind_adjusted_distance_for_climb(
         origin_airport_elevation_ft=origin_airport_elevation_ft
     ) # example: [(0.0, 0.0), (10000, 13.888888888888888), (20000, 41.388888888888886), (28000, 67.38888888888889), (35000, 112.11111111111111)] (alt (ft), distance (nm))
     print(f"{'Alt (ft)':<10} {'Distance (nm)':<15}")
@@ -72,6 +72,39 @@ def test_narrow_body_jet_distance():
     for alt, dist in along_track_wind_adjusted_distance:
         print(f"{alt:<10} {dist:<15.2f}")
 
+    # For descent
+    destination_airport_elevation_ft = 0
+    along_track_wind_adjusted_distance = flight_performance.get_along_track_wind_adjusted_distance_for_descent(
+        destination_airport_elevation_ft=destination_airport_elevation_ft
+    ) 
+    print(f"{'Alt (ft)':<10} {'Distance (nm)':<15}")
+    print("-" * 25)
+    for alt, dist in along_track_wind_adjusted_distance:
+        print(f"{alt:<10} {dist:<15.2f}")
+
+def test_performance_table():
+    flight_performance = Performance(
+        climb_speed_profile=NARROW_BODY_JET_CLIMB_PROFILE,
+        descent_speed_profile=NARROW_BODY_JET_DESCENT_PROFILE,
+        climb_vertical_speed_profile=NARROW_BODY_JET_CLIMB_VS_PROFILE,
+        descent_vertical_speed_profile=NARROW_BODY_JET_DESCENT_VS_PROFILE,
+        cruise_altitude_ft=35000,
+        cruise_speed_kts=450,
+    )
+
+    eta_and_distance_climb = get_eta_and_distance_climb(flight_performance, 0)
+    print(f"{'Alt (ft)':<10} {'Time (min)':<10} {'Distance (nm)':<15}")
+    print("-" * 35)
+    for alt, time, dist in eta_and_distance_climb:
+        print(f"{alt:<10} {time:<10.2f} {dist:<15.2f}")
+
+    eta_and_distance_descent = get_eta_and_distance_descent(flight_performance, 0)
+    print(f"{'Alt (ft)':<10} {'Time (min)':<10} {'Distance (nm)':<15}")
+    print("-" * 35)
+    for alt, time, dist in eta_and_distance_descent:
+        print(f"{alt:<10} {time:<10.2f} {dist:<15.2f}")
+
 if __name__ == '__main__':
     # test_narrow_body_jet()
-    test_narrow_body_jet_distance()
+    # test_narrow_body_jet_distance()
+    test_performance_table()

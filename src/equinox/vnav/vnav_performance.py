@@ -303,7 +303,7 @@ class Performance:
 
         return results
     
-    def get_along_track_wind_adjusted_distance(
+    def get_along_track_wind_adjusted_distance_for_climb(
         self, origin_airport_elevation_ft: float
     ) -> List[Tuple[float, float]]:
         """
@@ -375,6 +375,139 @@ class Performance:
                     results.append((current_alt_ft, cumulative_distance_nm))
                 elif results[-1][0] == current_alt_ft:
                     results[-1] = (current_alt_ft, cumulative_distance_nm)
+        
+        return results
+
+    def get_along_track_wind_adjusted_distance_for_descent(
+        self, destination_airport_elevation_ft: float
+    ) -> List[Tuple[float, float]]:
+        """
+        Calculates the cumulative along-track distance (in nautical miles) covered
+        during descent from cruise altitude to destination airport elevation.
+        The distance is calculated based on True Airspeed (TAS) and time spent in each
+        descent segment. This is the air distance.
+
+        A "significant altitude" is an altitude at which there is a change in target
+        true airspeed or vertical speed as defined in the descent profiles, or the
+        destination airport elevation itself.
+
+        Args:
+            destination_airport_elevation_ft: The elevation of the destination airport in feet.
+
+        Returns:
+            A list of tuples (altitude_ft, cumulative_distance_nm_from_TOD). The first entry
+            is always (cruise_altitude_ft, 0.0). Subsequent entries represent
+            significant altitudes reached and the cumulative air distance covered from TOD.
+        """
+        results: List[Tuple[float, float]] = []
+        current_alt_ft = float(self.cruise_altitude_ft)
+        cumulative_distance_nm = 0.0
+        destination_alt_ft = float(destination_airport_elevation_ft)
+
+        results.append((current_alt_ft, cumulative_distance_nm))
+
+        # If already at or below destination altitude, no descent distance is covered.
+        if current_alt_ft <= destination_alt_ft:
+            return results
+
+        # Collect all unique altitude boundaries from the descent profile that are
+        # below the current altitude and above or at the destination altitude.
+        # Also include the destination altitude itself.
+        descent_profile_boundaries = [p[0] for p in self._combined_descent_profile]
+        target_altitudes_to_pass = sorted(
+            list(
+                set(
+                    [
+                        b
+                        for b in descent_profile_boundaries
+                        if b < current_alt_ft and b >= destination_alt_ft
+                    ]
+                    + [destination_alt_ft]
+                )
+            ),
+            reverse=True,  # Process from higher to lower altitudes
+        )
+        
+        # Ensure we only consider altitudes strictly below the current starting altitude
+        target_altitudes_to_pass = [
+            alt for alt in target_altitudes_to_pass if alt < current_alt_ft
+        ]
+
+
+        for next_target_alt in target_altitudes_to_pass:
+            if current_alt_ft <= destination_alt_ft:
+                break  # Reached or passed destination
+
+            # Get TAS and VS for the segment *from* current_alt_ft *towards* next_target_alt.
+            # The TAS and VS are determined by the current_alt_ft.
+            segment_tas_kts, segment_vs_fpm = self._get_values_from_combined_profile(
+                current_alt_ft, self._combined_descent_profile
+            )
+
+            if segment_vs_fpm >= 0:
+                segment_vs_fpm = -segment_vs_fpm # Convert to negative for descent if the original VS is positive (in case the vnav_profiles.py gives a positive VS for a descent profile)
+            
+            # Ensure we don't "descend" below the final destination_alt_ft in this step
+            actual_descent_target_for_step = max(next_target_alt, destination_alt_ft)
+
+
+            if current_alt_ft > actual_descent_target_for_step:
+                alt_delta_ft = current_alt_ft - actual_descent_target_for_step
+                
+                # Time to descend this altitude delta in hours.
+                # segment_vs_fpm is negative. (abs(segment_vs_fpm) * 60) is ft/hr.
+                time_delta_hr = alt_delta_ft / (abs(segment_vs_fpm) * 60.0)
+
+                # Distance covered in this step (TAS is in knots, i.e., nm/hr).
+                distance_step_nm = segment_tas_kts * time_delta_hr
+                cumulative_distance_nm += distance_step_nm
+
+                current_alt_ft = actual_descent_target_for_step
+
+                if not results or results[-1][0] != current_alt_ft:
+                    results.append((current_alt_ft, cumulative_distance_nm))
+                elif results[-1][0] == current_alt_ft: # Should not happen if target_altitudes are unique and sorted
+                    results[-1] = (current_alt_ft, cumulative_distance_nm)
+            
+            if current_alt_ft <= destination_alt_ft: # Check again after update
+                break
+        
+        # Ensure the final destination altitude is in the results if not already last.
+        # This can happen if the loop terminates early or if destination_alt_ft wasn't a profile boundary.
+        if results[-1][0] > destination_alt_ft and current_alt_ft > destination_alt_ft :
+             # This case implies we did not reach destination_alt_ft exactly through target_altitudes_to_pass
+             # We need one final segment calculation from current_alt_ft down to destination_alt_ft
+            segment_tas_kts, segment_vs_fpm = self._get_values_from_combined_profile(
+                current_alt_ft, self._combined_descent_profile
+            )
+            if segment_vs_fpm < 0: #Proceed only if VS is negative
+                alt_delta_ft = current_alt_ft - destination_alt_ft
+                time_delta_hr = alt_delta_ft / (abs(segment_vs_fpm) * 60.0)
+                distance_step_nm = segment_tas_kts * time_delta_hr
+                cumulative_distance_nm += distance_step_nm
+                current_alt_ft = destination_alt_ft
+                # Append or update the destination point
+                if not results or results[-1][0] != current_alt_ft:
+                     results.append((current_alt_ft, cumulative_distance_nm))
+                elif results[-1][0] == current_alt_ft : # update if alt exists
+                     results[-1] = (current_alt_ft, cumulative_distance_nm)
+
+        # If the loop finished and current_alt_ft is not exactly destination_alt_ft,
+        # but destination_alt_ft was the target, ensure it's represented.
+        # This primarily handles the case where the loop correctly iterated down to destination_alt_ft
+        # and it was added. The check `results[-1][0] != destination_alt_ft` might be redundant
+        # if logic correctly adds it.
+        # The final point should always be (destination_alt_ft, final_cumulative_distance)
+        # if destination is reached.
+        # If the results list's last altitude is not the destination_alt_ft,
+        # but current_alt_ft became destination_alt_ft, ensure it's the last entry.
+        if current_alt_ft == destination_alt_ft and (not results or results[-1][0] != destination_alt_ft):
+            # This condition means current_alt_ft is now destination_alt_ft
+            # but it's not the last entry in results or results is empty (though first entry is cruise alt)
+             if not results or results[-1][0] > destination_alt_ft : # Append if last recorded alt is higher
+                results.append((destination_alt_ft, cumulative_distance_nm))
+             elif results[-1][0] == destination_alt_ft: # Update if exists
+                results[-1] = (destination_alt_ft, cumulative_distance_nm)
         
         return results
 
@@ -487,48 +620,55 @@ class Performance:
 
 
 # Some helper functions for type conversion
+
+# Define the merge helper function at the module level
+def _merge_eta_and_distance_profiles(
+    eta_profile: list, distance_profile: list
+) -> list:
+    """
+    Merge two profiles: eta_profile [(alt_ft, eta_sec)], distance_profile [(alt_ft, dist_nm)]
+    into [(alt_ft, eta_sec, dist_nm)].
+
+    If an altitude exists in only one, use the most recent value for the other.
+    The altitude threshold is valid for altitudes above it, up to the next knot point.
+    Profiles are sorted by altitude internally.
+    """
+    # Defensive: sort by altitude
+    eta_profile = sorted(eta_profile, key=lambda x: x[0])
+    distance_profile = sorted(distance_profile, key=lambda x: x[0])
+
+    # Collect all unique knot points
+    altitudes = sorted(set([a for a, _ in eta_profile] + [a for a, _ in distance_profile]))
+
+    # Build dicts for fast lookup
+    eta_dict = {a: v for a, v in eta_profile}
+    dist_dict = {a: v for a, v in distance_profile}
+
+    merged = []
+    last_eta = None
+    last_dist = None
+
+    for alt in altitudes:
+        if alt in eta_dict:
+            last_eta = eta_dict[alt]
+        if alt in dist_dict:
+            last_dist = dist_dict[alt]
+        merged.append((alt, last_eta, last_dist))
+    return merged
+
 def get_eta_and_distance_climb(perf: Performance, origin_airport_elevation_ft: float):
     eta_climb = perf.get_climb_eta(origin_airport_elevation_ft) # (alt_ft, time_sec)
-    along_track_wind_adjusted_distance = perf.get_along_track_wind_adjusted_distance(origin_airport_elevation_ft) # (alt_ft, distance_nm)
+    along_track_wind_adjusted_distance = perf.get_along_track_wind_adjusted_distance_for_climb(origin_airport_elevation_ft) # (alt_ft, distance_nm)
 
-    # Merge eta_climb and along_track_wind_adjusted_distance into a single list of (altitude, eta, along_track_distance)
-    # Both inputs are expected to be sorted by altitude ascending, and have the same "knot" structure (altitude thresholds)
-    # But if not, we need to merge them as described.
+    # Call the module-level merge function
+    return _merge_eta_and_distance_profiles(eta_climb, along_track_wind_adjusted_distance)
 
-    def merge_eta_and_distance_profiles(
-        eta_climb: list, along_track_wind_adjusted_distance: list
-    ) -> list:
-        """
-        Merge two profiles: eta_climb [(alt_ft, eta_sec)], along_track_wind_adjusted_distance [(alt_ft, dist_nm)]
-        into [(alt_ft, eta_sec, dist_nm)].
+def get_eta_and_distance_descent(perf: Performance, destination_airport_elevation_ft: float):
+    eta_descent = perf.get_descent_eta(destination_airport_elevation_ft) # (alt_ft, time_sec)
+    along_track_wind_adjusted_distance = perf.get_along_track_wind_adjusted_distance_for_descent(destination_airport_elevation_ft) # (alt_ft, distance_nm)
 
-        If an altitude exists in only one, use the most recent value for the other.
-        The altitude threshold is valid for altitudes above it, up to the next knot point.
-        """
-        # Defensive: sort by altitude just in case
-        eta_climb = sorted(eta_climb, key=lambda x: x[0])
-        along_track_wind_adjusted_distance = sorted(along_track_wind_adjusted_distance, key=lambda x: x[0])
-
-        # Collect all unique knot points
-        altitudes = sorted(set([a for a, _ in eta_climb] + [a for a, _ in along_track_wind_adjusted_distance]))
-
-        # Build dicts for fast lookup
-        eta_dict = {a: v for a, v in eta_climb}
-        dist_dict = {a: v for a, v in along_track_wind_adjusted_distance}
-
-        merged = []
-        last_eta = None
-        last_dist = None
-
-        for alt in altitudes:
-            if alt in eta_dict:
-                last_eta = eta_dict[alt]
-            if alt in dist_dict:
-                last_dist = dist_dict[alt]
-            merged.append((alt, last_eta, last_dist))
-        return merged
-    
-    return merge_eta_and_distance_profiles(eta_climb, along_track_wind_adjusted_distance)
+    # Call the module-level merge function
+    return _merge_eta_and_distance_profiles(eta_descent, along_track_wind_adjusted_distance)
 
 # Example Usage (for testing - not part of the class itself):
 if __name__ == "__main__":
