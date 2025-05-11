@@ -2,6 +2,8 @@
 
 **Equinox** is an open-source Python library designed for large-scale dynamic programming and reinforcement learning, with a focus on routing in air traffic control and weather-aware environments.
 
+Some lessons I learned when creating `equinox` can be found on [my blog](https://intuelle.com).
+
 ## Features
 
 - Scalable algorithms for dynamic programming and reinforcement learning
@@ -15,7 +17,7 @@ Equinox is the open-source component behind the QUASAR Prediction System, levera
 
 ![NEKOCONTROL Logo](https://raw.githubusercontent.com/thinhhoang95/project-equinox/refs/heads/main/nekocontrol.png)
 
-Equinox is part of the NEKOCONTROL agentic interpretation and negotiation system. NEKOCONTROL's goal is to Support a Better Aviation for Everyone.
+Equinox is part of the NEKOCONTROL agentic interpretation and negotiation system.
 
 ## Getting Started
 
