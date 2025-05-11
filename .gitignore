@@ -33,3 +33,7 @@ thumbs.db
 
 # data
 data/era5/
+
+# macOS
+.DS_Store
+._*
