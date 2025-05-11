@@ -37,3 +37,6 @@ data/era5/
 # macOS
 .DS_Store
 ._*
+
+# personal notes
+notes/
