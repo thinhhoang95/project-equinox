@@ -21,7 +21,7 @@ def get_wind(
     coords_src: [E,2] (lat, lon) in degrees
     coords_tgt: [E,2] (lat, lon) in degrees
     altitude: [E] in feet
-    eta_src: [E] arrival time at source in seconds
+    eta_src: [E] arrival time at source in seconds (since midnight)
     wind_model: WindModel instance
     returns: [E] along-track wind speed in m/s (positive tailwind)
     """
@@ -126,17 +126,129 @@ def get_next_state_fw(
     wind_model: WindModel,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Computes the next state (altitude, ETA, phase) for a batch of flight segments.
+    Computes the next state (altitude, Estimated Time of Arrival, and phase) for a batch of flight segments,
+    considering aircraft performance characteristics and wind conditions.
 
-    climb_performance: List of tuples [altitude (ft), time (s), wind_free_covered_distance (nm)]
-                       Defines the aircraft's climb profile from takeoff (or a reference start).
-                       Assumed to be sorted by altitude and time. Time is relative to the takeoff time.
-    wind_model: Instance of WindModel for querying wind data.
+    *Note: the ETA is there only to provide the absolute time, and to help retrieve the relevant wind data.*
+    *The traveled distance is derived from interpolating the **altitude** at source nodes with the performance table.*
+
+    The function processes each segment independently based on its starting state (coordinates, altitude, ETA, phase)
+    and the target coordinates for the segment. It uses a provided climb performance profile to model altitude
+    and time changes during climb and determines cruise behavior based on the profile or a default speed.
+    Wind effects are incorporated using a WindModel instance to calculate ground speed and adjusted distances.
+
+    The function handles the following scenarios for each segment:
+    1.  **Cruise Phase:** If the segment starts in the CRUISE phase, the altitude remains constant,
+        and the time taken to traverse the segment is calculated based on the great-circle distance (Haversine)
+        and the wind-adjusted ground speed (True Air Speed + wind component along track).
+    2.  **Climb/Descent Phase:** If the segment starts in a non-cruise phase (CLIMB or DESCENT - though current logic
+        primarily handles CLIMB based on `climb_performance`), the function determines the aircraft's progress
+        through the climb/descent profile based on its current altitude and the segment distance. It calculates
+        the time and altitude reached by the end of the segment, considering wind effects on ground distance covered.
+    3.  **Transition to Cruise:** If a segment starts in a climb/descent phase and reaches or surpasses the
+        Top of Climb (ToC) altitude within the segment distance, the function calculates the state at ToC
+        (altitude and time) and then calculates the time for the remaining distance in the CRUISE phase
+        at the ToC altitude.
+
+    Args:
+        coords_src (torch.Tensor): Source coordinates for each segment, shape [batch_size, 2].
+                                   Format is (latitude, longitude) in degrees.
+        alts_src (torch.Tensor): Source altitudes for each segment, shape [batch_size].
+                                 Altitude is in feet.
+        eta_src (torch.Tensor): Estimated Time of Arrival (ETA) at the source point for each segment,
+                                shape [batch_size]. Time is in seconds (e.g., since midnight, depending on the min timestamp in the wind model).
+        phase_src (torch.Tensor): The current flight phase for each segment, shape [batch_size].
+                                  Uses integer identifiers: CLIMB (0), CRUISE (1), DESCENT (2).
+        coords_tgt (torch.Tensor): Target coordinates for each segment, shape [batch_size, 2].
+                                   Format is (latitude, longitude) in degrees.
+        climb_performance (List[Tuple[float, float, float]]): A list defining the aircraft's climb
+                                   profile. Each tuple represents a point in the profile with
+                                   (altitude in feet, elapsed time from profile start in seconds,
+                                   wind-free distance covered from profile start in nautical miles).
+                                   Assumed to be sorted by altitude and time. This profile is also
+                                   used to derive the cruise True Air Speed if possible.
+        wind_model (WindModel): An instance of the WindModel to query wind components
+                                at specific locations, altitudes, and times.
 
     Returns:
-        alt_tgt (torch.Tensor): Target altitude in feet for each segment.
-        eta_tgt (torch.Tensor): Target Estimated Time of Arrival in seconds for each segment.
-        phase_tgt (torch.Tensor): Target phase (CLIMB, CRUISE, DESCENT) for each segment.
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: A tuple containing three tensors for the
+        state at the target point of each segment, all of shape [batch_size]:
+            - alt_tgt (torch.Tensor): Target altitude in feet.
+            - eta_tgt (torch.Tensor): Target Estimated Time of Arrival in seconds.
+            - phase_tgt (torch.Tensor): Target flight phase (CLIMB, CRUISE, or DESCENT, potentially transitioning
+                                        to CRUISE if ToC is reached within the segment).
+
+    Examples:
+
+    Assuming necessary imports and `WindModel`, `Performance`, `get_eta_and_distance_climb` are available.
+
+    1.  **Climbing Segment (Wind-Free):**
+        ```python
+        from equinox.wind.wind_free import WindFree
+        from equinox.vnav.vnav_performance import Performance, get_eta_and_distance_climb
+        from equinox.vnav.vnav_profiles_rev1 import NARROW_BODY_JET_CLIMB_PROFILE, NARROW_BODY_JET_DESCENT_PROFILE, NARROW_BODY_JET_CLIMB_VS_PROFILE, NARROW_BODY_JET_DESCENT_VS_PROFILE
+        import torch
+
+        wind_model = WindFree()
+        performance = Performance(
+            NARROW_BODY_JET_CLIMB_PROFILE,
+            NARROW_BODY_JET_DESCENT_PROFILE,
+            NARROW_BODY_JET_CLIMB_VS_PROFILE,
+            NARROW_BODY_JET_DESCENT_VS_PROFILE,
+            cruise_altitude_ft=35000,
+            cruise_speed_kts=450,
+        )
+        climb_perf_table = get_eta_and_distance_climb(performance, 1000)
+
+        coords_src = torch.tensor([[37.7749, -122.4194]]) # SFO
+        alts_src = torch.tensor([1000]) # 1000 ft
+        eta_src = torch.tensor([0]) # 0 seconds
+        phase_src = torch.tensor([0]) # CLIMB
+        coords_tgt = torch.tensor([[38.123, -121.021]]) # TIPRE waypoint
+
+        alt_tgt, eta_tgt, phase_tgt = get_next_state_fw(
+            coords_src, alts_src, eta_src, phase_src, coords_tgt, climb_perf_table, wind_model
+        )
+        # Expected output will show altitude and ETA consistent with the climb profile
+        # covering the distance to TIPRE, phase remains CLIMB if ToC not reached.
+        print(f"Target Altitude: {alt_tgt.item():.0f} ft, Target ETA: {eta_tgt.item():.1f} s, Target Phase: {phase_tgt.item()}")
+        ```
+
+    2.  **Cruise Segment (Wind-Free):**
+        ```python
+        from equinox.wind.wind_free import WindFree
+        from equinox.vnav.vnav_performance import Performance, get_eta_and_distance_climb
+        from equinox.vnav.vnav_profiles_rev1 import NARROW_BODY_JET_CLIMB_PROFILE, NARROW_BODY_JET_DESCENT_PROFILE, NARROW_BODY_JET_CLIMB_VS_PROFILE, NARROW_BODY_JET_DESCENT_VS_PROFILE
+        import torch
+
+        wind_model = WindFree()
+        performance = Performance(
+            NARROW_BODY_JET_CLIMB_PROFILE,
+            NARROW_BODY_JET_DESCENT_PROFILE,
+            NARROW_BODY_JET_CLIMB_VS_PROFILE,
+            NARROW_BODY_JET_DESCENT_VS_PROFILE,
+            cruise_altitude_ft=35000,
+            cruise_speed_kts=450,
+        )
+        # While performance_table is used to derive cruise speed internally,
+        # for a purely cruise segment, the full table might not be strictly necessary if cruise speed is known.
+        # However, the function expects it, so pass a valid one.
+        climb_perf_table = get_eta_and_distance_climb(performance, 1000)
+
+
+        coords_src = torch.tensor([[37.7749, -122.4194]]) # SFO
+        alts_src = torch.tensor([35000]) # 35000 ft (cruise altitude)
+        eta_src = torch.tensor([0]) # 0 seconds
+        phase_src = torch.tensor([1]) # CRUISE
+        coords_tgt = torch.tensor([[38.407, -117.179]]) # INSLO waypoint
+
+        alt_tgt, eta_tgt, phase_tgt = get_next_state_fw(
+            coords_src, alts_src, eta_src, phase_src, coords_tgt, climb_perf_table, wind_model
+        )
+        # Expected output will show altitude remaining 35000 ft, ETA based on cruise speed and distance,
+        # and phase remaining CRUISE.
+        print(f"Target Altitude: {alt_tgt.item():.0f} ft, Target ETA: {eta_tgt.item():.1f} s, Target Phase: {phase_tgt.item()}")
+        ```
     """
     device = coords_src.device
     dtype = (
@@ -319,6 +431,8 @@ def get_next_state_fw(
                     device=device,
                     dtype=dtype,
                 )
+                # Output: covered distance at source nodes
+                # by interpolating from the altitude column, using the performance table 
                 current_dist_wf_nm_profile_src[i] = torch.tensor(
                     float(
                         numpy.interp(
