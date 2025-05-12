@@ -304,6 +304,8 @@ def test_one_descent_phase_no_wind():
     for alt, eta, phase in zip(alt_src_np, eta_src_np, phase_src_np):
         print(f"{alt:15,.0f} | {seconds_since_midnight_to_datestr(time_at_arrival, eta):>25} | {phase:8d}")
 
+
+
 if __name__ == "__main__":
     # test_one_climb_phase_wind_free()
     # test_two_climb_phases_wind_free()

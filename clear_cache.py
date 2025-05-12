@@ -75,7 +75,6 @@ def clear_macos_dot_underscore_files(root_dir='.'):
                     print(f"Failed to remove {file_path}: {e}")
     print(f"Removed {removed} macOS ._ files")
 
-
 def main():
     parser = argparse.ArgumentParser(
         description="Efface Python caches to ensure breakpoints are hit reliably."
@@ -91,5 +90,6 @@ def main():
     clear_sys_modules(args.module_prefix)
     clear_lru_caches()
     clear_macos_dot_underscore_files(args.root)
+    
 if __name__ == '__main__':
     main()
