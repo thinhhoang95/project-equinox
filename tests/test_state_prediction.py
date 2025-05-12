@@ -1,6 +1,7 @@
 from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
 from equinox.route.forward_state import get_next_state_fw
-from equinox.vnav.vnav_performance import Performance, get_eta_and_distance_climb
+from equinox.route.backward_state import get_next_state_bw
+from equinox.vnav.vnav_performance import Performance, get_eta_and_distance_climb, get_eta_and_distance_descent
 from equinox.wind.wind_free import WindFree 
 from equinox.wind.wind_model import WindModel
 from equinox.wind.wind_date import WindDate
@@ -236,8 +237,76 @@ def test_one_climb_phase_wind():
     for alt, eta, phase in zip(alt_tgt_np, eta_tgt_np, phase_tgt_np):
         print(f"{alt:15,.0f} | {seconds_since_midnight_to_datestr(time_at_departure, eta):>25} | {phase:8d}")
 
+def test_one_descent_phase_no_wind():
+    wind_model = WindFree()
+    
+    # Create a performance model
+    performance = Performance(
+        NARROW_BODY_JET_CLIMB_PROFILE,
+        NARROW_BODY_JET_DESCENT_PROFILE,
+        NARROW_BODY_JET_CLIMB_VS_PROFILE,
+        NARROW_BODY_JET_DESCENT_VS_PROFILE,
+        cruise_altitude_ft=35000,
+        cruise_speed_kts=450,
+    )
+
+    # Get the performance table for the climb phase
+    performance_table = get_eta_and_distance_descent(performance, 1000) # altitude (ft), eta (s), along_track_distance (nm)
+
+    # Print the performance table
+    # Print the performance table as a formatted table
+    print("Descent Performance Table (altitude_ft | eta_sec | along_track_distance_nm):")
+    print(f"{'Altitude (ft)':>15} | {'ETATO (s)':>10} | {'Distance (nm)':>16}")
+    print("-" * 48)
+    for row in performance_table:
+        alt, eta, dist = row
+        print(f"{alt:15,.0f} | {eta:10.1f} | {dist:16.2f}")
+
+    # Destination airport: KJFK
+    coords_tgt = torch.tensor([[40.384, -73.467]]) # KJFK
+    alts_tgt = torch.tensor([0]) # 0 ft, elevation at arrival
+    
+    # Arrival time
+    time_at_arrival = "2024-04-01 12:00:00"
+    seconds_since_midnight = datestr_to_seconds_since_midnight(time_at_arrival)
+
+    # Create source state
+    eta_tgt = torch.tensor([seconds_since_midnight]) # seconds since midnight
+    phase_tgt = torch.tensor([2]) # DESCENT
+
+    # The preceding node coordinates
+    coords_src = torch.tensor([[41.316, -76.358]]) # MAGIO waypoint
+
+    # Get the haversine distance between the source and target
+    dist_nm = haversine(coords_src[0, 0], coords_src[0, 1], coords_tgt[0, 0], coords_tgt[0, 1])
+
+    print(f"Distance between MAGIO and KJFK: {dist_nm:.2f} nautical miles")
+
+    # Get the preceding state
+    alt_src, eta_src, phase_src = get_next_state_bw(
+        coords_src,
+        alts_tgt,
+        eta_tgt,
+        phase_tgt,
+        coords_tgt,
+        performance_table,
+        wind_model)
+
+    # Convert to numpy on cpu before displaying
+    alt_src_np = alt_src.cpu().numpy()
+    eta_src_np = eta_src.cpu().numpy()
+    phase_src_np = phase_src.cpu().numpy()
+    
+    # Print the preceding state
+    print("Preceding state table:")
+    print(f"{'Altitude (ft)':>15} | {'ETA':>25} | {'Phase':>8}")
+    print("-" * 54)
+    for alt, eta, phase in zip(alt_src_np, eta_src_np, phase_src_np):
+        print(f"{alt:15,.0f} | {seconds_since_midnight_to_datestr(time_at_arrival, eta):>25} | {phase:8d}")
+
 if __name__ == "__main__":
     # test_one_climb_phase_wind_free()
     # test_two_climb_phases_wind_free()
     # test_cruise_only_wind_free()
-    test_one_climb_phase_wind()
+    # test_one_climb_phase_wind()
+    test_one_descent_phase_no_wind()

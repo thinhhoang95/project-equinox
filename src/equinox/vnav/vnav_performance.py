@@ -509,6 +509,12 @@ class Performance:
              elif results[-1][0] == destination_alt_ft: # Update if exists
                 results[-1] = (destination_alt_ft, cumulative_distance_nm)
         
+        # results right now is a list of tuples (alt_ft, distance_nm), but Top of Descent is with distance_nm = 0
+        # but we need the distance_nm at landing to be 0, thus we have to subtract the distance_nm at cruise altitude from the distance_nm at landing
+        # note that we also inverse the sign of distance_nm to make it **positive**, this is the distance to go to the landing location, thus it should be positive.
+        distance_at_landing = results[-1][1]
+        results = [(alt, -distance + distance_at_landing) for alt, distance in results]
+
         return results
 
     def get_descent_eta(
@@ -616,14 +622,21 @@ class Performance:
             if current_alt_ft <= destination_alt_ft:
                 break
 
-        return results
+        # results right now is a list of tuples (alt_ft, ETATO), but Top of Descent is with ETATO = 0
+        # but we need the ETATO at landing to be 0, thus we have to subtract the ETATO at cruise altitude from the ETATO at landing
+
+        ETATO_at_landing = results[-1][1]
+        results = [(alt, ETATO - ETATO_at_landing) for alt, ETATO in results]
+
+        return results 
 
 
 # Some helper functions for type conversion
 
 # Define the merge helper function at the module level
 def _merge_eta_and_distance_profiles(
-    eta_profile: list, distance_profile: list
+    eta_profile: list, distance_profile: list,
+    reverse_order: bool = False
 ) -> list:
     """
     Merge two profiles: eta_profile [(alt_ft, eta_sec)], distance_profile [(alt_ft, dist_nm)]
@@ -654,6 +667,10 @@ def _merge_eta_and_distance_profiles(
         if alt in dist_dict:
             last_dist = dist_dict[alt]
         merged.append((alt, last_eta, last_dist))
+
+    if reverse_order:
+        # Reverse the list by altitude
+        merged = sorted(merged, key=lambda x: x[0], reverse=True)
     return merged
 
 def get_eta_and_distance_climb(perf: Performance, origin_airport_elevation_ft: float):
@@ -664,11 +681,20 @@ def get_eta_and_distance_climb(perf: Performance, origin_airport_elevation_ft: f
     return _merge_eta_and_distance_profiles(eta_climb, along_track_wind_adjusted_distance)
 
 def get_eta_and_distance_descent(perf: Performance, destination_airport_elevation_ft: float):
+    # Example:
+    #   Altitude (ft) |  ETATO (s) |    Distance (nm)
+    # ------------------------------------------------
+    #          35,000 |    -1300.0 |           141.50
+    #          28,000 |     -880.0 |            89.00
+    #          24,000 |     -640.0 |            59.00
+    #          20,000 |     -560.0 |            35.00
+    #          10,000 |     -360.0 |            15.00
+    #           1,000 |        0.0 |             0.00
     eta_descent = perf.get_descent_eta(destination_airport_elevation_ft) # (alt_ft, time_sec)
     along_track_wind_adjusted_distance = perf.get_along_track_wind_adjusted_distance_for_descent(destination_airport_elevation_ft) # (alt_ft, distance_nm)
 
     # Call the module-level merge function
-    return _merge_eta_and_distance_profiles(eta_descent, along_track_wind_adjusted_distance)
+    return _merge_eta_and_distance_profiles(eta_descent, along_track_wind_adjusted_distance, reverse_order = True)
 
 # Example Usage (for testing - not part of the class itself):
 if __name__ == "__main__":

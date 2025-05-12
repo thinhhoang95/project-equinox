@@ -274,6 +274,7 @@ def get_next_state_fw(
                 *climb_performance
             )
             # Convert lists to Torch tensors
+            # These are the columns of the climb performance table!
             perf_alts_prof = torch.tensor(
                 perf_alts_list, dtype=dtype, device=device
             )  # [P] Altitude profile (ft)

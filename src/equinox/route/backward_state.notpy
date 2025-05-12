@@ -6,7 +6,7 @@ import numpy
 import math
 from datetime import timedelta
 from equinox.route.get_wind import get_wind
-from equinox.route.batch_interpolator import batched_interp1d_torch, batched_interp1d_torch_anyorder
+from equinox.route.batch_interpolator import batched_interp1d_torch
 
 # Phase identifiers
 CLIMB, CRUISE, DESCENT = 0, 1, 2
@@ -95,8 +95,6 @@ def get_next_state_bw(
 
         if delta_time_s_cruise > 1e-6: # Avoid division by zero
             tas_cruise_kts = delta_dist_wf_cruise / (delta_time_s_cruise / 3600.0)
-            if tas_cruise_kts < 0:
-                tas_cruise_kts = -tas_cruise_kts # make sure it's positive
         else:
             # If time delta is zero, check if dist delta is also zero (implies first point is ToD)
             # Or if alt0 == alt1, could be level cruise segment.
@@ -223,22 +221,21 @@ def get_next_state_bw(
             P_time_prof_sorted = P_time_prof[sorted_indices]
             P_dist_wf_prof_sorted = P_dist_wf_prof[sorted_indices]
 
-            # Interpolate to find profile time and wind-free distance at alt_t_nc (the target node's altitude)
-            # => all of these values are relative to the landing point (g)
-            # This gives time to landing point (g) and dist_wf to landing point (g)
+            # Interpolate to find profile time and wind-free distance at alt_t_nc
+            # This gives time from ToD (or profile start if sorted alt) and dist_wf from ToD (or profile start)
             time_T_profile_val = batched_interp1d_torch(alt_t_nc, P_alt_prof_sorted.unsqueeze(0).expand(num_nc, -1), P_time_prof_sorted.unsqueeze(0).expand(num_nc, -1), device)
             dist_wf_T_profile_val = batched_interp1d_torch(alt_t_nc, P_alt_prof_sorted.unsqueeze(0).expand(num_nc, -1), P_dist_wf_prof_sorted.unsqueeze(0).expand(num_nc, -1), device)
             
-            # Ground distance covered from the target point (T) to the landing point (g) (remember: our computation goes backwards, from target back to source, but the flight is from source to target)
-            ground_dist_T_from_landing_val = dist_wf_T_profile_val + wind_kts_at_s_nc * (time_T_profile_val / 3600.0)
+            # Ground distance covered from ToD to reach p_t (T)
+            ground_dist_T_from_ToD_val = dist_wf_T_profile_val + wind_kts_at_s_nc * (time_T_profile_val / 3600.0)
 
-            # Target total ground distance from the target point (T) to reach the source point (S)
+            # Target total ground distance from ToD to reach p_s (S)
             # Moving backward from T to S, so subtract leg distance.
-            target_ground_dist_S_from_landing = ground_dist_T_from_landing_val + dist_leg_ST_nm_nc # needs to be positive because the performance table represents the distance to go (which is positive)
+            target_ground_dist_S_from_ToD = ground_dist_T_from_ToD_val - dist_leg_ST_nm_nc
             
             # ToD parameters from original (potentially unsorted by alt for interp, but first entry is ToD)
             alt_ToD_prof = P_alt_prof[0] # Highest altitude in profile
-            # Ground distance from ToD to landing point itself (should be 0 if P_dist_wf[0] and P_time[0] are 0)
+            # Ground distance from ToD to ToD itself (should be 0 if P_dist_wf[0] and P_time[0] are 0)
             # Use the first point of the calculated P_ground_dist_prof_nc for consistency
             ground_dist_at_ToD_prof = P_ground_dist_prof_nc[:, 0] # Value for each batch item's wind
 
@@ -249,21 +246,21 @@ def get_next_state_bw(
             # Assuming P_ground_dist_prof_nc is sorted as x_known.
             # y_known are P_alt_prof and P_time_prof (original order, co-sorted with P_ground_dist_prof_nc's P_dist_wf_prof part).
 
-            alt_s_interp = batched_interp1d_torch_anyorder(
-                target_ground_dist_S_from_landing, P_ground_dist_prof_nc, P_alt_prof.unsqueeze(0).expand(num_nc, -1), device
+            alt_s_interp = batched_interp1d_torch(
+                target_ground_dist_S_from_ToD, P_ground_dist_prof_nc, P_alt_prof.unsqueeze(0).expand(num_nc, -1), device
             )
-            time_S_profile_interp = batched_interp1d_torch_anyorder(
-                target_ground_dist_S_from_landing, P_ground_dist_prof_nc, P_time_prof.unsqueeze(0).expand(num_nc, -1), device
+            time_S_profile_interp = batched_interp1d_torch(
+                target_ground_dist_S_from_ToD, P_ground_dist_prof_nc, P_time_prof.unsqueeze(0).expand(num_nc, -1), device
             )
 
             # --- Edge Case: Top of Descent (ToD) ---
-            # Mask for segments where S is still descending (after ToD), i.e., S is in the descent path
-            is_S_in_descent_mask = target_ground_dist_S_from_landing <= ground_dist_at_ToD_prof
+            # Mask for segments where S is still descending (after ToD)
+            is_S_in_descent_mask = target_ground_dist_S_from_ToD > ground_dist_at_ToD_prof
             
             # Mask for segments where ToD is crossed on leg S->T
             # (S is at or before ToD, T was after ToD)
-            is_ToD_crossed_mask = (target_ground_dist_S_from_landing >= ground_dist_at_ToD_prof) & \
-                                  (ground_dist_T_from_landing_val < ground_dist_at_ToD_prof)
+            is_ToD_crossed_mask = (target_ground_dist_S_from_ToD <= ground_dist_at_ToD_prof) & \
+                                  (ground_dist_T_from_ToD_val > ground_dist_at_ToD_prof)
 
             # Initialize with fallback (e.g. if no mask matches, though one should)
             alt_s_out_nc_final = torch.full_like(alt_t_nc, -1.0) # alt_t_nc.clone() 
@@ -289,11 +286,11 @@ def get_next_state_bw(
                 phase_s_out_nc_final[mask] = CRUISE
 
                 # Time spent in descent (from ToD to T)
-                time_desc_ToD_to_T = time_T_profile_val[mask] - P_time_prof[0]
+                time_desc_ToD_to_T = time_T_profile_val[mask] - P_time_prof[0] # P_time_prof[0] is time at ToD (0)
                 time_desc_ToD_to_T = torch.clamp(time_desc_ToD_to_T, min=0)
 
                 # Ground distance covered in descent (from ToD to T)
-                dist_desc_ToD_to_T_ground = -ground_dist_T_from_landing_val[mask] + ground_dist_at_ToD_prof[mask]
+                dist_desc_ToD_to_T_ground = ground_dist_T_from_ToD_val[mask] - ground_dist_at_ToD_prof[mask]
                 dist_desc_ToD_to_T_ground = torch.clamp(dist_desc_ToD_to_T_ground, min=0)
                 
                 # Remaining distance for cruise part (S to ToD)
