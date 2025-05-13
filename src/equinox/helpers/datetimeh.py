@@ -22,3 +22,13 @@ def seconds_since_midnight_to_datestr(datestr: str, seconds: int) -> str:
     date_dt = midnight + timedelta(seconds=seconds)
     return date_dt.strftime("%Y-%m-%d %H:%M:%S")
 
+def seconds_to_hhmmss(seconds: float) -> str:
+    """
+    Convert seconds (int or float) to HH:mm:ss string format.
+    """
+    if isinstance(seconds, float):
+        seconds = int(seconds)
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    return f"{int(hours):02d}:{int(minutes):02d}:{int(secs):02d}"
