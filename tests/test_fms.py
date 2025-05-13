@@ -3,7 +3,6 @@ import networkx as nx
 from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
 from equinox.route.forward_state import get_next_state_fw
 from equinox.route.backward_state import get_next_state_bw
-import torch
 from equinox.vnav.vnav_performance import Performance, get_eta_and_distance_climb, get_eta_and_distance_descent
 from equinox.vnav.vnav_profiles_rev1 import NARROW_BODY_JET_CLIMB_PROFILE, NARROW_BODY_JET_CLIMB_VS_PROFILE, NARROW_BODY_JET_DESCENT_PROFILE, NARROW_BODY_JET_DESCENT_VS_PROFILE
 from equinox.wind.wind_model import WindModel
