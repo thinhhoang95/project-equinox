@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from equinox.cost.plf_mono import PiecewiseLinearMonoModel
 import numpy as np
-from typing import Union
+from typing import Union, Tuple
 
 # Default knot points
 DEFAULT_KNOTS_AC_DIST = [100.0, 500.0, 2000.0, 5000.0, 10000.0] # euros
@@ -58,21 +58,18 @@ class CostRev1(nn.Module):
         
         self.to(self.device) # Move all parameters and buffers to the specified device
 
-    def _get_edge_metric(self, u_idx: int, v_idx: int, metric_matrix: torch.Tensor) -> torch.Tensor:
+    def _get_edge_metric_batched(self, u_indices: torch.Tensor, v_indices: torch.Tensor, metric_matrix: torch.Tensor) -> torch.Tensor:
         """
-        Retrieves a metric for an edge (u, v) from a 2D metric matrix.
+        Retrieves metrics for a batch of edges (u, v) from a 2D metric matrix.
+        u_indices and v_indices are 1D tensors of the same length.
         """
         if not isinstance(metric_matrix, torch.Tensor):
-            # Convert to tensor if numpy array, assuming it's on CPU
-            # For robust handling, it's better if caller passes tensors.
-            # This is a fallback.
             try:
                 metric_matrix = torch.from_numpy(metric_matrix).to(dtype=torch.float32, device=self.device)
-            except TypeError: # handles cases where it might already be a tensor but wrong type, or other error
+            except TypeError:
                  raise TypeError(f"Metric matrix (e.g., D, AC) must be a torch.Tensor or numpy.ndarray. Got {type(metric_matrix)}")
-            except AttributeError: # Not a numpy array
+            except AttributeError:
                  raise TypeError(f"Metric matrix (e.g., D, AC) must be a torch.Tensor or numpy.ndarray. Got {type(metric_matrix)}")
-
 
         if metric_matrix.device != self.device:
             metric_matrix = metric_matrix.to(self.device)
@@ -80,76 +77,70 @@ class CostRev1(nn.Module):
         if metric_matrix.ndim != 2:
             raise ValueError("Metric matrix must be 2-dimensional.")
         
-        num_nodes_dim0 = metric_matrix.shape[0]
-        num_nodes_dim1 = metric_matrix.shape[1]
-        if not (0 <= u_idx < num_nodes_dim0 and 0 <= v_idx < num_nodes_dim1):
-            raise IndexError(
-                f"Node indices ({u_idx}, {v_idx}) out of bounds for matrix with shape ({num_nodes_dim0}, {num_nodes_dim1})."
-            )
+        # No extensive bound checks for speed in batch mode, assume valid indices.
+        # If needed, add:
+        # num_nodes_dim0 = metric_matrix.shape[0]
+        # num_nodes_dim1 = metric_matrix.shape[1]
+        # if not (torch.all(0 <= u_indices) and torch.all(u_indices < num_nodes_dim0) and \
+        #         torch.all(0 <= v_indices) and torch.all(v_indices < num_nodes_dim1)):
+        #     raise IndexError("Node indices out of bounds for metric matrix.")
             
-        return metric_matrix[u_idx, v_idx]
+        return metric_matrix[u_indices, v_indices]
 
-    def get_distance(self, u_idx: int, v_idx: int, distance_matrix_d: torch.Tensor) -> torch.Tensor:
+    def get_distance_batched(self, u_indices: torch.Tensor, v_indices: torch.Tensor, distance_matrix_d: torch.Tensor) -> torch.Tensor:
         """
-        Retrieves the distance d(e) for an edge e = (u, v) from the distance matrix D.
-        The matrix D should have +inf for non-existent links.
-        Input matrix is expected to be a torch.Tensor or numpy.ndarray.
+        Retrieves distances d(e) for a batch of edges e = (u, v).
         """
-        return self._get_edge_metric(u_idx, v_idx, distance_matrix_d)
+        return self._get_edge_metric_batched(u_indices, v_indices, distance_matrix_d)
 
-    def get_airspace_charge(self, u_idx: int, v_idx: int, airspace_charge_matrix_ac: torch.Tensor) -> torch.Tensor:
+    def get_airspace_charge_batched(self, u_indices: torch.Tensor, v_indices: torch.Tensor, airspace_charge_matrix_ac: torch.Tensor) -> torch.Tensor:
         """
-        Retrieves the airspace charge AC(e) for an edge e = (u, v) from the AC matrix.
-        Input matrix is expected to be a torch.Tensor or numpy.ndarray.
+        Retrieves airspace charges AC(e) for a batch of edges e = (u, v).
         """
-        return self._get_edge_metric(u_idx, v_idx, airspace_charge_matrix_ac)
+        return self._get_edge_metric_batched(u_indices, v_indices, airspace_charge_matrix_ac)
 
     def forward(self,
-                edge_indices: tuple[int, int],
+                edge_indices: Tuple[torch.Tensor, torch.Tensor], # Tuple of (u_indices, v_indices)
                 distance_matrix_d: Union[torch.Tensor, np.ndarray],
                 airspace_charge_matrix_ac: Union[torch.Tensor, np.ndarray],
-                tailwind_value_w: Union[torch.Tensor, float]
+                tailwind_values_w: torch.Tensor # Batch of tailwind values
                ) -> torch.Tensor:
         """
-        Calculates the cost c(e, t_e, beta) for the given edge.
+        Calculates the cost c(e, t_e, beta) for a batch of edges.
 
         Args:
-            edge_indices: Tuple (u_idx, v_idx) of integer indices for the start and end nodes.
+            edge_indices: Tuple (u_indices, v_indices) of 1D integer tensors for start and end nodes.
             distance_matrix_d: 2D torch.Tensor or numpy.ndarray for distances D. D[i,j] = d(i,j).
             airspace_charge_matrix_ac: 2D torch.Tensor or numpy.ndarray for airspace charges AC.
-            tailwind_value_w: Scalar torch.Tensor or float for tailwind w_tail(e, t_e).
-                              Positive for tailwind, negative for headwind.
+            tailwind_values_w: 1D torch.Tensor for tailwind w_tail(e, t_e) for each edge.
+                               Positive for tailwind, negative for headwind.
 
         Returns:
-            A scalar torch.Tensor representing the cost of the edge.
+            A 1D torch.Tensor representing the costs of the edges.
         """
-        u_idx, v_idx = edge_indices
+        u_indices, v_indices = edge_indices
 
-        dist_e = self.get_distance(u_idx, v_idx, distance_matrix_d)
+        dist_e_batch = self.get_distance_batched(u_indices, v_indices, distance_matrix_d)
 
-        if torch.isinf(dist_e):
-            return torch.tensor(float('inf'), dtype=torch.float32, device=self.device)
+        # For edges with infinite distance, cost should be infinite.
+        # Other calculations might lead to NaN or errors if inf is not handled.
+        inf_mask = torch.isinf(dist_e_batch)
 
-        ac_e = self.get_airspace_charge(u_idx, v_idx, airspace_charge_matrix_ac)
+        ac_e_batch = self.get_airspace_charge_batched(u_indices, v_indices, airspace_charge_matrix_ac)
         
-        ac_dist_product = ac_e * dist_e
+        ac_dist_product_batch = ac_e_batch * dist_e_batch
+        # Ensure tailwind_values_w is on the correct device and dtype for PLM input
+        tailwind_tensor_batch = tailwind_values_w.to(device=self.device, dtype=torch.float32)
 
-        # Ensure tailwind_value_w is a tensor on the correct device for PLM input
-        if not isinstance(tailwind_value_w, torch.Tensor):
-            tailwind_tensor = torch.tensor(tailwind_value_w, dtype=torch.float32, device=self.device)
-        else:
-            tailwind_tensor = tailwind_value_w.to(device=self.device, dtype=torch.float32)
+        cost_component_ac_dist = self.plm_ac_dist(ac_dist_product_batch) 
+        cost_component_wind = self.plm_wind(tailwind_tensor_batch)
 
-
-        # PLMs expect torch.Tensor inputs. Their internal handling should manage device and dtype
-        # based on their parameters, but it's good practice to ensure inputs are tensors.
-        # The PLM's forward method converts list/float inputs to tensors using its parameters' device/dtype.
-        cost_component_ac_dist = self.plm_ac_dist(ac_dist_product) 
-        cost_component_wind = self.plm_wind(tailwind_tensor)
-
-        total_cost = self.beta0 + self.beta1 * cost_component_ac_dist + self.beta2 * cost_component_wind
+        total_cost_batch = self.beta0 + self.beta1 * cost_component_ac_dist + self.beta2 * cost_component_wind
         
-        return total_cost
+        # Apply infinite cost where distance was infinite
+        total_cost_batch[inf_mask] = float('inf')
+        
+        return total_cost_batch
 
 # Sanity Tests / Example Usage
 # Import numpy for example matrices if needed for testing numpy input handling
@@ -175,77 +166,85 @@ def run_sanity_tests():
 
     # Example matrices (Torch Tensors)
     distance_matrix_torch = torch.tensor([
-        [0.0, 150.0, float('inf')],
-        [150.0, 0.0, 200.0],
-        [float('inf'), 200.0, 0.0]
+        [0.0, 150.0, float('inf'), 300.0],
+        [150.0, 0.0, 200.0, 250.0],
+        [float('inf'), 200.0, 0.0, 100.0],
+        [300.0, 250.0, 100.0, 0.0]
     ], dtype=torch.float32, device=device)
 
     airspace_charge_matrix_torch = torch.tensor([
-        [0.0, 10.0, 0.0],
-        [10.0, 0.0, 12.0],
-        [0.0, 12.0, 0.0]
+        [0.0, 10.0, 0.0, 5.0],
+        [10.0, 0.0, 12.0, 8.0],
+        [0.0, 12.0, 0.0, 15.0],
+        [5.0, 8.0, 15.0, 0.0]
     ], dtype=torch.float32, device=device)
 
-    # Test Case 1: Edge (0, 1) with Torch tensor inputs
-    print(f"\n--- Test Case: Edge (0,1) with Torch Tensors ---")
-    edge1 = (0, 1)
-    tailwind1_pos = torch.tensor(30.0, dtype=torch.float32, device=device)
-    tailwind1_neg = torch.tensor(-20.0, dtype=torch.float32, device=device)
+    # Test Case 1: Batch of edges with Torch tensor inputs
+    print(f"\n--- Test Case: Batch of Edges with Torch Tensors ---")
+    u_indices_batch = torch.tensor([0, 0, 1, 2], device=device, dtype=torch.long)
+    v_indices_batch = torch.tensor([1, 3, 2, 3], device=device, dtype=torch.long)
+    # Edges: (0,1), (0,3), (1,2), (2,3)
+    # Dists: 150, 300, 200, 100
+    # ACs:   10,  5,   12,  15
+    # AC*Dist: 1500, 1500, 2400, 1500
 
-    cost1_pos = cost_model(edge1, distance_matrix_torch, airspace_charge_matrix_torch, tailwind1_pos)
-    print(f"Edge {edge1}, Tailwind {tailwind1_pos.item():.1f}: Cost = {cost1_pos.item():.4f}")
+    tailwind_batch_pos = torch.tensor([30.0, 10.0, 20.0, 40.0], dtype=torch.float32, device=device)
+    tailwind_batch_neg = torch.tensor([-20.0, -5.0, -15.0, -25.0], dtype=torch.float32, device=device)
+
+    costs_batch_pos = cost_model((u_indices_batch, v_indices_batch), distance_matrix_torch, airspace_charge_matrix_torch, tailwind_batch_pos)
+    print(f"Edges: {[(u.item(),v.item()) for u,v in zip(u_indices_batch, v_indices_batch)]}")
+    print(f"Tailwinds (pos): {tailwind_batch_pos.tolist()}")
+    print(f"Costs (pos): {costs_batch_pos.tolist()}")
     
-    cost1_neg = cost_model(edge1, distance_matrix_torch, airspace_charge_matrix_torch, tailwind1_neg)
-    print(f"Edge {edge1}, Tailwind {tailwind1_neg.item():.1f}: Cost = {cost1_neg.item():.4f}")
+    costs_batch_neg = cost_model((u_indices_batch, v_indices_batch), distance_matrix_torch, airspace_charge_matrix_torch, tailwind_batch_neg)
+    print(f"Tailwinds (neg): {tailwind_batch_neg.tolist()}")
+    print(f"Costs (neg): {costs_batch_neg.tolist()}")
 
-    if cost1_pos < cost1_neg:
-        print("OK: Positive tailwind results in lower cost.")
+    if torch.all(costs_batch_pos < costs_batch_neg):
+        print("OK: Positive tailwinds result in lower costs for the batch.")
     else:
-        print("WARNING: Positive tailwind did NOT result in lower cost. Check PLM_wind (non-increasing) and beta2 (positive).")
+        print("WARNING: Positive tailwind did NOT consistently result in lower cost. Check PLM_wind and beta2.")
+        for i in range(len(costs_batch_pos)):
+            if costs_batch_pos[i] >= costs_batch_neg[i]:
+                print(f"  Problem at edge index {i}: cost_pos={costs_batch_pos[i]}, cost_neg={costs_batch_neg[i]}")
 
-    # Test Case 2: Non-existent edge (0, 2)
-    print(f"\n--- Test Case: Non-existent Edge (0,2) ---")
-    edge3 = (0, 2)
-    cost3 = cost_model(edge3, distance_matrix_torch, airspace_charge_matrix_torch, tailwind1_pos)
-    print(f"Edge {edge3}: Cost = {cost3.item()}")
-    if torch.isinf(cost3):
-        print("OK: Cost for non-existent edge is infinite.")
+
+    # Test Case 2: Batch including a non-existent edge
+    print(f"\n--- Test Case: Batch with Non-existent Edge (0,2) ---")
+    u_indices_nonexist = torch.tensor([0, 0], device=device, dtype=torch.long) # Edge (0,2) is inf distance
+    v_indices_nonexist = torch.tensor([1, 2], device=device, dtype=torch.long)
+    tailwind_nonexist = torch.tensor([10.0, 10.0], dtype=torch.float32, device=device)
+    
+    costs_nonexist = cost_model((u_indices_nonexist, v_indices_nonexist), distance_matrix_torch, airspace_charge_matrix_torch, tailwind_nonexist)
+    print(f"Edges: {[(u.item(),v.item()) for u,v in zip(u_indices_nonexist, v_indices_nonexist)]}")
+    print(f"Costs: {costs_nonexist.tolist()}")
+    if torch.isinf(costs_nonexist[1]):
+        print("OK: Cost for non-existent edge (0,2) in batch is infinite.")
     else:
-        print("WARNING: Cost for non-existent edge is NOT infinite.")
-
-    # Test Case 3: Edge with zero AC*Dist product (0,0)
-    print(f"\n--- Test Case: Edge (0,0) (Zero AC*Dist) ---")
-    edge4 = (0,0) # d(0,0)=0, ac(0,0)=0
-    tailwind4 = torch.tensor(0.0, device=device)
-    cost4 = cost_model(edge4, distance_matrix_torch, airspace_charge_matrix_torch, tailwind4)
-    # Expected: beta0 + beta1*PLM_ac(0) + beta2*PLM_wind(0)
-    # PLM(0) = initial_intercept + first_slope * 0 + sum(d_i * ReLU(-k_i))
-    # If all knots are > 0, then ReLU(-k_i) = 0. So PLM(0) = initial_intercept.
-    # If some knots are < 0, it's more complex.
-    print(f"Edge {edge4}, AC*Dist=0, Wind=0: Cost = {cost4.item():.4f}")
-    # To verify this, one would need to inspect the initialized parameters of the PLMs or set them.
-    # For example:
-    # plm_ac_at_0 = cost_model.plm_ac_dist(torch.tensor(0.0, device=device))
-    # plm_wind_at_0 = cost_model.plm_wind(torch.tensor(0.0, device=device))
-    # expected_cost4 = cost_model.beta0 + cost_model.beta1 * plm_ac_at_0 + cost_model.beta2 * plm_wind_at_0
-    # print(f"Calculated PLM_ac(0): {plm_ac_at_0.item()}, PLM_wind(0): {plm_wind_at_0.item()}")
-    # print(f"Expected cost for edge4 (approx): {expected_cost4.item():.4f}")
+        print("WARNING: Cost for non-existent edge (0,2) in batch is NOT infinite.")
+    if not torch.isinf(costs_nonexist[0]):
+        print("OK: Cost for existent edge (0,1) in batch is finite.")
+    else:
+        print("WARNING: Cost for existent edge (0,1) in batch is infinite.")
 
 
     if NUMPY_AVAILABLE:
-        print(f"\n--- Test Case: Edge (1,2) with NumPy array inputs ---")
+        print(f"\n--- Test Case: Batch with NumPy array inputs for matrices ---")
         distance_matrix_np = distance_matrix_torch.cpu().numpy()
         airspace_charge_matrix_np = airspace_charge_matrix_torch.cpu().numpy()
-        edge2 = (1,2) # d=200, ac=12 -> ac_dist = 2400
-        tailwind2_np = -10.0 # float input for tailwind
-
-        cost2_np_inputs = cost_model(edge2, distance_matrix_np, airspace_charge_matrix_np, tailwind2_np)
-        print(f"Edge {edge2} (NumPy inputs), Tailwind {tailwind2_np:.1f}: Cost = {cost2_np_inputs.item():.4f}")
-        # Check if it ran without errors and produced a value.
-        if isinstance(cost2_np_inputs, torch.Tensor) and not torch.isnan(cost2_np_inputs) and not torch.isinf(cost2_np_inputs):
-             print("OK: NumPy inputs processed.")
+        
+        # Using same u_indices_batch, v_indices_batch, tailwind_batch_pos from Test Case 1
+        costs_batch_np_inputs = cost_model((u_indices_batch, v_indices_batch), distance_matrix_np, airspace_charge_matrix_np, tailwind_batch_pos)
+        print(f"Edges: {[(u.item(),v.item()) for u,v in zip(u_indices_batch, v_indices_batch)]}")
+        print(f"Tailwinds: {tailwind_batch_pos.tolist()}")
+        print(f"Costs (NumPy matrix inputs): {costs_batch_np_inputs.tolist()}")
+        
+        if isinstance(costs_batch_np_inputs, torch.Tensor) and \
+           not torch.any(torch.isnan(costs_batch_np_inputs)) and \
+           not torch.all(torch.isinf(costs_batch_np_inputs[~torch.isinf(distance_matrix_torch[u_indices_batch, v_indices_batch])])) : # Check non-inf distances didn't become inf costs
+             print("OK: NumPy matrix inputs processed for batch.")
         else:
-             print("WARNING: Problem with NumPy input processing.")
+             print("WARNING: Problem with NumPy matrix input processing for batch.")
     else:
         print("\nSkipping NumPy input test as NumPy is not available.")
 

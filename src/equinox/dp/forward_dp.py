@@ -55,7 +55,8 @@ def soft_bellman_forward_pass(
     wind_model_data_dir: str = "data/era5", # Default from WindModel notes
     delta_t_seconds: int = DEFAULT_DELTA_T_SECONDS,
     max_flight_duration_hours: int = DEFAULT_MAX_FLIGHT_DURATION_HOURS,
-    s_node_initial_phase: int = DEFAULT_INITIAL_PHASE
+    s_node_initial_phase: int = DEFAULT_INITIAL_PHASE,
+    performance_model: Performance = None
 ):
     """
     Implements the soft Bellman forward pass for Max-Ent IRL.
@@ -137,24 +138,16 @@ def soft_bellman_forward_pass(
         #                                                 NARROW_BODY_JET_CLIMB_VS_PROFILE, \
         #                                                 NARROW_BODY_JET_DESCENT_VS_PROFILE
         
-        # Dummy profiles if actual ones are not available, get_next_state_fw requires climb_performance
-        # This is a critical part and needs proper aircraft performance data.
-        # Using the example Narrow Body Jet profile.
-        # The `get_eta_and_distance_climb` function's second arg `initial_altitude_ft` seems to be the start of the profile data, not necessarily s_node_elevation_ft for THIS call.
-        # The `test_state_prediction` uses 1000. Let's assume s_node_elevation_ft is the reference for the climb profile generation.
-
-        performance_model = Performance(
-            climb_profile=NARROW_BODY_JET_CLIMB_PROFILE, # List of (alt_ft, tas_kts, vs_fpm, rocd_fpm)
-            descent_profile=NARROW_BODY_JET_CLIMB_PROFILE, # Dummy, not used by get_eta_and_distance_climb
-            climb_vs_profile=NARROW_BODY_JET_CLIMB_PROFILE, # Dummy
-            descent_vs_profile=NARROW_BODY_JET_CLIMB_PROFILE, # Dummy
-            cruise_altitude_ft=cruise_altitude_ft,
-            cruise_speed_kts=cruise_speed_kts
-        )
-        # get_eta_and_distance_climb expects (performance, initial_altitude_ft for profile calculation)
-        # The initial_altitude_ft for get_eta_and_distance_climb is the altitude from which the profile data begins.
-        # This might be a standard low altitude like 1000ft, or s_node_elevation_ft if the profile starts from there.
-        # Let's use s_node_elevation_ft for a profile starting at the actual takeoff altitude.
+        if performance_model is None:
+            # If performance_model is not provided, use the example Narrow Body Jet profile.
+            performance_model = Performance(
+                climb_profile=NARROW_BODY_JET_CLIMB_PROFILE, # List of (alt_ft, tas_kts, vs_fpm, rocd_fpm)
+                descent_profile=NARROW_BODY_JET_CLIMB_PROFILE, # Dummy, not used by get_eta_and_distance_climb
+                climb_vs_profile=NARROW_BODY_JET_CLIMB_PROFILE, # Dummy
+                descent_vs_profile=NARROW_BODY_JET_CLIMB_PROFILE, # Dummy
+                cruise_altitude_ft=cruise_altitude_ft,
+                cruise_speed_kts=cruise_speed_kts
+            )
         climb_performance_table = get_eta_and_distance_climb(performance_model, initial_altitude_ft=s_node_elevation_ft)
         # climb_performance_table is List[Tuple[float, float, float]] (altitude_ft, eta_sec_from_profile_start, dist_nm_from_profile_start)
     except ImportError:
@@ -189,7 +182,7 @@ def soft_bellman_forward_pass(
         s_node_elevation_ft,
         s_node_initial_phase,
         torch.tensor(1.0, device=device) # exp(-cost_to_source)
-    ))
+    )) # all probability mass is located at the source node
     
     # Set to keep track of (u_idx, time_u_dt_rounded_to_sec, alt_u_ft, phase_u) to avoid redundant processing for very similar states
     # This is primarily to handle floating point issues with datetime if they lead to micro-variations.

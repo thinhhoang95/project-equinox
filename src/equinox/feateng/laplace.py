@@ -49,3 +49,17 @@ def node_ids_to_names(graph: nx.Graph, node_ids, node_mapping=None):
     # Reverse the mapping: id -> name
     id_to_name = {idx: name for name, idx in node_mapping.items()}
     return [id_to_name[node_id] for node_id in node_ids]
+
+def get_adjacency_matrix(graph: nx.Graph):
+    """
+    Return the adjacency matrix of a given route graph (networkx.Graph).
+
+    Args:
+        graph (nx.Graph): The input graph.
+
+    Returns:
+        np.ndarray: The adjacency matrix as a numpy array.
+    """
+    # Use networkx to get the adjacency matrix as a numpy array
+    # The order of nodes is the order in graph.nodes()
+    return nx.to_numpy_array(graph)
