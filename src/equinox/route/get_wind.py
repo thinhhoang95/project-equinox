@@ -33,6 +33,7 @@ def get_wind(
         eta_src (torch.Tensor): Estimated Time of Arrival (ETA) at the source point 
                                 for each segment, shape `[E]`. Time is in seconds, 
                                 relative to the wind model's minimum time (`wind_model._time_min`).
+                                If the wind model is WindDate, it is from midnight.
         wind_model (WindModel): An instance of a WindModel providing wind data.
 
     Returns:
