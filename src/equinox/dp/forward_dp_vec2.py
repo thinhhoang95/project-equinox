@@ -20,29 +20,34 @@ def run_forward_dp(
     graph: nx.DiGraph,
     source_node_id: str, # Graph node ID (e.g., 'LEMD')
     takeoff_time_str: str, # e.g., "2023-04-01 12:00:00"
+    source_elevation_ft: float, # Elevation of the source airport/node
+    goal_elevation_ft: float, # Elevation of the goal airport/node (unused in fwd pass)
     cost_model: CostRev1,
     wind_model_date_str: str, # e.g., "2023-04-01" (for WindDate)
     wind_data_dir: str, # e.g., "data/era5"
-    climb_profile: list, # NARROW_BODY_JET_CLIMB_PROFILE
-    descent_profile: list, # NARROW_BODY_JET_DESCENT_PROFILE
-    climb_vs_profile: list, # NARROW_BODY_JET_CLIMB_VS_PROFILE
-    descent_vs_profile: list, # NARROW_BODY_JET_DESCENT_VS_PROFILE
+    climb_profile: list, 
+    descent_profile: list, 
+    climb_vs_profile: list, 
+    descent_vs_profile: list, 
     cruise_alt_ft: float,
     cruise_spd_kts: float,
     dist_matrix_np: np.ndarray,
     ac_matrix_np: np.ndarray,
-    initial_alt_ft: float = 1000.0, # Initial altitude at source node after takeoff
+    initial_alt_ft: float = 1000.0, # Initial altitude at source node relative to its elevation after takeoff
     delta_t_seconds: int = 300, # 5 minutes time window
     max_flight_duration_hours: int = 10, # Max duration to consider for time bins
     device: torch.device = None
 ):
     """
-    Implements the forward dynamic programming algorithm for soft Bellman updates.
+    Implements the forward dynamic programming algorithm for soft Bellman updates,
+    processing nodes in topological generations for enhanced batching.
 
     Args:
         graph (nx.DiGraph): The route graph. Nodes should have 'coords' attribute (lat, lon).
         source_node_id (str): The ID of the source node in the graph.
         takeoff_time_str (str): ISO format takeoff time string.
+        source_elevation_ft (float): Elevation of the source airport in ft.
+        goal_elevation_ft (float): Elevation of the destination airport in ft (unused in forward pass).
         cost_model (CostRev1): Instantiated cost model.
         wind_model_date_str (str): Date string for initializing WindDate.
         wind_data_dir (str): Directory for wind data.
@@ -51,7 +56,8 @@ def run_forward_dp(
         cruise_spd_kts (float): Cruise speed in knots.
         dist_matrix_np (np.ndarray): 2D array of distances between node indices.
         ac_matrix_np (np.ndarray): 2D array of airspace charges between node indices.
-        initial_alt_ft (float): Altitude at the source node at takeoff_time_str.
+        initial_alt_ft (float): Altitude at the source node (above its elevation) at takeoff_time_str.
+                                This should be the aircraft's altitude AMSL.
         delta_t_seconds (int): Duration of each time bin in seconds.
         max_flight_duration_hours (int): Maximum flight duration to define the number of time bins.
         device (torch.device): PyTorch device to run computations on.
@@ -59,14 +65,14 @@ def run_forward_dp(
     Returns:
         torch.Tensor: Value function V[node_idx, time_bin_idx].
         torch.Tensor: active_eta[node_idx, time_bin_idx] (exact seconds since midnight).
-        torch.Tensor: active_alt[node_idx, time_bin_idx] (altitude in ft).
+        torch.Tensor: active_alt[node_idx, time_bin_idx] (altitude in ft AMSL).
         torch.Tensor: active_phase[node_idx, time_bin_idx] (flight phase).
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # --- 1. Initialization ---
-    node_list = list(graph.nodes())
+    node_list = list(graph.nodes()) # Keep original node IDs for graph access
     node_to_idx = {node_id: i for i, node_id in enumerate(node_list)}
     num_nodes = len(node_list)
 
@@ -80,48 +86,45 @@ def run_forward_dp(
     max_time_overall_seconds = min_time_overall_seconds + max_flight_duration_hours * 3600
     num_time_bins = int((max_time_overall_seconds - min_time_overall_seconds) / delta_t_seconds) + 1
 
-    # Initialize Value Function V and physical state trackers
     V = torch.full((num_nodes, num_time_bins), float('inf'), dtype=torch.float64, device=device)
     active_alt = torch.full((num_nodes, num_time_bins), float('nan'), dtype=torch.float64, device=device)
-    active_phase = torch.full((num_nodes, num_time_bins), -1, dtype=torch.long, device=device) # Using -1 for undefined
+    active_phase = torch.full((num_nodes, num_time_bins), -1, dtype=torch.long, device=device)
     active_eta = torch.full((num_nodes, num_time_bins), float('nan'), dtype=torch.float64, device=device)
 
-    # Performance Model for climb performance table
     performance_model = Performance(
         climb_profile, descent_profile,
         climb_vs_profile, descent_vs_profile,
         cruise_altitude_ft=cruise_alt_ft,
         cruise_speed_kts=cruise_spd_kts
     )
-    # Assuming altitude step of 1000ft for performance table, similar to tests
-    climb_perf_table = get_eta_and_distance_climb(performance_model, 1000) 
+    # Climb performance table is relative to origin airport elevation.
+    # Altitudes in get_next_state_fw and stored in active_alt should be AMSL.
+    climb_perf_table = get_eta_and_distance_climb(performance_model, origin_airport_elevation_ft=source_elevation_ft) 
 
-    # Wind Model
     wind_model = WindDate(date_str=wind_model_date_str, data_dir=wind_data_dir)
     
-    # Distance and AC matrices to torch tensors
     dist_matrix = torch.from_numpy(dist_matrix_np).to(dtype=torch.float64, device=device)
     ac_matrix = torch.from_numpy(ac_matrix_np).to(dtype=torch.float64, device=device)
 
-    # Initial state at source node
-    initial_time_bin = 0 # By definition, as min_time_overall_seconds is takeoff_seconds_since_midnight
+    initial_time_bin = 0
     V[s_idx, initial_time_bin] = 0.0
-    active_alt[s_idx, initial_time_bin] = float(initial_alt_ft)
+    # Ensure initial_alt_ft is AMSL. If it was given as AGL for source, it should be adjusted before this call.
+    # Assuming initial_alt_ft is already AMSL as per updated docstring.
+    active_alt[s_idx, initial_time_bin] = float(initial_alt_ft) 
     active_phase[s_idx, initial_time_bin] = CLIMB 
     active_eta[s_idx, initial_time_bin] = float(takeoff_seconds_since_midnight)
 
-    # --- 2. Topological Sort for Node Processing Order ---
+    # --- 2. Topological Generations for Node Processing Order ---
     try:
-        topo_sorted_node_indices = [node_to_idx[n] for n in nx.topological_sort(graph)]
-    except nx.NetworkXUnfeasible: # Should not happen for a DAG as per problem desc
-        raise ValueError("Graph is not a DAG, cannot perform topological sort.")
+        # nx.topological_generations returns an iterator of sets of nodes.
+        # Each set contains nodes where all predecessors are in previous sets.
+        topo_generations_node_ids = list(nx.topological_generations(graph))
+    except nx.NetworkXUnfeasible:
+        raise ValueError("Graph is not a DAG, cannot perform topological sort for generations.")
 
     # --- 3. Main DP Loop ---
-    for u_node_idx in topo_sorted_node_indices:
-        successors = list(graph.successors(node_list[u_node_idx]))
-        if not successors:
-            continue
-
+    for generation_node_ids in topo_generations_node_ids:
+        # Batch lists for all transitions from the current generation of nodes
         batch_coords_src_list = []
         batch_alts_src_list = []
         batch_eta_src_list = []
@@ -132,43 +135,48 @@ def run_forward_dp(
         batch_v_indices_for_cost_list = [] 
         batch_V_u_ku_list = [] 
 
-        for k_u in range(num_time_bins):
-            if not torch.isinf(V[u_node_idx, k_u]):
-                current_alt_u = active_alt[u_node_idx, k_u]
-                current_phase_u = active_phase[u_node_idx, k_u]
-                current_eta_u = active_eta[u_node_idx, k_u]
-                
-                if torch.isnan(current_alt_u) or current_phase_u == -1 or torch.isnan(current_eta_u):
-                    continue 
+        for u_node_graph_id in generation_node_ids:
+            u_node_idx = node_to_idx[u_node_graph_id]
+            successors = list(graph.successors(u_node_graph_id)) # Use graph_id for graph ops
+            if not successors:
+                continue
 
-                u_node_graph_id = node_list[u_node_idx]
-                u_coords_tuple = graph.nodes[u_node_graph_id].get('coords')
-                if u_coords_tuple is None:
-                    print(f"Warning: Node {u_node_graph_id} has no coords. Skipping.")
-                    continue
-                # Ensure coords are in a consistent list format for torch.tensor later
-                u_coords = [u_coords_tuple[0].item() if isinstance(u_coords_tuple[0], torch.Tensor) else u_coords_tuple[0],
-                            u_coords_tuple[1].item() if isinstance(u_coords_tuple[1], torch.Tensor) else u_coords_tuple[1]]
-                
-                for v_node_id_succ in successors:
-                    v_node_idx_succ = node_to_idx[v_node_id_succ]
-                    v_coords_tuple = graph.nodes[v_node_id_succ].get('coords')
-                    if v_coords_tuple is None:
-                        print(f"Warning: Node {v_node_id_succ} has no coords. Skipping.")
+            for k_u in range(num_time_bins):
+                if not torch.isinf(V[u_node_idx, k_u]):
+                    current_alt_u = active_alt[u_node_idx, k_u]
+                    current_phase_u = active_phase[u_node_idx, k_u]
+                    current_eta_u = active_eta[u_node_idx, k_u]
+                    
+                    if torch.isnan(current_alt_u) or current_phase_u == -1 or torch.isnan(current_eta_u):
+                        continue 
+
+                    u_coords_tuple = graph.nodes[u_node_graph_id].get('coords')
+                    if u_coords_tuple is None:
+                        print(f"Warning: Node {u_node_graph_id} has no coords. Skipping.")
                         continue
-                    v_coords = [v_coords_tuple[0].item() if isinstance(v_coords_tuple[0], torch.Tensor) else v_coords_tuple[0],
-                                v_coords_tuple[1].item() if isinstance(v_coords_tuple[1], torch.Tensor) else v_coords_tuple[1]]
+                    u_coords = [u_coords_tuple[0].item() if isinstance(u_coords_tuple[0], torch.Tensor) else u_coords_tuple[0],
+                                u_coords_tuple[1].item() if isinstance(u_coords_tuple[1], torch.Tensor) else u_coords_tuple[1]]
+                    
+                    for v_node_id_succ in successors:
+                        v_node_idx_succ = node_to_idx[v_node_id_succ]
+                        v_coords_tuple = graph.nodes[v_node_id_succ].get('coords')
+                        if v_coords_tuple is None:
+                            print(f"Warning: Node {v_node_id_succ} has no coords. Skipping.")
+                            continue
+                        v_coords = [v_coords_tuple[0].item() if isinstance(v_coords_tuple[0], torch.Tensor) else v_coords_tuple[0],
+                                    v_coords_tuple[1].item() if isinstance(v_coords_tuple[1], torch.Tensor) else v_coords_tuple[1]]
 
-                    batch_coords_src_list.append(u_coords)
-                    batch_alts_src_list.append(current_alt_u.item())
-                    batch_eta_src_list.append(current_eta_u.item())
-                    batch_phase_src_list.append(current_phase_u.item())
-                    batch_coords_tgt_list.append(v_coords)
-                    batch_v_node_indices_list.append(v_node_idx_succ)
-                    batch_u_indices_for_cost_list.append(u_node_idx)
-                    batch_v_indices_for_cost_list.append(v_node_idx_succ)
-                    batch_V_u_ku_list.append(V[u_node_idx, k_u].item())
-
+                        batch_coords_src_list.append(u_coords)
+                        batch_alts_src_list.append(current_alt_u.item())
+                        batch_eta_src_list.append(current_eta_u.item())
+                        batch_phase_src_list.append(current_phase_u.item())
+                        batch_coords_tgt_list.append(v_coords)
+                        batch_v_node_indices_list.append(v_node_idx_succ)
+                        batch_u_indices_for_cost_list.append(u_node_idx) # Store original u_node_idx for cost matrix
+                        batch_v_indices_for_cost_list.append(v_node_idx_succ) # Store v_node_idx for cost matrix
+                        batch_V_u_ku_list.append(V[u_node_idx, k_u].item())
+        
+        # Process the accumulated batch for the current generation
         if not batch_coords_src_list:
             continue
 
@@ -188,6 +196,7 @@ def run_forward_dp(
         )
         tailwind_kts_batch = tailwind_mps_batch * MPS_TO_KNOTS
         
+        # u_indices for cost model are from batch_u_indices_for_cost_list
         u_indices_cost_tensor = torch.tensor(batch_u_indices_for_cost_list, dtype=torch.long, device=device)
         v_indices_cost_tensor = torch.tensor(batch_v_indices_for_cost_list, dtype=torch.long, device=device)
         
@@ -199,11 +208,12 @@ def run_forward_dp(
         V_u_ku_tensor = torch.tensor(batch_V_u_ku_list, dtype=torch.float64, device=device)
         
         for i in range(len(alt_v_new_batch)):
-            v_node_idx = batch_v_node_indices_list[i]
+            v_node_idx = batch_v_node_indices_list[i] # This is the successor's index
             alt_v_new = alt_v_new_batch[i]
             eta_v_new = eta_v_new_batch[i]
             phase_v_new = phase_v_new_batch[i]
             cost_uv = cost_uv_batch[i]
+            # V_u_val corresponds to V[original_u_node_idx, original_k_u] for this transition
             V_u_val = V_u_ku_tensor[i]
 
             if torch.isinf(cost_uv) or torch.isinf(V_u_val):
@@ -213,7 +223,7 @@ def run_forward_dp(
             if time_since_takeoff_sec < 0:
                  continue
 
-            k_v = int(torch.round(time_since_takeoff_sec / delta_t_seconds).item()) # Round to nearest bin
+            k_v = int(torch.round(time_since_takeoff_sec / delta_t_seconds).item())
 
             if not (0 <= k_v < num_time_bins):
                 continue
@@ -242,14 +252,14 @@ if __name__ == '__main__':
     print(f"Using device: {device}")
 
     G = nx.DiGraph()
-    # Ensure coords are Python lists/tuples of floats, not tensors, when added to graph nodes
     G.add_node("N0", coords=[37.7749, -122.4194]) 
     G.add_node("N1", coords=[38.123, -121.021])   
     G.add_node("N2", coords=[38.407, -117.179])  
     G.add_node("N3", coords=[40.7128, -74.0060])  
-    G.add_edges_from([("N0", "N1"), ("N1", "N2"), ("N0", "N2"), ("N2", "N3")])
+    G.add_edges_from([("N0", "N1"), ("N0", "N2"), ("N1", "N3"), ("N2", "N3")]) # Make N3 a common sink
+    # For topological_generations to work well, N0 is gen0, N1,N2 are gen1, N3 is gen2
     
-    node_list_for_matrix = list(G.nodes())
+    node_list_for_matrix = list(G.nodes()) # Consistent order for matrix indexing
     node_to_idx_for_matrix = {nid: i for i, nid in enumerate(node_list_for_matrix)}
     num_actual_nodes = len(node_list_for_matrix)
 
@@ -304,6 +314,8 @@ if __name__ == '__main__':
             graph=G,
             source_node_id="N0",
             takeoff_time_str=f"{wind_date} 12:00:00",
+            source_elevation_ft=0.0, # Assuming SFO at sea level for dummy profile alignment
+            goal_elevation_ft=0.0,   # Dummy
             cost_model=cost_model_instance,
             wind_model_date_str=wind_date,
             wind_data_dir=dummy_wind_dir, 
@@ -315,7 +327,7 @@ if __name__ == '__main__':
             cruise_spd_kts=450.0,
             dist_matrix_np=dummy_dist_matrix,
             ac_matrix_np=dummy_ac_matrix,
-            initial_alt_ft=1000.0,
+            initial_alt_ft=0.0, # Start at 0ft AMSL if source_elevation_ft is 0 for profile alignment
             delta_t_seconds=600, 
             max_flight_duration_hours=5,
             device=device
@@ -324,27 +336,26 @@ if __name__ == '__main__':
         print("\n--- Results ---")
         print(f"V function shape: {V_final.shape}")
         base_output_time_str = f"{wind_date} 00:00:00"
-        takeoff_ssm = datestr_to_seconds_since_midnight(f"{wind_date} 12:00:00")
+        # takeoff_ssm = datestr_to_seconds_since_midnight(f"{wind_date} 12:00:00") # Already available as min_time_val inside
 
-        for node_idx in range(num_actual_nodes):
-            for time_idx in range(V_final.shape[1]):
-                if not torch.isinf(V_final[node_idx, time_idx]):
-                    node_id = node_list_for_matrix[node_idx]
-                    approx_time_at_bin_start_ssm = time_idx * 600 + takeoff_ssm 
-                    # Note: The above might be off if min_time_overall_seconds was not takeoff_ssm due to time zones etc.
-                    # Using the definition from inside run_forward_dp: time_since_takeoff_sec = k_v * delta_t_seconds
-                    # So, absolute_eta_approx = min_time_overall_seconds_val + time_idx * delta_t_seconds_val
-                    # min_time_overall_seconds is takeoff_seconds_since_midnight.
-                    min_time_val = datestr_to_seconds_since_midnight(f"{wind_date} 12:00:00")
-                    time_s = min_time_val + time_idx * 600 # 600 is delta_t_seconds from example call
-
-                    time_dt = seconds_since_midnight_to_datetime(base_output_time_str, time_s)
+        for node_idx_res in range(num_actual_nodes):
+            for time_idx_res in range(V_final.shape[1]):
+                if not torch.isinf(V_final[node_idx_res, time_idx_res]):
+                    node_id_res = node_list_for_matrix[node_idx_res] # Use the consistent list
                     
-                    print(f"Node {node_id} ({node_idx}), Time Bin {time_idx} (approx arrival by {time_dt.strftime('%Y-%m-%d %H:%M:%S')}):")
-                    print(f"  V = {V_final[node_idx, time_idx].item():.2f}")
-                    active_eta_val = eta_final[node_idx, time_idx].item()
-                    active_alt_val = alt_final[node_idx, time_idx].item()
-                    active_phase_val = phase_final[node_idx, time_idx].item()
+                    # Calculate the approximate start time of this bin for display
+                    # min_time_overall_seconds is takeoff_seconds_since_midnight from inside run_forward_dp
+                    # This was the min_time_overall_seconds used to calculate k_v
+                    takeoff_ssm_ref = datestr_to_seconds_since_midnight(f"{wind_date} 12:00:00")
+                    bin_start_time_ssm = takeoff_ssm_ref + time_idx_res * 600 # 600 is delta_t_seconds from example
+
+                    time_dt_display = seconds_since_midnight_to_datetime(base_output_time_str, bin_start_time_ssm)
+                    
+                    print(f"Node {node_id_res} ({node_idx_res}), Time Bin {time_idx_res} (approx arrival by {time_dt_display.strftime('%Y-%m-%d %H:%M:%S')}):")
+                    print(f"  V = {V_final[node_idx_res, time_idx_res].item():.2f}")
+                    active_eta_val = eta_final[node_idx_res, time_idx_res].item()
+                    active_alt_val = alt_final[node_idx_res, time_idx_res].item()
+                    active_phase_val = phase_final[node_idx_res, time_idx_res].item()
                     print(f"  Exact ETA: {seconds_since_midnight_to_datetime(base_output_time_str, active_eta_val).strftime('%Y-%m-%d %H:%M:%S') if not np.isnan(active_eta_val) else 'N/A'}")
                     print(f"  Altitude (ft): {active_alt_val if not np.isnan(active_alt_val) else 'N/A'}")
                     print(f"  Phase: {active_phase_val if active_phase_val != -1 else 'N/A'}")
@@ -358,14 +369,13 @@ if __name__ == '__main__':
         if 'dummy_era5_file_path' in locals() and os.path.exists(dummy_era5_file_path) and "dummy_test" in dummy_era5_file_path:
              try:
                  os.remove(dummy_era5_file_path)
-                 # Only remove dir if it's the one we specifically know and expect to be emptyable
                  if dummy_wind_dir == "data/era5_dummy_test": 
                     try:
                         os.rmdir(dummy_wind_dir)
                         print(f"Cleaned up dummy wind data directory: {dummy_wind_dir}")
                     except OSError as e_dir:
                         print(f"Could not remove dummy directory {dummy_wind_dir}: {e_dir} (might not be empty or created by this run if cleanup failed before)")
-                 else: # Should not happen given dummy_wind_dir definition
+                 else: 
                     print(f"Cleaned up dummy wind file: {dummy_era5_file_path}") 
 
              except OSError as e_file:

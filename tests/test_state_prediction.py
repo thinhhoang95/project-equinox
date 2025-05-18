@@ -381,8 +381,8 @@ def test_one_descent_phase_wind():
 
 
 if __name__ == "__main__":
-    # test_one_climb_phase_wind_free()
-    # test_two_climb_phases_wind_free()
-    # test_cruise_only_wind_free()
+    test_one_climb_phase_wind_free()
+    test_two_climb_phases_wind_free()
+    test_cruise_only_wind_free()
     # test_one_climb_phase_wind()
-    test_one_descent_phase_wind()
+    # test_one_descent_phase_wind()
