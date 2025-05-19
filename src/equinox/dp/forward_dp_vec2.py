@@ -2,7 +2,7 @@ import torch
 import networkx as nx
 import numpy as np
 from datetime import datetime, timedelta
-
+from tqdm import tqdm
 from equinox.route.forward_state import get_next_state_fw, CLIMB, CRUISE, DESCENT
 from equinox.route.get_wind import get_wind
 from equinox.cost.cost_rev1 import CostRev1
@@ -106,7 +106,7 @@ def run_forward_dp(
         raise ValueError("Graph is not a DAG, cannot perform topological sort for generations.")
 
     # --- 3. Main DP Loop ---
-    for generation_node_ids in topo_generations_node_ids:
+    for generation_node_ids in tqdm(topo_generations_node_ids, desc="Topological Generations"):
         # Batch lists for all transitions from the current generation of nodes
         batch_coords_src_list = []
         batch_alts_src_list = []
@@ -133,19 +133,13 @@ def run_forward_dp(
                     if torch.isnan(current_alt_u) or current_phase_u == -1 or torch.isnan(current_eta_u):
                         continue 
 
-                    u_coords_tuple = graph.nodes[u_node_graph_id].get('coords')
-                    if u_coords_tuple is None:
-                        print(f"Warning: Node {u_node_graph_id} has no coords. Skipping.")
-                        continue
+                    u_coords_tuple = (graph.nodes[u_node_graph_id].get('lat'), graph.nodes[u_node_graph_id].get('lon'))
                     u_coords = [u_coords_tuple[0].item() if isinstance(u_coords_tuple[0], torch.Tensor) else u_coords_tuple[0],
                                 u_coords_tuple[1].item() if isinstance(u_coords_tuple[1], torch.Tensor) else u_coords_tuple[1]]
                     
                     for v_node_id_succ in successors:
                         v_node_idx_succ = node_to_idx[v_node_id_succ]
-                        v_coords_tuple = graph.nodes[v_node_id_succ].get('coords')
-                        if v_coords_tuple is None:
-                            print(f"Warning: Node {v_node_id_succ} has no coords. Skipping.")
-                            continue
+                        v_coords_tuple = (graph.nodes[v_node_id_succ].get('lat'), graph.nodes[v_node_id_succ].get('lon'))
                         v_coords = [v_coords_tuple[0].item() if isinstance(v_coords_tuple[0], torch.Tensor) else v_coords_tuple[0],
                                     v_coords_tuple[1].item() if isinstance(v_coords_tuple[1], torch.Tensor) else v_coords_tuple[1]]
 
@@ -169,10 +163,14 @@ def run_forward_dp(
         phase_src_tensor = torch.tensor(batch_phase_src_list, dtype=torch.long, device=device)
         coords_tgt_tensor = torch.tensor(batch_coords_tgt_list, dtype=torch.float64, device=device)
         
+        import time
+        time_start = time.time()
         alt_v_new_batch, eta_v_new_batch, phase_v_new_batch = get_next_state_fw(
             coords_src_tensor, alts_src_tensor, eta_src_tensor, phase_src_tensor,
             coords_tgt_tensor, climb_perf_table, wind_model
         )
+        time_end = time.time()
+        print(f"Time taken for get_next_state_fw: {time_end - time_start} seconds")
         
         tailwind_mps_batch = get_wind(
             coords_src_tensor, coords_tgt_tensor, alts_src_tensor, eta_src_tensor, wind_model

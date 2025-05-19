@@ -3,6 +3,7 @@ import numpy as np
 from datetime import datetime
 from scipy.interpolate import interp1d
 import pandas as pd
+import torch
 
 def time_clip(time_coord: datetime, time_min: datetime, time_max: datetime) -> datetime:
     if time_coord < time_min:
@@ -191,6 +192,146 @@ class WindModel:
             except Exception: # If scipy interpolation fails
                 return np.nan, np.nan
 
+    def get_wind_components_batched(
+        self, 
+        lats_pt: torch.Tensor, 
+        lons_pt: torch.Tensor, 
+        alts_ft_pt: torch.Tensor, 
+        etas_sec_pt: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Retrieves u and v wind components for a batch of locations, altitudes, and times.
+
+        Args:
+            lats_pt (torch.Tensor): Latitudes in degrees, shape [N].
+            lons_pt (torch.Tensor): Longitudes in degrees, shape [N].
+            alts_ft_pt (torch.Tensor): Altitudes in feet, shape [N].
+            etas_sec_pt (torch.Tensor): ETA in seconds relative to self._time_min, shape [N].
+
+        Returns:
+            A tuple of PyTorch Tensors (u_components_mps, v_components_mps), both shape [N],
+            on the same device and dtype as input tensors.
+            Returns (nan, nan) for points where data cannot be retrieved.
+        """
+        original_device = lats_pt.device
+        original_dtype = lats_pt.dtype
+
+        # Convert PyTorch tensors to NumPy arrays
+        lats_np = lats_pt.cpu().numpy()
+        lons_np = lons_pt.cpu().numpy()
+        alts_ft_np = alts_ft_pt.cpu().numpy()
+        etas_sec_np = etas_sec_pt.cpu().numpy()
+
+        num_pts = lats_np.shape[0]
+        alts_m_np = alts_ft_np * 0.3048
+
+        # Initialize output arrays
+        u_final_np = np.full(num_pts, np.nan, dtype=np.float32) # Use float32 for np calculations
+        v_final_np = np.full(num_pts, np.nan, dtype=np.float32)
+
+        # Convert ETA seconds to numpy.datetime64 array
+        # self._time_min is a python datetime, convert to datetime64
+        time_min_np = np.datetime64(self._time_min)
+        query_datetimes_np = time_min_np + etas_sec_np.astype('timedelta64[s]')
+        
+        # Clip all coordinates
+        interp_lats_np = np.clip(lats_np, self._lat_min, self._lat_max)
+        interp_lons_np = np.clip(lons_np, self._lon_min, self._lon_max)
+        
+        # Ensure self.data.valid_time.min/max are numpy.datetime64 for comparison
+        data_time_min_np = self.data.valid_time.min().values
+        data_time_max_np = self.data.valid_time.max().values
+        interp_times_np = np.clip(query_datetimes_np, data_time_min_np, data_time_max_np)
+
+        # Create xarray DataArrays for coordinates for interpolation
+        # These will be used for indexing into the xarray dataset
+        xr_lats = xr.DataArray(interp_lats_np, dims="points")
+        xr_lons = xr.DataArray(interp_lons_np, dims="points")
+        xr_times = xr.DataArray(interp_times_np, dims="points")
+        
+        # --- Handle Surface Winds (altitude <= _SURFACE_ALTITUDE_M) ---
+        surface_mask = alts_m_np <= self._SURFACE_ALTITUDE_M
+        if np.any(surface_mask):
+            coords_sfc = {
+                'latitude': xr_lats[surface_mask],
+                'longitude': xr_lons[surface_mask],
+                'valid_time': xr_times[surface_mask]
+            }
+            try:
+                u10_vals = self.data['u10'].interp(coords_sfc, method="linear", kwargs={"fill_value": np.nan}).data
+                v10_vals = self.data['v10'].interp(coords_sfc, method="linear", kwargs={"fill_value": np.nan}).data
+                u_final_np[surface_mask] = u10_vals
+                v_final_np[surface_mask] = v10_vals
+            except Exception: # Broad exception for safety
+                 # Already initialized to NaN, so just pass
+                pass 
+
+        # --- Handle High-Altitude Winds (altitude > _SURFACE_ALTITUDE_M) ---
+        high_alt_mask = alts_m_np > self._SURFACE_ALTITUDE_M
+        if np.any(high_alt_mask):
+            if not self.model_altitudes_at_pressure_levels_m.size:
+                # No pressure levels, u_final_np[high_alt_mask] and v_final_np[high_alt_mask] remain NaN
+                pass
+            else:
+                coords_high = {
+                    'latitude': xr_lats[high_alt_mask],
+                    'longitude': xr_lons[high_alt_mask],
+                    'valid_time': xr_times[high_alt_mask]
+                }
+                try:
+                    # Interpolate u, v spatially and temporally, keeping pressure_level dimension
+                    # .data converts to numpy array. Shape: [num_high_alt_pts, num_pressure_levels]
+                    u_profiles_batch = self.data['u'].interp(coords_high, method="linear", kwargs={"fill_value": np.nan}).sel(pressure_level=self.pressure_levels_hpa).data
+                    v_profiles_batch = self.data['v'].interp(coords_high, method="linear", kwargs={"fill_value": np.nan}).sel(pressure_level=self.pressure_levels_hpa).data
+
+                    target_alts_m_for_high = alts_m_np[high_alt_mask]
+                    
+                    u_interp_for_high = np.full(target_alts_m_for_high.shape[0], np.nan, dtype=np.float32)
+                    v_interp_for_high = np.full(target_alts_m_for_high.shape[0], np.nan, dtype=np.float32)
+
+                    for i in range(target_alts_m_for_high.shape[0]):
+                        current_u_profile_values = u_profiles_batch[i, :]
+                        current_v_profile_values = v_profiles_batch[i, :]
+                        
+                        # Filter out NaNs that might have resulted from spatial/time interpolation
+                        valid_prof_mask = ~np.isnan(current_u_profile_values) & ~np.isnan(current_v_profile_values)
+                        
+                        current_altitudes_for_interp = self.model_altitudes_at_pressure_levels_m[valid_prof_mask]
+                        current_u_values_for_interp = current_u_profile_values[valid_prof_mask]
+                        current_v_values_for_interp = current_v_profile_values[valid_prof_mask]
+
+                        if len(current_altitudes_for_interp) == 0:
+                            continue # Remains NaN
+                        if len(current_altitudes_for_interp) == 1:
+                            u_interp_for_high[i] = current_u_values_for_interp[0]
+                            v_interp_for_high[i] = current_v_values_for_interp[0]
+                            continue
+                        
+                        try:
+                            u_interpolator = interp1d(current_altitudes_for_interp, current_u_values_for_interp,
+                                                      kind='linear', bounds_error=False,
+                                                      fill_value=(current_u_values_for_interp[0], current_u_values_for_interp[-1]))
+                            v_interpolator = interp1d(current_altitudes_for_interp, current_v_values_for_interp,
+                                                      kind='linear', bounds_error=False,
+                                                      fill_value=(current_v_values_for_interp[0], current_v_values_for_interp[-1]))
+                            
+                            u_interp_for_high[i] = u_interpolator(target_alts_m_for_high[i])
+                            v_interp_for_high[i] = v_interpolator(target_alts_m_for_high[i])
+                        except Exception: # If scipy interpolation fails for a point
+                            # Remains NaN
+                            pass
+                    
+                    u_final_np[high_alt_mask] = u_interp_for_high
+                    v_final_np[high_alt_mask] = v_interp_for_high
+                except Exception: # Broad exception for xarray interp or sel
+                    # u_final_np[high_alt_mask] etc remain NaN
+                    pass
+
+        # Convert final NumPy arrays back to PyTorch tensors on the original device and dtype
+        u_torch = torch.from_numpy(u_final_np).to(device=original_device, dtype=original_dtype)
+        v_torch = torch.from_numpy(v_final_np).to(device=original_device, dtype=original_dtype)
+        
+        return u_torch, v_torch
 
     def get_cape_cin(self, lat: float, lon: float, time: datetime, 
                      interpolate: bool = True) -> tuple[float, float]:
