@@ -47,14 +47,23 @@ class CostRev1(nn.Module):
         _knots_ac_dist = knots_ac_dist if knots_ac_dist is not None else DEFAULT_KNOTS_AC_DIST
         _knots_wind = knots_wind if knots_wind is not None else DEFAULT_KNOTS_WIND
 
-        self.plm_ac_dist = PiecewiseLinearMonoModel(
-            knot_points=_knots_ac_dist,
-            monotonic_type="non_decreasing"  # Higher AC*dist -> higher cost contribution
-        )
-        self.plm_wind = PiecewiseLinearMonoModel(
-            knot_points=_knots_wind,
-            monotonic_type="non_increasing"  # Higher tailwind -> lower cost contribution
-        )
+        # self.plm_ac_dist = PiecewiseLinearMonoModel(
+        #     knot_points=_knots_ac_dist,
+        #     monotonic_type="non_decreasing"  # Higher AC*dist -> higher cost contribution
+        # )
+
+        # For debugging: use identity function for both components
+        class IdentityPLM(nn.Module):
+            def forward(self, x):
+                return x
+
+        self.plm_ac_dist = IdentityPLM()
+        self.plm_wind = IdentityPLM()
+
+        # self.plm_wind = PiecewiseLinearMonoModel(
+        #     knot_points=_knots_wind,
+        #     monotonic_type="non_increasing"  # Higher tailwind -> lower cost contribution
+        # )
         
         self.to(self.device) # Move all parameters and buffers to the specified device
 

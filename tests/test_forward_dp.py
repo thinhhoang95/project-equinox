@@ -5,6 +5,7 @@ from datetime import datetime
 from equinox.dp.forward_dp_vec2 import run_forward_dp
 from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight, seconds_since_midnight_to_datetime
 from equinox.cost.cost_rev1 import CostRev1
+from equinox.cost.cost_model_1 import cost_model_1
 from equinox.wind.wind_date import WindDate
 from equinox.vnav.vnav_performance import Performance
 from equinox.vnav.vnav_profiles_rev1 import NARROW_BODY_JET_CLIMB_PROFILE, NARROW_BODY_JET_DESCENT_PROFILE, NARROW_BODY_JET_CLIMB_VS_PROFILE, NARROW_BODY_JET_DESCENT_VS_PROFILE
@@ -43,7 +44,7 @@ def test_forward_dp():
     )
 
     # Load the cost model
-    cost_model_instance = CostRev1(beta0=0.1, beta1=1.0, beta2=0.5, device=device)
+    cost_model_instance = cost_model_1
     
     # Takeoff time
     takeoff_time_str = "2023-04-01 12:00:00"
@@ -70,27 +71,37 @@ def test_forward_dp():
         print(f"V function shape: {V_final.shape}")
         base_output_time_str = f"{takeoff_time_str}"
 
-        for node_idx_res in range(num_actual_nodes):
-            for time_idx_res in range(V_final.shape[1]):
-                if not torch.isinf(V_final[node_idx_res, time_idx_res]):
-                    node_id_res = node_list_for_matrix[node_idx_res] # Use the consistent list
+        # for node_idx_res in range(num_actual_nodes):
+        #     for time_idx_res in range(V_final.shape[1]):
+        #         if not torch.isinf(V_final[node_idx_res, time_idx_res]):
+        #             node_id_res = node_list_for_matrix[node_idx_res] # Use the consistent list
                     
-                    # Calculate the approximate start time of this bin for display
-                    # min_time_overall_seconds is takeoff_seconds_since_midnight from inside run_forward_dp
-                    # This was the min_time_overall_seconds used to calculate k_v
-                    takeoff_ssm_ref = datestr_to_seconds_since_midnight(takeoff_time_str) # ssm: seconds since midnight
-                    bin_start_time_ssm = takeoff_ssm_ref + time_idx_res * 600 # 600 is delta_t_seconds from example
+        #             # Calculate the approximate start time of this bin for display
+        #             # min_time_overall_seconds is takeoff_seconds_since_midnight from inside run_forward_dp
+        #             # This was the min_time_overall_seconds used to calculate k_v
+        #             takeoff_ssm_ref = datestr_to_seconds_since_midnight(takeoff_time_str) # ssm: seconds since midnight
+        #             bin_start_time_ssm = takeoff_ssm_ref + time_idx_res * 600 # 600 is delta_t_seconds from example
 
-                    time_dt_display = seconds_since_midnight_to_datetime(base_output_time_str, bin_start_time_ssm)
+        #             time_dt_display = seconds_since_midnight_to_datetime(base_output_time_str, bin_start_time_ssm)
                     
-                    print(f"Node {node_id_res} ({node_idx_res}), Time Bin {time_idx_res} (approx arrival by {time_dt_display.strftime('%Y-%m-%d %H:%M:%S')}):")
-                    print(f"  V = {V_final[node_idx_res, time_idx_res].item():.2f}")
-                    active_eta_val = eta_final[node_idx_res, time_idx_res].item()
-                    active_alt_val = alt_final[node_idx_res, time_idx_res].item()
-                    active_phase_val = phase_final[node_idx_res, time_idx_res].item()
-                    print(f"  Exact ETA: {seconds_since_midnight_to_datetime(base_output_time_str, active_eta_val).strftime('%Y-%m-%d %H:%M:%S') if not np.isnan(active_eta_val) else 'N/A'}")
-                    print(f"  Altitude (ft): {active_alt_val if not np.isnan(active_alt_val) else 'N/A'}")
-                    print(f"  Phase: {active_phase_val if active_phase_val != -1 else 'N/A'}")
+        #             print(f"Node {node_id_res} ({node_idx_res}), Time Bin {time_idx_res} (approx arrival by {time_dt_display.strftime('%Y-%m-%d %H:%M:%S')}):")
+        #             print(f"  V = {V_final[node_idx_res, time_idx_res].item():.2f}")
+        #             active_eta_val = eta_final[node_idx_res, time_idx_res].item()
+        #             active_alt_val = alt_final[node_idx_res, time_idx_res].item()
+        #             active_phase_val = phase_final[node_idx_res, time_idx_res].item()
+        #             print(f"  Exact ETA: {seconds_since_midnight_to_datetime(base_output_time_str, active_eta_val).strftime('%Y-%m-%d %H:%M:%S') if not np.isnan(active_eta_val) else 'N/A'}")
+        #             print(f"  Altitude (ft): {active_alt_val if not np.isnan(active_alt_val) else 'N/A'}")
+        #             print(f"  Phase: {active_phase_val if active_phase_val != -1 else 'N/A'}")
+
+        # Dump the value function V to a file
+        import os
+
+        output_dir = "data/results/forward"
+        os.makedirs(output_dir, exist_ok=True)
+        np.save(os.path.join(output_dir, "V_final.npy"), V_final.cpu().detach().numpy())
+        np.save(os.path.join(output_dir, "eta_final.npy"), eta_final.cpu().detach().numpy())
+        np.save(os.path.join(output_dir, "alt_final.npy"), alt_final.cpu().detach().numpy())
+        np.save(os.path.join(output_dir, "phase_final.npy"), phase_final.cpu().detach().numpy())
 
     except Exception as e:
         print(f"An error occurred during the example run: {e}")

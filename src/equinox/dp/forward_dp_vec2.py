@@ -55,7 +55,7 @@ def run_forward_dp(
 
     Returns:
         torch.Tensor: Value function V[node_idx, time_bin_idx].
-        torch.Tensor: active_eta[node_idx, time_bin_idx] (exact seconds since midnight).
+        torch.Tensor: active_eta[node_idx, time_bin_idx] (exact seconds since midnight) - the ETA of the first path arriving at state (i, k_i) (node i, time bin k_i)
         torch.Tensor: active_alt[node_idx, time_bin_idx] (altitude in ft AMSL).
         torch.Tensor: active_phase[node_idx, time_bin_idx] (flight phase).
     """
@@ -163,14 +163,14 @@ def run_forward_dp(
         phase_src_tensor = torch.tensor(batch_phase_src_list, dtype=torch.long, device=device)
         coords_tgt_tensor = torch.tensor(batch_coords_tgt_list, dtype=torch.float64, device=device)
         
-        import time
-        time_start = time.time()
+        # import time
+        # time_start = time.time()
         alt_v_new_batch, eta_v_new_batch, phase_v_new_batch = get_next_state_fw(
             coords_src_tensor, alts_src_tensor, eta_src_tensor, phase_src_tensor,
             coords_tgt_tensor, climb_perf_table, wind_model
         )
-        time_end = time.time()
-        print(f"Time taken for get_next_state_fw: {time_end - time_start} seconds")
+        # time_end = time.time()
+        # print(f"Time taken for get_next_state_fw: {time_end - time_start} seconds")
         
         tailwind_mps_batch = get_wind(
             coords_src_tensor, coords_tgt_tensor, alts_src_tensor, eta_src_tensor, wind_model
@@ -188,7 +188,7 @@ def run_forward_dp(
         
         V_u_ku_tensor = torch.tensor(batch_V_u_ku_list, dtype=torch.float64, device=device)
         
-        for i in range(len(alt_v_new_batch)):
+        for i in range(len(alt_v_new_batch)): # i is the index of the transition from one (u, k_u) to one of its successor nodes (v, _)
             v_node_idx = batch_v_node_indices_list[i] # This is the successor's index
             alt_v_new = alt_v_new_batch[i]
             eta_v_new = eta_v_new_batch[i]
@@ -203,7 +203,8 @@ def run_forward_dp(
             time_since_takeoff_sec = eta_v_new - min_time_overall_seconds
             if time_since_takeoff_sec < 0:
                  continue
-
+            
+            # The time bin index k_v for the successor v
             k_v = int(torch.round(time_since_takeoff_sec / delta_t_seconds).item())
 
             if not (0 <= k_v < num_time_bins):

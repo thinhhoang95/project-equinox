@@ -97,12 +97,19 @@ class PiecewiseLinearMonoModel(nn.Module):
 
         num_knots = self.knot_points.numel()
         
-        self.initial_intercept = nn.Parameter(torch.randn(1))
-        self.first_slope = nn.Parameter(torch.randn(1)) # This is s_0
+        # self.initial_intercept = nn.Parameter(torch.randn(1))
+        # self.first_slope = nn.Parameter(torch.randn(1)) # This is s_0
         
+        # # These are the 'alpha_i' parameters before softplus
+        # # If num_knots is 0, this creates a Parameter of shape (0,), which is fine.
+        # self.unconstrained_slope_increments = nn.Parameter(torch.randn(num_knots))
+
+        self.initial_intercept = nn.Parameter(torch.zeros(1))
+        self.first_slope = nn.Parameter(torch.ones(1)) # This is s_0
+
         # These are the 'alpha_i' parameters before softplus
         # If num_knots is 0, this creates a Parameter of shape (0,), which is fine.
-        self.unconstrained_slope_increments = nn.Parameter(torch.randn(num_knots))
+        self.unconstrained_slope_increments = nn.Parameter(torch.zeros(num_knots))
 
     def forward(self, x: Union[torch.Tensor, List[float], float]) -> torch.Tensor:
         """
