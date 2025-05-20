@@ -194,12 +194,14 @@ def get_route_cost(
         )
         
         cost_value = edge_cost_tensor.item()
+        print(f"  Cost for edge {edge_param['u_id']} -> {edge_param['v_id']} (tailwind {edge_param['tailwind_kts']:.2f} kts): {cost_value:.6f}")
         total_route_cost += cost_value
-        print(f"  Cost for edge {edge_param['u_id']} -> {edge_param['v_id']} (tailwind {edge_param['tailwind_kts']:.2f} kts): {cost_value:.2f}")
 
     # 6. Return the total cost
     print(f"\nTotal calculated route cost: {total_route_cost:.2f}")
     return total_route_cost
+
+
 
 if __name__ == '__main__':
     print("Running example for get_route_cost...")

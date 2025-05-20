@@ -137,7 +137,8 @@ class CostRev1(nn.Module):
 
         ac_e_batch = self.get_airspace_charge_batched(u_indices, v_indices, airspace_charge_matrix_ac)
         
-        ac_dist_product_batch = ac_e_batch * dist_e_batch
+        # ac_dist_product_batch = ac_e_batch * dist_e_batch
+        ac_dist_product_batch = dist_e_batch # for testing
         # Ensure tailwind_values_w is on the correct device and dtype for PLM input
         tailwind_tensor_batch = tailwind_values_w.to(device=self.device, dtype=torch.float32)
 

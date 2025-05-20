@@ -47,13 +47,13 @@ def haversine_distance_matrix(graph: nx.Graph) -> np.ndarray:
             ) from e
 
 
-        distance_km = great_circle(u_coords, v_coords).km
+        distance_nm = great_circle(u_coords, v_coords).nm
 
         u_idx = node_mapping[u]
         v_idx = node_mapping[v]
 
-        dist_matrix[u_idx, v_idx] = distance_km
-        dist_matrix[v_idx, u_idx] = distance_km  # Assuming undirected graph or symmetric distances
+        dist_matrix[u_idx, v_idx] = distance_nm
+        dist_matrix[v_idx, u_idx] = distance_nm  # Assuming undirected graph or symmetric distances
 
     return dist_matrix
 
