@@ -108,7 +108,7 @@ def test_backward_dp():
         # Dump the value function V and other tensors to files
         import os
 
-        output_dir = "data/results/backward"
+        output_dir = "data/results/backward_opt"
         os.makedirs(output_dir, exist_ok=True)
         np.save(os.path.join(output_dir, "V_final_bw.npy"), V_final.cpu().detach().numpy())
         np.save(os.path.join(output_dir, "eta_final_bw.npy"), eta_final.cpu().detach().numpy())

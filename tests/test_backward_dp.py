@@ -70,7 +70,8 @@ def test_backward_dp():
             final_alt_ft=0.0, # Altitude at EGLL at landing time, defaults to destination_elevation_ft if 0.0
             delta_t_seconds=600, # time window length
             max_flight_duration_hours=5, # max duration to consider for time bins
-            device=device
+            device=device,
+            temperature=5e-3
         )
 
         print("\n--- Results ---")

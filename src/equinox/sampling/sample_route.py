@@ -5,6 +5,7 @@ from typing import List, Dict, Tuple
 
 # Equinox imports
 from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
+from equinox.helpers.haversine import haversinet
 from equinox.cost.cost_rev1 import CostRev1
 from equinox.wind.wind_model import WindModel
 from equinox.vnav.vnav_performance import Performance, get_eta_and_distance_climb
@@ -41,9 +42,10 @@ def _sample_single_route_with_details(
     max_segments: int = 100,
     temperature: float = 1.0,
     verbose: bool = True
-) -> List[str]:
+) -> Tuple[List[str], List[float]]:
     """
     Samples a single route using the backward value function and cost model.
+    Returns the route as a list of node IDs and a list of leg distances in NM.
     """
 
     climb_perf_table = get_eta_and_distance_climb(performance_model, origin_airport_elevation_ft=source_elevation_ft)
@@ -56,6 +58,7 @@ def _sample_single_route_with_details(
     current_phase = torch.tensor(CLIMB, dtype=torch.long, device=device)
 
     sampled_route_ids = [current_node_id]
+    leg_distances_nm = [] # Initialize list to store leg distances
 
     for seg_count in range(max_segments):
         if current_node_id == goal_node_id:
@@ -92,6 +95,7 @@ def _sample_single_route_with_details(
             current_u_coords_data['lat'].item() if isinstance(current_u_coords_data['lat'], torch.Tensor) else current_u_coords_data['lat'],
             current_u_coords_data['lon'].item() if isinstance(current_u_coords_data['lon'], torch.Tensor) else current_u_coords_data['lon']
         ]
+        current_u_coords_tensor = torch.tensor([current_u_coords], dtype=torch.float64, device=device)
 
         for v_node_g_id in successors_graph_ids:
             v_node_g_idx = node_to_idx[v_node_g_id]
@@ -156,6 +160,8 @@ def _sample_single_route_with_details(
             k_v_clipped = max(0, min(k_v, V_bwd.shape[1] - 1))
 
             if k_v_clipped != k_v:
+                k_v = k_v_clipped
+                print(f"Warning: k_v clipped from {k_v} to {k_v_clipped} for {v_g_id}.")
                 raise ValueError(f"k_v clipped from {k_v} to {k_v_clipped} for {v_g_id}.")
 
             V_bwd_v_kv = V_bwd[v_g_idx, k_v_clipped]
@@ -164,12 +170,13 @@ def _sample_single_route_with_details(
                 log_prob_val = torch.tensor(float('-inf'), device=device, dtype=torch.float64)
             else:
                 log_prob_val = -cost_uv_val.double() - V_bwd_v_kv.double() + V_bwd_u_ku.double()
-
-            if v_g_id in ['LETP', 'LFDA', 'KOVAK']:
-                print(f'{v_g_id}, alt: {alt_v_new_b[i]}, eta: {eta_v_new_b[i]}, phase: {phase_v_new_b[i]}, log_prob_val: {log_prob_val}')
-                print(f'k_v: {k_v}/{V_bwd.shape[1]}, V_bwd_u_ku: {V_bwd_u_ku}, V_bwd_v_kv: {V_bwd_v_kv}')
-                print(f'cost_uv_val: {cost_uv_val}')
-                print('---')
+            
+            # For debugging
+            # if v_g_id in ['LETP', 'LFDA', 'KOVAK']:
+            #     print(f'{v_g_id}, alt: {alt_v_new_b[i]}, eta: {eta_v_new_b[i]}, phase: {phase_v_new_b[i]}, log_prob_val: {log_prob_val}')
+            #     print(f'k_v: {k_v}/{V_bwd.shape[1]}, V_bwd_u_ku: {V_bwd_u_ku}, V_bwd_v_kv: {V_bwd_v_kv}')
+            #     print(f'cost_uv_val: {cost_uv_val}')
+            #     print('---')
             
             log_probs_list.append(log_prob_val)
             valid_successor_options.append({
@@ -215,6 +222,21 @@ def _sample_single_route_with_details(
             
         chosen_data = valid_successor_options[chosen_successor_list_idx]
 
+        next_node_id = chosen_data["id"]
+        # Calculate leg distance before updating current_node_id
+        next_node_coords_data = graph.nodes[next_node_id]
+        next_node_coords = [
+            next_node_coords_data['lat'].item() if isinstance(next_node_coords_data['lat'], torch.Tensor) else next_node_coords_data['lat'],
+            next_node_coords_data['lon'].item() if isinstance(next_node_coords_data['lon'], torch.Tensor) else next_node_coords_data['lon']
+        ]
+        next_node_coords_tensor = torch.tensor([next_node_coords], dtype=torch.float64, device=device)
+
+        leg_dist_nm = haversinet(
+            current_u_coords_tensor[:, 0], current_u_coords_tensor[:, 1],
+            next_node_coords_tensor[:, 0], next_node_coords_tensor[:, 1]
+        ).item()
+        leg_distances_nm.append(leg_dist_nm)
+
         current_node_id = chosen_data["id"]
         current_node_idx = chosen_data["idx"]
         current_alt_amsl = chosen_data["alt"] 
@@ -227,7 +249,7 @@ def _sample_single_route_with_details(
         if current_node_id != goal_node_id:
             print(f"Warning: Sampling stopped after {max_segments} segments, goal {goal_node_id} not reached. Current: {current_node_id}")
 
-    return sampled_route_ids
+    return sampled_route_ids, leg_distances_nm
 
 
 def sample_routes(
@@ -249,8 +271,10 @@ def sample_routes(
     device_str: str = "cpu",
     max_segments_in_route: int = 100,
     num_samples: int = 1,
-    temperature: float = 1.0
-) -> List[List[str]]:
+    temperature: float = 1.0,
+    max_attempts: int = 200,
+    verbose: bool = False
+) -> List[Tuple[List[str], List[float]]]:
     """
     Samples routes from a source to a goal node using a backward value function.
     Args:
@@ -275,7 +299,9 @@ def sample_routes(
                                        more greedy (closer to min cost path). Higher values
                                        (e.g., 2.0) make it more random. Defaults to 1.0.
     Returns:
-        List[List[str]]: A list containing the sampled route(s). Each route is a list of node IDs.
+        List[Tuple[List[str], List[float]]]: A list of tuples. Each tuple contains:
+            - A list of node IDs representing the sampled route.
+            - A list of floats representing the leg distances in nautical miles for that route.
     """
     device = torch.device(device_str if torch.cuda.is_available() and device_str == "cuda" else "cpu")
 
@@ -300,31 +326,54 @@ def sample_routes(
     takeoff_ssm = datestr_to_seconds_since_midnight(takeoff_time_str)
 
     sampled_routes_list = []
-    for _ in range(num_samples): 
-        route = _sample_single_route_with_details(
-            graph=graph,
-            node_to_idx=node_to_idx,
-            idx_to_node=idx_to_node,
-            source_node_id=source_node_id,
-            goal_node_id=goal_node_id,
-            V_bwd=V_bwd.clone().to(dtype=torch.float64, device=device),
-            cost_model=cost_model,
-            wind_model=wind_model,
-            performance_model=performance_model,
-            dist_matrix_tensor=dist_matrix_tensor,
-            ac_matrix_tensor=ac_matrix_tensor,
-            source_elevation_ft=source_elevation_ft,
-            initial_alt_ft_amsl=initial_alt_ft_amsl,
-            delta_t_seconds=delta_t_seconds,
-            min_time_overall_seconds=min_time_ref_for_bins,
-            takeoff_ssm=takeoff_ssm,
-            device=device,
-            max_segments=max_segments_in_route,
-            temperature=temperature
-        )
-        sampled_routes_list.append(route)
-    
-    return sampled_routes_list
+    sampled_distances_list = []
+    completed_routes_count = 0 # Renamed for clarity
+
+    for attempt_num in range(max_attempts): # Added attempt_num for potential debugging
+        if completed_routes_count >= num_samples:
+            break
+            
+
+        try: 
+            route_ids, leg_distances = _sample_single_route_with_details(
+                graph=graph,
+                node_to_idx=node_to_idx,
+                idx_to_node=idx_to_node,
+                source_node_id=source_node_id,
+                goal_node_id=goal_node_id,
+                V_bwd=V_bwd.clone().to(dtype=torch.float64, device=device),
+                cost_model=cost_model,
+                wind_model=wind_model,
+                performance_model=performance_model,
+                dist_matrix_tensor=dist_matrix_tensor,
+                ac_matrix_tensor=ac_matrix_tensor,
+                source_elevation_ft=source_elevation_ft,
+                initial_alt_ft_amsl=initial_alt_ft_amsl,
+                delta_t_seconds=delta_t_seconds,
+                min_time_overall_seconds=min_time_ref_for_bins,
+                takeoff_ssm=takeoff_ssm,
+                device=device,
+                max_segments=max_segments_in_route,
+                temperature=temperature,
+                verbose=verbose
+            )
+        except ValueError as e:
+            continue # Skip this attempt
+
+        if route_ids and route_ids[-1] == goal_node_id: # Check if route_ids is not empty
+            sampled_routes_list.append(route_ids)
+            sampled_distances_list.append(leg_distances)
+            completed_routes_count += 1
+
+        elif verbose:
+            print(f"Attempt {attempt_num + 1}: Route did not reach goal or was empty. Last node: {route_ids[-1] if route_ids else 'N/A'}")
+
+    if completed_routes_count < num_samples:
+        print(f"Warning: Only {completed_routes_count} routes reached the goal out of {num_samples} desired, after {max_attempts} attempts.")
+
+    return sampled_routes_list, sampled_distances_list
+
+
 
 if __name__ == '__main__':
     print("Illustrative example for sample_routes (requires actual data and models to run fully):")

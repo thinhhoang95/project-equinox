@@ -32,7 +32,8 @@ def run_backward_dp(
     final_alt_ft: float = 0.0,
     delta_t_seconds: int = 300,
     max_flight_duration_hours: int = 10,
-    device: torch.device = None
+    device: torch.device = None,
+    temperature: float = 1.0
 ):
     """
     Implements the backward dynamic programming algorithm for soft Bellman updates,
@@ -251,9 +252,9 @@ def run_backward_dp(
                 active_eta[u_node_idx, k_u] = eta_u_new
             else:
                 # Soft Bellman update (min convention for costs)
-                V[u_node_idx, k_u] = -torch.logaddexp(
-                    -current_V_u_ku,
-                    -val_to_add_in_exp
+                V[u_node_idx, k_u] = -temperature * torch.logaddexp(
+                    -current_V_u_ku / temperature,
+                    -val_to_add_in_exp / temperature
                 )
                 # TODO: How to update active_alt, active_phase, active_eta with soft updates?
                 # For now, if a new path contributes, we could check if it's "better" (lower cost component)
