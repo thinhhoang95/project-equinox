@@ -7,7 +7,6 @@ from equinox.route.forward_state import get_next_state_fw, CLIMB, CRUISE, DESCEN
 from equinox.route.get_wind import get_wind
 from equinox.cost.cost_rev1 import CostRev1
 from equinox.vnav.vnav_performance import Performance, get_eta_and_distance_climb
-from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
 from equinox.wind.wind_model import WindModel
 
 MPS_TO_KNOTS = 1.9438444924406 # 1.9438444924406 m/s to kts
@@ -20,7 +19,6 @@ MPS_TO_KNOTS = 1.9438444924406 # 1.9438444924406 m/s to kts
 def run_forward_dp(
     graph: nx.DiGraph,
     source_node_id: str, # Graph node ID (e.g., 'LEMD')
-    takeoff_time_str: str, # e.g., "2023-04-01 12:00:00"
     source_elevation_ft: float, # Elevation of the source airport/node
     goal_elevation_ft: float, # Elevation of the goal airport/node (unused in fwd pass)
     cost_model: CostRev1,
@@ -28,19 +26,23 @@ def run_forward_dp(
     performance_model: Performance,
     dist_matrix_np: np.ndarray,
     ac_matrix_np: np.ndarray,
-    initial_alt_ft: float = 1000.0, # Initial altitude at source node relative to its elevation after takeoff
-    delta_t_seconds: int = 300, # 5 minutes time window
-    max_flight_duration_hours: int = 10, # Max duration to consider for time bins
+    initial_alt_ft: float, # Initial altitude at source node AMSL
+    delta_t_seconds: int,
+    # Aligned time parameters
+    min_time_overall_seconds_aligned: float,
+    num_time_bins_aligned: int,
+    takeoff_bin_idx_aligned: int,
+    takeoff_seconds_since_midnight_val: float, # Renamed for clarity
     device: torch.device = None
 ):
     """
     Implements the forward dynamic programming algorithm for soft Bellman updates,
-    processing nodes in topological generations for enhanced batching.
+    processing nodes in topological generations for enhanced batching,
+    using a pre-calculated common time grid for alignment with backward pass.
 
     Args:
         graph (nx.DiGraph): The route graph. Nodes should have a 'coords' attribute (lat, lon).
         source_node_id (str): The ID of the source node in the graph.
-        takeoff_time_str (str): ISO format takeoff time string (e.g., "2023-04-01 12:00:00").
         source_elevation_ft (float): Elevation of the source airport in feet.
         goal_elevation_ft (float): Elevation of the destination airport in feet (unused in forward pass).
         cost_model (CostRev1): Instantiated cost model.
@@ -48,9 +50,12 @@ def run_forward_dp(
         performance_model (Performance): Instantiated aircraft performance model.
         dist_matrix_np (np.ndarray): 2D array of distances between node indices (in nautical miles).
         ac_matrix_np (np.ndarray): 2D array of airspace charges between node indices.
-        initial_alt_ft (float, optional): Initial altitude at the source node (in feet AMSL) at takeoff_time_str.
-        delta_t_seconds (int, optional): Duration of each time bin in seconds.
-        max_flight_duration_hours (int, optional): Maximum flight duration to define the number of time bins.
+        initial_alt_ft (float): Initial altitude at the source node (in feet AMSL) at takeoff_time_str.
+        delta_t_seconds (int): Duration of each time bin in seconds.
+        min_time_overall_seconds_aligned (float): Common reference start time (seconds since midnight) for the shared time grid.
+        num_time_bins_aligned (int): Common number of time bins for DP arrays.
+        takeoff_bin_idx_aligned (int): The bin index in the common grid for the takeoff time.
+        takeoff_seconds_since_midnight_val (float): The takeoff time in seconds since midnight.
         device (torch.device, optional): PyTorch device to run computations on.
 
     Returns:
@@ -71,11 +76,9 @@ def run_forward_dp(
         raise ValueError(f"Source node {source_node_id} not found in graph.")
     s_idx = node_to_idx[source_node_id]
 
-    takeoff_seconds_since_midnight = datestr_to_seconds_since_midnight(takeoff_time_str)
-    
-    min_time_overall_seconds = takeoff_seconds_since_midnight
-    max_time_overall_seconds = min_time_overall_seconds + max_flight_duration_hours * 3600
-    num_time_bins = int((max_time_overall_seconds - min_time_overall_seconds) / delta_t_seconds) + 1
+    # Use aligned time parameters directly
+    min_time_overall_seconds = min_time_overall_seconds_aligned
+    num_time_bins = num_time_bins_aligned
 
     V = torch.full((num_nodes, num_time_bins), float('inf'), dtype=torch.float64, device=device)
     active_alt = torch.full((num_nodes, num_time_bins), float('nan'), dtype=torch.float64, device=device)
@@ -89,13 +92,14 @@ def run_forward_dp(
     dist_matrix = torch.from_numpy(dist_matrix_np).to(dtype=torch.float64, device=device)
     ac_matrix = torch.from_numpy(ac_matrix_np).to(dtype=torch.float64, device=device)
 
-    initial_time_bin = 0
+    # Use takeoff_bin_idx_aligned for initialization
+    initial_time_bin = takeoff_bin_idx_aligned
     V[s_idx, initial_time_bin] = 0.0
     # Ensure initial_alt_ft is AMSL. If it was given as AGL for source, it should be adjusted before this call.
     # Assuming initial_alt_ft is already AMSL as per updated docstring.
     active_alt[s_idx, initial_time_bin] = float(initial_alt_ft) 
     active_phase[s_idx, initial_time_bin] = CLIMB 
-    active_eta[s_idx, initial_time_bin] = float(takeoff_seconds_since_midnight)
+    active_eta[s_idx, initial_time_bin] = float(takeoff_seconds_since_midnight_val) # Use passed takeoff time in ssm
 
     # --- 2. Topological Generations for Node Processing Order ---
     try:
@@ -200,12 +204,13 @@ def run_forward_dp(
             if torch.isinf(cost_uv) or torch.isinf(V_u_val):
                 continue
 
-            time_since_takeoff_sec = eta_v_new - min_time_overall_seconds
-            if time_since_takeoff_sec < 0:
+            # time_since_takeoff_sec is now time_at_v_since_min_overall for consistency
+            time_at_v_since_min_overall = eta_v_new - min_time_overall_seconds # Use the common min_time_overall_seconds
+            if time_at_v_since_min_overall < -delta_t_seconds: # Allow some slack
                  continue
             
             # The time bin index k_v for the successor v
-            k_v = int(torch.round(time_since_takeoff_sec / delta_t_seconds).item())
+            k_v = int(torch.round(time_at_v_since_min_overall / delta_t_seconds).item())
 
             if not (0 <= k_v < num_time_bins):
                 continue

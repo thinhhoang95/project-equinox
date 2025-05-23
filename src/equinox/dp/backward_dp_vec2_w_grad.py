@@ -8,7 +8,6 @@ from equinox.route.forward_state import CLIMB, CRUISE, DESCENT
 from equinox.route.get_wind import get_wind
 from equinox.cost.cost_rev1 import CostRev1
 from equinox.vnav.vnav_performance import Performance, get_eta_and_distance_climb, get_eta_and_distance_descent
-from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
 from equinox.wind.wind_model import WindModel
 from typing import Dict, Tuple, List
 
@@ -22,7 +21,6 @@ MPS_TO_KNOTS = 1.9438444924406 # 1.9438444924406 m/s to kts
 def run_backward_dp(
     graph: nx.DiGraph,
     goal_node_id: str,
-    estimated_landing_time_str: str,
     origin_elevation_ft: float,
     destination_elevation_ft: float,
     cost_model: CostRev1,
@@ -30,21 +28,24 @@ def run_backward_dp(
     performance_model: Performance,
     dist_matrix_np: np.ndarray,
     ac_matrix_np: np.ndarray,
-    final_alt_ft: float = 0.0,
-    delta_t_seconds: int = 300,
-    max_flight_duration_hours: int = 10,
+    final_alt_ft: float,
+    delta_t_seconds: int,
+    min_time_overall_seconds_aligned: float,
+    num_time_bins_aligned: int,
+    landing_bin_idx_aligned: int,
+    landing_seconds_since_midnight_val: float,
     device: torch.device = None,
     temperature: float = 1.0
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Dict[Tuple[int, int], int]]:
     """
     Implements the backward dynamic programming algorithm for soft Bellman updates,
-    processing nodes in topological generations (of the reversed graph) for enhanced batching.
+    processing nodes in topological generations (of the reversed graph) for enhanced batching,
+    using a pre-calculated common time grid for alignment with forward pass.
     Also computes and returns edge costs and their gradients with respect to cost function parameters.
 
     Args:
         graph (nx.DiGraph): The route graph. Nodes should have a 'coords' attribute (lat, lon).
         goal_node_id (str): The ID of the goal node in the graph.
-        estimated_landing_time_str (str): ISO format estimated landing time string (e.g., "2023-04-01 18:00:00").
         origin_elevation_ft (float): Elevation of the origin airport in feet (used for descent profile context).
         destination_elevation_ft (float): Elevation of the destination airport in feet.
         cost_model (CostRev1): Instantiated cost model. Its parameters intended for learning should have \`requires_grad=True\`.
@@ -52,10 +53,13 @@ def run_backward_dp(
         performance_model (Performance): Instantiated aircraft performance model.
         dist_matrix_np (np.ndarray): 2D array of distances between node indices (in nautical miles).
         ac_matrix_np (np.ndarray): 2D array of airspace charges between node indices.
-        final_alt_ft (float, optional): Altitude at the goal node (in feet AMSL) at estimated_landing_time_str.
+        final_alt_ft (float): Altitude at the goal node (in feet AMSL) at estimated_landing_time_str.
                                        Defaults to destination_elevation_ft if not specified, but param allows override.
-        delta_t_seconds (int, optional): Duration of each time bin in seconds.
-        max_flight_duration_hours (int, optional): Maximum flight duration to define the number of time bins.
+        delta_t_seconds (int): Duration of each time bin in seconds.
+        min_time_overall_seconds_aligned (float): Common reference start time (seconds since midnight) for the shared time grid.
+        num_time_bins_aligned (int): Common number of time bins for DP arrays.
+        landing_bin_idx_aligned (int): The bin index in the common grid for the landing time.
+        landing_seconds_since_midnight_val (float): The landing time in seconds since midnight.
         device (torch.device, optional): PyTorch device to run computations on.
         temperature (float, optional): Temperature parameter for the soft Bellman update.
     Returns:
@@ -111,12 +115,11 @@ def run_backward_dp(
         raise ValueError(f"Goal node {goal_node_id} not found in graph.")
     g_idx = node_to_idx[goal_node_id] # Goal node index
 
-    estimated_landing_seconds_since_midnight = datestr_to_seconds_since_midnight(estimated_landing_time_str)
-    
-    # Time window calculated backwards from landing time
-    max_time_overall_seconds = estimated_landing_seconds_since_midnight
-    min_time_overall_seconds = max_time_overall_seconds - max_flight_duration_hours * 3600
-    num_time_bins = int((max_time_overall_seconds - min_time_overall_seconds) / delta_t_seconds) + 1
+    # Use aligned time parameters directly
+    min_time_overall_seconds = min_time_overall_seconds_aligned
+    num_time_bins = num_time_bins_aligned
+    # estimated_landing_seconds_since_midnight is now landing_seconds_since_midnight_val
+    # goal_node_time_since_min_overall and landing_time_bin calculation removed, use landing_bin_idx_aligned
 
     V = torch.full((num_nodes, num_time_bins), float('inf'), dtype=torch.float64, device=device)
     active_alt = torch.full((num_nodes, num_time_bins), float('nan'), dtype=torch.float64, device=device)
@@ -145,27 +148,19 @@ def run_backward_dp(
     dist_matrix = torch.from_numpy(dist_matrix_np).to(dtype=torch.float64, device=device) # Ensure float64 for consistency with V
     ac_matrix = torch.from_numpy(ac_matrix_np).to(dtype=torch.float64, device=device)   # Ensure float64 for consistency with V
 
-    # Initialize at goal node, at the last effective time bin
-    # The time bin corresponding to estimated_landing_seconds_since_midnight
-    goal_node_time_since_min_overall = estimated_landing_seconds_since_midnight - min_time_overall_seconds
-    landing_time_bin = int(round(goal_node_time_since_min_overall / delta_t_seconds))
+    # Initialize at goal node using landing_bin_idx_aligned
+    landing_time_bin = landing_bin_idx_aligned
     
-    # Ensure landing_time_bin is within bounds, typically num_time_bins - 1 if max_flight_duration makes sense
-    if not (0 <= landing_time_bin < num_time_bins):
-        # This might happen if estimated_landing_time is outside the window defined by max_flight_duration
-        # Forcing it to the last bin, or could raise error.
-        # If landing_time_bin is num_time_bins, it implies it's exactly at max_time_overall_seconds + delta_t_seconds/2 effectively due to rounding.
-        # if it's num_time_bins, it's out of bounds for 0-indexed.
-        landing_time_bin = num_time_bins -1 
-        # We should also ensure estimated_landing_seconds_since_midnight aligns with this bin's center or start.
-        # For simplicity, we assume it's correctly placed at this bin.
+    # Ensure landing_time_bin is within bounds (already validated by calculate_aligned_time_parameters)
+    # if not (0 <= landing_time_bin < num_time_bins): 
+    #     landing_time_bin = num_time_bins -1 
 
     V[g_idx, landing_time_bin] = 0.0
     # Altitude at goal node. If final_alt_ft was 0.0 (default), use destination_elevation_ft.
     current_final_alt = float(final_alt_ft if final_alt_ft != 0.0 else destination_elevation_ft)
     active_alt[g_idx, landing_time_bin] = current_final_alt
     active_phase[g_idx, landing_time_bin] = DESCENT # Assuming aircraft is in descent or landed phase at goal
-    active_eta[g_idx, landing_time_bin] = float(estimated_landing_seconds_since_midnight)
+    active_eta[g_idx, landing_time_bin] = float(landing_seconds_since_midnight_val) # Use passed landing time in ssm
 
     # --- 2. Topological Generations for Node Processing Order (Reversed Graph) ---
     try:
@@ -244,8 +239,7 @@ def run_backward_dp(
             phase_t=phase_v_curr_tensor,    # phase_v (current node v)
             coords_tgt=coords_v_curr_tensor,# p_t (current node v)
             descent_performance=descent_perf_table,
-            wind_model=wind_model,
-            climb_performance=climb_perf_table
+            wind_model=wind_model
         )
         
         # Wind for cost calculation of leg u -> v
@@ -291,7 +285,7 @@ def run_backward_dp(
                 continue
 
             # Time bin for state at u
-            time_at_u_since_min_overall = eta_u_new - min_time_overall_seconds
+            time_at_u_since_min_overall = eta_u_new - min_time_overall_seconds # Use common min_time_overall_seconds
             if time_at_u_since_min_overall < -delta_t_seconds: # Allow some slack for rounding near min_time_overall_seconds
                  continue 
             
