@@ -63,7 +63,7 @@ def test_full_regime_flight():
     seconds_since_midnight = datestr_to_seconds_since_midnight(time_at_arrival)
 
     # Takeoff time
-    time_at_takeoff = "2024-04-01 10:25:17" # at Madrid-Barajas
+    time_at_takeoff = "2024-04-01 11:50:17" # at Madrid-Barajas
     seconds_since_midnight_takeoff = datestr_to_seconds_since_midnight(time_at_takeoff)
 
     # Create source state

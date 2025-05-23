@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import networkx as nx
 from datetime import datetime
-from equinox.dp.backward_dp_toc import run_backward_dp
+from equinox.dp.backward_dp_w_grad import run_backward_dp
 from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight, seconds_since_midnight_to_datetime
 from equinox.cost.cost_rev1 import CostRev1
 from equinox.cost.cost_model_1 import cost_model_1
@@ -59,7 +59,7 @@ def test_backward_dp_with_toc():
         # and destination_elevation_ft refers to the flight's actual destination (EGLL, the goal_node_id here)
         # final_alt_ft is the altitude at the goal_node_id (EGLL) at estimated_landing_time_str.
         # If final_alt_ft is 0.0 (default), it uses destination_elevation_ft.
-        V_final, eta_final, alt_final, phase_final = run_backward_dp(
+        V_final, eta_final, alt_final, phase_final, edge_costs_time_binned, edge_cost_gradients_time_binned, edge_to_canonical_idx = run_backward_dp(
             graph=G,
             goal_node_id="EGLL", # Destination for the flight
             estimated_landing_time_str=estimated_landing_time_str,
@@ -127,4 +127,4 @@ def test_backward_dp_with_toc():
         traceback.print_exc()
 
 if __name__ == '__main__':
-    test_backward_dp()
+    test_backward_dp_with_toc()
