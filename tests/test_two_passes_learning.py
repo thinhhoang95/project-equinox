@@ -17,7 +17,7 @@ from equinox.vnav.vnav_profiles_rev1 import (
     NARROW_BODY_JET_CLIMB_VS_PROFILE,
     NARROW_BODY_JET_DESCENT_VS_PROFILE,
 )
-from equinox.dp.backward_dp_vec2_w_grad import run_backward_dp
+from equinox.dp.backward_dp_vec2 import run_backward_dp
 from equinox.dp.helpers.align_time_bins import calculate_aligned_time_parameters
 
 
@@ -90,8 +90,10 @@ def get_configuration():
         "goal_node_id": "EGLL",
     }
 
+import sys
 
 if __name__ == "__main__":
+    sys.exit()
     config = get_configuration()
     device = config["device"]
     G = config["G"]

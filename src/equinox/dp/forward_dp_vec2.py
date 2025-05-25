@@ -15,6 +15,7 @@ MPS_TO_KNOTS = 1.9438444924406 # 1.9438444924406 m/s to kts
 # For now, assuming they might be part of performance_model_params or loaded similarly
 # from equinox.vnav.vnav_profiles_rev1 import NARROW_BODY_JET_CLIMB_PROFILE, NARROW_BODY_JET_DESCENT_PROFILE, NARROW_BODY_JET_CLIMB_VS_PROFILE, NARROW_BODY_JET_DESCENT_VS_PROFILE
 
+# VEC2 VERSION ALLOWS ALIGNMENT OF TIME GRID BETWEEN FORWARD AND BACKWARD PASSES
 
 def run_forward_dp(
     graph: nx.DiGraph,

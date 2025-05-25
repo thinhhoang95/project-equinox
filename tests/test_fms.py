@@ -79,3 +79,6 @@ def test_fms():
 
     # Format and print
     print(df.to_string(index=False, float_format="%.2f"))
+
+if __name__ == "__main__":
+    test_fms()
