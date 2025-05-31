@@ -61,7 +61,7 @@ def run_forward_soft_bellman(
         torch.Tensor: active_eta[node_idx, time_bin_idx, etto_bin_idx] (exact seconds since midnight)
         torch.Tensor: active_alt[node_idx, time_bin_idx, etto_bin_idx] (altitude in ft AMSL).
         torch.Tensor: active_phase[node_idx, time_bin_idx, etto_bin_idx] (flight phase).
-        List[Tuple[int, int, int, int]]: transitions_list containing (u_node_idx, eps_u_idx, v_node_idx, eps_v_idx)
+        List[Tuple[int, int, float, int, int, float]]: transitions_list containing (u_node_idx_for_trans, eps_u_idx_for_trans, alt_u_ft, v_node_idx, eps_v_idx, alt_v_ft)
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -99,13 +99,15 @@ def run_forward_soft_bellman(
     else: # Avoid division by zero if etto_delta_t_seconds is 0
         max_climb_etto_bin_idx = 0 if actual_max_climb_time_sec == 0 else num_etto_bins -1
 
+    print(f'eps bin for ToC: {max_climb_etto_bin_idx}')
+
 
     V = torch.full((num_nodes, num_time_bins, num_etto_bins), float('inf'), dtype=torch.float64, device=device)
     active_alt = torch.full((num_nodes, num_time_bins, num_etto_bins), float('nan'), dtype=torch.float64, device=device)
     active_phase = torch.full((num_nodes, num_time_bins, num_etto_bins), -1, dtype=torch.long, device=device)
     active_eta = torch.full((num_nodes, num_time_bins, num_etto_bins), float('nan'), dtype=torch.float64, device=device) # in seconds since midnight (ssm)
     
-    transitions_list: List[Tuple[int, int, int, int]] = []
+    transitions_list: List[Tuple[int, int, float, int, int, float]] = []
 
 
     dist_matrix = torch.from_numpy(dist_matrix_np).to(dtype=torch.float64, device=device)
@@ -274,6 +276,15 @@ def run_forward_soft_bellman(
             is_v_cruise_etto = eps_v_idx >= max_climb_etto_bin_idx
             
             if not (is_u_cruise_etto and is_v_cruise_etto):
-                transitions_list.append((u_node_idx_for_trans, eps_u_idx_for_trans, v_node_idx, eps_v_idx))
+                transitions_list.append((u_node_idx_for_trans, eps_u_idx_for_trans, round(batch_alts_src_list[i], 0), v_node_idx, eps_v_idx, round(alt_v_new.item(), 0)))
 
     return V, active_eta, active_alt, active_phase, transitions_list
+
+import os, pickle
+def save_transitions(transitions_list: List[Tuple[int, int, float, int, int, float]], output_dir: str,
+                     base_filename: str):
+    # Save the transitions_list to a file
+    with open(os.path.join(output_dir, f"{base_filename}.pkl"), "wb") as f:
+        pickle.dump(transitions_list, f)
+
+        print(f"Saved transitions to {os.path.join(output_dir, f'{base_filename}.pkl')}")

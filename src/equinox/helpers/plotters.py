@@ -68,6 +68,61 @@ def plot_routes_on_map(graph, routes, ax=None):
         plt.legend()
         plt.show()
 
+def plot_waypoints(graph, highlighted_nodes=None, ax=None):
+    """
+    Plots waypoints on a map using Cartopy, with specified nodes highlighted in red.
+
+    Args:
+        graph (nx.Graph): A NetworkX graph where nodes have 'lat' and 'lon' attributes
+                          and are identified by their names (e.g., waypoint IDs).
+        highlighted_nodes (list[str], optional): A list of node names to highlight in red.
+                                                If None, no nodes will be highlighted.
+        ax (matplotlib.axes.Axes, optional): A Matplotlib Axes object to plot on.
+                                             If None, a new figure and axes will be created.
+    """
+    if ax is None:
+        fig = plt.figure(figsize=(48, 16))
+        ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+    
+    # ax.stock_img()
+    ax.add_feature(cfeature.COASTLINE)
+    ax.add_feature(cfeature.BORDERS, linestyle=':')
+    ax.add_feature(cfeature.LAND)
+    ax.add_feature(cfeature.OCEAN)
+    ax.add_feature(cfeature.LAKES)
+    ax.add_feature(cfeature.RIVERS)
+
+    # Collect all coordinates for extent calculation
+    all_lons = []
+    all_lats = []
+
+    # Set default highlighted_nodes to empty list if None
+    if highlighted_nodes is None:
+        highlighted_nodes = []
+
+    # Plot all the nodes on the map with text label of the waypoint name (small font)
+    for node, data in graph.nodes(data=True):
+        lon, lat = data['lon'], data['lat']
+        all_lons.append(lon)
+        all_lats.append(lat)
+        
+        # Choose color based on whether node is highlighted
+        color = 'red' if node in highlighted_nodes else 'blue'
+        ax.plot(lon, lat, 'o', color=color, markersize=3, transform=ccrs.Geodetic())
+        ax.text(lon + 0.01, lat + 0.01, str(node), fontsize=6, transform=ccrs.Geodetic())
+
+    # Set map extent
+    if all_lons and all_lats:
+        buffer = 1.0 # Degree buffer around min/max coordinates
+        min_lon, max_lon = min(all_lons) - buffer, max(all_lons) + buffer
+        min_lat, max_lat = min(all_lats) - buffer, max(all_lats) + buffer
+        ax.set_extent([min_lon, max_lon, min_lat, max_lat], crs=ccrs.PlateCarree())
+    
+    ax.gridlines(draw_labels=True, dms=True, x_inline=False, y_inline=False)
+    
+    if ax is None: # Only call plt.show() if we created the figure
+        plt.show()
+
 if __name__ == '__main__':
     # Example Usage:
     # Create a sample graph
@@ -107,3 +162,16 @@ if __name__ == '__main__':
     ax_unknown.set_title("Map with Unknown Waypoint in Route")
     plt.legend()
     plt.show()
+
+    # Example usage of plot_waypoints function
+    print("\nExample usage of plot_waypoints function:")
+    fig_waypoints = plt.figure(figsize=(12, 10))
+    ax_waypoints = fig_waypoints.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+    
+    # Highlight nodes A and D in red
+    highlighted = ["A", "D"]
+    plot_waypoints(G, highlighted_nodes=highlighted, ax=ax_waypoints)
+    
+    ax_waypoints.set_title("Waypoints Map with Highlighted Nodes (A and D in red)")
+    plt.show()
+
