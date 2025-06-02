@@ -196,6 +196,143 @@ def backward_tres():
 
     return state_closure_list
 
+import pickle 
+from equinox.dp.trespass.forward_svi import forward_soft_value_iteration
+
+def forward_svi():
+    # Load the route graph
+    G = nx.read_gml("data/graph/LEMD_EGLL_2023_04_01.gml")
+    node_to_idx = {node: i for i, node in enumerate(G.nodes())}
+    idx_to_node = {i: node for i, node in enumerate(G.nodes())}
+
+    node_list_for_matrix = list(G.nodes()) # Consistent order for matrix indexing
+    # node_to_idx_for_matrix = {nid: i for i, nid in enumerate(node_list_for_matrix)} # Not directly used in this test script main flow
+    num_actual_nodes = len(node_list_for_matrix)
+
+    # Load the distance matrix
+    dist_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_distances.npy")
+
+    # Load the airspace charges matrix
+    ac_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_charges.npy")
+
+    # Load the wind model
+    # Consistent with test_forward_dp, using a 2024 date for wind data,
+    # while flight times (landing time here) are for 2023.
+    wind_model = WindDate(date_str="2024-04-01", data_dir="data/era5")
+    wind_model = WindFree()
+
+    # Load the performance model for a typical narrow body jet
+    performance_model = Performance(
+        climb_speed_profile=NARROW_BODY_JET_CLIMB_PROFILE,
+        descent_speed_profile=NARROW_BODY_JET_DESCENT_PROFILE,
+        climb_vertical_speed_profile=NARROW_BODY_JET_CLIMB_VS_PROFILE,
+        descent_vertical_speed_profile=NARROW_BODY_JET_DESCENT_VS_PROFILE,
+        cruise_altitude_ft=35000.0,
+        cruise_speed_kts=450.0,
+    )
+
+    # Load the cost model
+    cost_model_instance = cost_model_1
+
+    # Estimated landing time
+    estimated_landing_time_str = "2023-04-01 12:00:00"
+    # Estimated takeoff time
+    estimated_takeoff_time_str = "2023-04-01 10:15:00"
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    transitions = pickle.load(open("data/graph/transitions/LEMD_EGLL_2023_04_01_REACHABLE.pkl", "rb"))
+    origin_node_idx = node_to_idx["LEMD"]
+    goal_node_idx = node_to_idx["EGLL"]
+    cost_model = cost_model_1
+    num_nodes = len(G.nodes())
+
+    # Extract node coordinates from the graph
+    node_coords_deg = torch.zeros((num_nodes, 2), dtype=torch.float32, device=device)
+    for node_name, node_idx in node_to_idx.items():
+        node_data = G.nodes[node_name]
+        lat = float(node_data['lat'])
+        lon = float(node_data['lon'])
+        node_coords_deg[node_idx, 0] = lat  # latitude
+        node_coords_deg[node_idx, 1] = lon  # longitude
+
+    # Convert matrices to torch tensors
+    distance_matrix_d = torch.tensor(dist_matrix, dtype=torch.float32, device=device)
+    airspace_charge_matrix_ac = torch.tensor(ac_matrix, dtype=torch.float32, device=device)
+
+    # Set up time parameters
+    from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
+    takeoff_ssm = datestr_to_seconds_since_midnight(estimated_takeoff_time_str)
+    landing_ssm = datestr_to_seconds_since_midnight(estimated_landing_time_str)
+    
+    # Time bin parameters (consistent with other functions)
+    delta_t_wall_clock_sec = 300.0  # 5 minutes
+    max_flight_duration_hours = 5.0
+    num_time_bins_wall_clock = int(max_flight_duration_hours * 3600 / delta_t_wall_clock_sec) + 1
+    
+    # Climb time parameters
+    delta_t_climb_sec = 30.0  # 30 seconds for climb bins
+    max_climb_time_hours = 0.75
+    num_rho_bins = 37 # this number is from the tres_forward pass: maximum is 36 + 1 for the NUMBER OF BINS (0 to 36, which is 37 bins)
+    
+    # Phase parameters
+    num_phases = 3  # CLIMB=0, CRUISE=1, DESCENT=2
+    
+    # Set min_wall_clock_time_sec to takeoff time
+    min_wall_clock_time_sec = float(takeoff_ssm)
+
+    print(f"Calling forward_soft_value_iteration with:")
+    print(f"  num_nodes: {num_nodes}")
+    print(f"  num_time_bins_wall_clock: {num_time_bins_wall_clock}")
+    print(f"  num_rho_bins: {num_rho_bins}")
+    print(f"  num_phases: {num_phases}")
+    print(f"  transitions count: {len(transitions)}")
+    print(f"  origin_node_idx: {origin_node_idx}")
+    print(f"  min_wall_clock_time_sec: {min_wall_clock_time_sec}")
+    print(f"  delta_t_wall_clock_sec: {delta_t_wall_clock_sec}")
+
+    # Call forward_soft_value_iteration
+    V_soft = forward_soft_value_iteration(
+        state_transitions=transitions,
+        origin_node_idx=origin_node_idx,
+        cost_model=cost_model,
+        num_nodes=num_nodes,
+        num_time_bins_wall_clock=num_time_bins_wall_clock,
+        num_rho_bins=num_rho_bins,
+        num_phases=num_phases,
+        distance_matrix_d=distance_matrix_d,
+        airspace_charge_matrix_ac=airspace_charge_matrix_ac,
+        node_coords_deg=node_coords_deg,
+        wind_model=wind_model,
+        min_wall_clock_time_sec=min_wall_clock_time_sec,
+        delta_t_wall_clock_sec=delta_t_wall_clock_sec,
+        device=device,
+        verbose=True
+    )
+
+    print(f"\nForward SVI completed successfully!")
+    print(f"V_soft shape: {V_soft.shape}")
+    print(f"Number of finite values: {torch.isfinite(V_soft).sum().item()}")
+    print(f"Number of infinite values: {torch.isinf(V_soft).sum().item()}")
+    
+    # Print some sample values at the origin
+    print(f"\nSample V_soft values at origin node {origin_node_idx}:")
+    for k in range(min(5, num_time_bins_wall_clock)):
+        for rho in range(min(3, num_rho_bins)):
+            for phase in range(num_phases):
+                val = V_soft[origin_node_idx, k, rho, phase].item()
+                if torch.isfinite(V_soft[origin_node_idx, k, rho, phase]):
+                    print(f"  V_soft[{origin_node_idx}, {k}, {rho}, {phase}] = {val:.4f}")
+
+    # Convert V_soft to a numpy array
+    V_soft_np = V_soft.cpu().numpy()
+    # Save V_soft to a file
+    # Create the directory if it doesn't exist
+    import os
+    os.makedirs("data/graph/V_soft", exist_ok=True)
+    np.save("data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_V_FWD.npy", V_soft_np)
+    return V_soft_np
+
 if __name__ == '__main__':
     # forward_tres()
-    backward_tres()
+    # backward_tres()
+    forward_svi()
