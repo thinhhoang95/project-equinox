@@ -197,7 +197,7 @@ def backward_tres():
     return state_closure_list
 
 import pickle 
-from equinox.dp.trespass.forward_svi import forward_soft_value_iteration
+from equinox.dp.trespass.forward_svi_log import forward_soft_value_iteration
 
 def forward_svi():
     # Load the route graph
@@ -291,6 +291,8 @@ def forward_svi():
     print(f"  delta_t_wall_clock_sec: {delta_t_wall_clock_sec}")
 
     # Call forward_soft_value_iteration
+    import time
+    time_start = time.time()
     V_soft = forward_soft_value_iteration(
         state_transitions=transitions,
         origin_node_idx=origin_node_idx,
@@ -308,7 +310,9 @@ def forward_svi():
         device=device,
         verbose=True
     )
-
+    time_end = time.time()
+    print(f"Forward SVI completed successfully in {time_end - time_start:.2f} seconds")
+    
     print(f"\nForward SVI completed successfully!")
     print(f"V_soft shape: {V_soft.shape}")
     print(f"Number of finite values: {torch.isfinite(V_soft).sum().item()}")
