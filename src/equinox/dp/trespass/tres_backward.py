@@ -139,7 +139,7 @@ def tres_backward(
 
     # Calculating max_eps_bin from climb performance table, which is the elapsed time of the final row
     climb_time_max = climb_perf_table[-1][1]
-    max_eps_bin = floor(climb_time_max / delta_t_seconds_climb) + 1
+    max_eps_bin = round(climb_time_max / delta_t_seconds_climb) # should be the same as in tres_forward's num_etto_bins
 
     num_rho_bins = max_eps_bin + 1 # Remaining climb time bins from 0 to max_eps_bin
 
@@ -154,7 +154,9 @@ def tres_backward(
     # ac_matrix = torch.from_numpy(ac_matrix_np).to(dtype=torch.float64, device=device)
 
     transitions_map_by_indices = {(t[0], t[3]): (t[1], t[2], t[4]) for t in transitions_list} # (u_idx, v_idx) -> (eps_u_bins, alt_u_ft, eps_v_bins)
-
+    # Note in the case that there are multiple transitions from the same u_idx to the same v_idx,
+    # the last transition in the list will be used.
+    
     # Initialize at goal node
     goal_node_time_since_min_overall = estimated_landing_ssm - min_time_overall_seconds
     landing_time_bin_idx = _round_to_bin_idx(goal_node_time_since_min_overall / delta_t_seconds_wall_clock, num_time_bins -1)
@@ -315,25 +317,27 @@ def tres_backward(
                 
                 valid_transition_to_climb_path = False # could be a transition from CLIMB or CRUISE
 
-                if u_idx == 185 and phi_v_idx == PHASE_CLIMB:
-                    print(f'POTENTIAL TRANSITION CLB-CLB TO LEMD')
+                # DEBUGGING
+                # if u_idx == 185 and phi_v_idx == PHASE_CLIMB:
+                    # print(f'POTENTIAL TRANSITION CLB-CLB TO LEMD')
 
-                if phi_v_idx == PHASE_CLIMB:
+                if phi_v_idx == PHASE_CLIMB: # <--- CLIMB TO CLIMB TRANSITION
                     phase_u_trans = PHASE_CLIMB
                     v_node = idx_to_node[v_idx]
+                    u_node = idx_to_node[u_idx]
                     # Remaining climb time at u, based on elapsed climb time up to u from transitions
-                    rho_u_trans_idx = _round_to_bin_idx(max(0.0, float(max_eps_bin) - eps_u_bins), max_eps_bin)
+                    rho_u_trans_idx = _round_to_bin_idx(max(0.0, float(max_eps_bin) - eps_u_bins), max_eps_bin) # roughly max_eps_bin - eps_u_bins
 
                     edge_climb_time_seconds = (eps_v_bins - eps_u_bins) * delta_t_seconds_climb
                     eta_u_trans_ssm_val = eta_v_ssm_val - edge_climb_time_seconds
                     valid_transition_to_climb_path = True
 
                     # DEBUGGING
-                    if u_idx == 331: # LERM
-                        print(f'2.1> {v_node} <- LERM ADMT PTH 2 CLB/CLB ETAV = {eta_v_ssm_val:.0f} > {eta_takeoff_ssm:.0f}')
-                        pass
+                    # if u_idx == 331: # LERM
+                    #     print(f'2.1> {v_node} <- LERM ADMT PTH 2 CLB/CLB ETAV = {eta_v_ssm_val:.0f} > {eta_takeoff_ssm:.0f}')
+                    #     pass
                 
-                # SWITCHING FROM CRUISE TO CLIMB <--- THIS IS THE ONLY PLACE WHERE WE SWITCH TO CLIMB
+                # SWITCHING FROM CRUISE TO CLIMB <--- THIS IS THE ONLY PLACE WHERE WE SWITCH FROM CRUISE TO CLIMB
                 elif phi_v_idx == PHASE_CRUISE and \
                      max_eps_bin <= v_actual_elapsed_bins_from_takeoff <= max_eps_bin + climb_phase_switch_allowance_climb_time_bins:
                     phase_u_trans = PHASE_CLIMB
