@@ -1,3 +1,9 @@
+# *****************************************************************************
+# * CAUTION: We hard-coded the initial log-mass values for the origin states. *
+# * This is not a general solution and should be fixed in the future.         *
+# * (line 235)                                                                *
+# *****************************************************************************
+
 import torch
 import math
 
@@ -10,10 +16,10 @@ import networkx as nx
 MPS_TO_KNOTS = 1.94384
 
 def forward_soft_value_iteration(
-    state_transitions: list[tuple[int, int, int, int, float, int, int, int, int, float]],
+    state_transitions: list[tuple[int, int, int, float, int, int, int, int, float, int]],
     # The tuple contains, in this exact order:
-    # (u_idx, k_u_idx, rho_u_idx, phase_u, u_alt_ft,
-    #  v_idx, k_v_idx, rho_v_idx, phase_v, v_alt_ft)
+    # (u_idx, k_u_idx, rho_u_idx, u_alt_ft, phase_u,
+    #  v_idx, k_v_idx, rho_v_idx, v_alt_ft, phase_v)
     G: nx.DiGraph,
     idx_to_node: dict[int, str], # Added: mapping from integer index to string node ID in G
     origin_node_idx: int,
@@ -45,7 +51,8 @@ def forward_soft_value_iteration(
     
     - **state_transitions** (`list[tuple[int, int, int, int, float, int, int, int, int, float]]`):
       List of state transitions, where each transition is a tuple:
-      `(u_idx, k_u_idx, rho_u_idx, phase_u, u_alt_ft, v_idx, k_v_idx, rho_v_idx, phase_v, v_alt_ft)`
+      `(u_idx, k_u_idx, rho_u_idx, u_alt_ft, phase_u,
+       v_idx, k_v_idx, rho_v_idx, v_alt_ft, phase_v)`
       representing a transition from state u to state v with their respective indices,
       time bins, climb time bins, phases, and altitudes.
     
@@ -213,7 +220,7 @@ def forward_soft_value_iteration(
     # 2. Identify which (k_u, rho_u, phase_u) on the origin_node are actually used.
     actual_origin_states = set()
     for st in state_transitions:
-        u_idx, k_u, rho_u, phase_u, u_alt_ft, v_idx, k_v, rho_v, phase_v, v_alt_ft = st
+        u_idx, k_u, rho_u, u_alt_ft, phase_u, v_idx, k_v, rho_v, v_alt_ft, phase_v = st
         if u_idx == origin_node_idx:
             actual_origin_states.add((k_u, rho_u, phase_u))
 
@@ -226,13 +233,14 @@ def forward_soft_value_iteration(
             )
     else:
         num_actual = len(actual_origin_states)
-        initial_logmass = math.log(1.0 / num_actual)  # double‐precision log
+        # initial_logmass = math.log(1.0 / num_actual)  # double‐precision log
+        original_states_probs = {39:-1.16657401, 40:-0.75997401, 41:-1.52747401, 42:-5.57117401} # these are log-probs, not values (values = -log-probs!)
         for (k_u, rho_u, phase_u) in actual_origin_states:
-            L_val[origin_node_idx, k_u, rho_u, phase_u] = initial_logmass
+            L_val[origin_node_idx, k_u, rho_u, phase_u] = original_states_probs[k_u]
             if verbose:
                 print(
                     f"Initialized origin state: "
-                    f"L[{origin_node_idx},{k_u},{rho_u},{phase_u}] = {initial_logmass:.4e}"
+                    f"Log likelihood@[{origin_node_idx},{k_u},{rho_u},{phase_u}] = {original_states_probs[k_u]:.4e}"
                 )
 
     # 4. Sort transitions so that when we visit (u→v), L(u) is already finalized.
@@ -253,8 +261,8 @@ def forward_soft_value_iteration(
         key=lambda x: (
             node_str_to_topo_rank.get(idx_to_node.get(x[0]), float('inf')),
             x[1], # k_u
-            x[2], # rho_u
-            x[3]  # phase_u
+            x[4], # phase_u
+            x[2]  # rho_u
         )
         # x[0] is u_idx (integer). idx_to_node[x[0]] gives string name.
         # .get on idx_to_node for safety, though u_idx should always be in it if transitions are valid.
@@ -338,80 +346,3 @@ def forward_soft_value_iteration(
 
     return V_soft
 
-# Example usage structure (for testing, not part of the final library function)
-if __name__ == '__main__':
-    # This block would require setting up all the mock inputs:
-    # cost_model, state_transitions, num_nodes, num_time_bins_wall_clock, etc.
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("forward_svi.py main block reached - for testing, actual usage is by importing the function.")
-    
-    # --- Mock Inputs Setup (Simplified) ---
-    # This is a very basic setup and needs to be expanded significantly for a real test.
-    # device = torch.device("cpu")
-    # num_nodes_test = 3
-    # num_time_bins_test = 5
-    # num_rho_bins_test = 2
-    # num_phases_test = 3
-    # origin_node_test = 0
-    
-    # # Mock Cost Model (just returns 1.0 for any edge)
-    # class MockCostModel(torch.nn.Module):
-    #     def forward(self, edge_indices, dist_matrix, ac_matrix, tailwind):
-    #         return torch.ones(edge_indices[0].shape[0], device=device, dtype=torch.float32)
-    # cost_model_test = MockCostModel()
-
-    # # Mock Wind Model
-    # class MockWindModel(WindModel):
-    #     def __init__(self): pass
-    #     def get_wind_components_batched(self, lats, lons, alts, etas):
-    #         return torch.zeros_like(lats), torch.zeros_like(lats) # Zero wind
-    # wind_model_test = MockWindModel()
-        
-    # state_transitions_test = [
-    #     # u_idx, k_u, rho_u, ph_u, alt_u,  v_idx, k_v, rho_v, ph_v, alt_v
-    #     (0, 0, 1, 0, 1000.0,  1, 1, 1, 0, 1000.0), # Origin (0,0,1,0) -> (1,1,1,0)
-    #     (0, 0, 1, 0, 1000.0,  1, 2, 0, 1, 2000.0), # Origin (0,0,1,0) -> (1,2,0,1) (another path to node 1, different state)
-    #     (1, 1, 1, 0, 1000.0,  2, 2, 1, 0, 1000.0), # (1,1,1,0) -> Goal (2,2,1,0)
-    #     (1, 2, 0, 1, 2000.0,  2, 3, 0, 1, 2000.0), # (1,2,0,1) -> Goal (2,3,0,1)
-    # ]
-    # node_coords_test = torch.tensor([[0.0,0.0],[1.0,1.0],[2.0,2.0]], device=device, dtype=torch.float32) # lat,lon
-    # d_matrix_test = torch.ones((num_nodes_test, num_nodes_test), device=device)
-    # ac_matrix_test = torch.zeros((num_nodes_test, num_nodes_test), device=device)
-
-    # V_soft_output = forward_soft_value_iteration(
-    #     state_transitions=state_transitions_test,
-    #     origin_node_idx=origin_node_test,
-    #     cost_model=cost_model_test,
-    #     num_nodes=num_nodes_test,
-    #     num_time_bins_wall_clock=num_time_bins_test,
-    #     num_rho_bins=num_rho_bins_test,
-    #     num_phases=num_phases_test,
-    #     distance_matrix_d=d_matrix_test,
-    #     airspace_charge_matrix_ac=ac_matrix_test,
-    #     node_coords_deg=node_coords_test,
-    #     wind_model=wind_model_test,
-    #     min_wall_clock_time_sec=0.0,
-    #     delta_t_wall_clock_sec=300.0, # 5 minutes
-    #     device=device,
-    #     verbose=True
-    # )
-    # print("\n--- V_soft Output (example values) ---")
-    # # We expect Z[0,0,1,0] = 1.0 (if it's the only origin state from transitions)
-    # # V[0,0,1,0] = -log(1.0) = 0.0
-    # print(f"V_soft at a specific origin state (e.g., V[{origin_node_test},0,1,0]): {V_soft_output[origin_node_test,0,1,0].item()}")
-    #
-    # # Z[1,1,1,0] should be Z[0,0,1,0]*exp(-cost(0->1)) = 1.0 * exp(-1) approx 0.367
-    # # V[1,1,1,0] = -log(0.367) approx 1.0
-    # print(f"V_soft at (1,1,1,0): {V_soft_output[1,1,1,0].item()}")
-    # print(f"V_soft at (1,2,0,1): {V_soft_output[1,2,0,1].item()}") # Should also be approx 1.0
-    #
-    # # Z[2,2,1,0] = Z[1,1,1,0]*exp(-cost(1->2)) = exp(-1)*exp(-1) = exp(-2) approx 0.135
-    # # V[2,2,1,0] = -log(exp(-2)) = 2.0
-    # print(f"V_soft at (2,2,1,0): {V_soft_output[2,2,1,0].item()}")
-    # # Z[2,3,0,1] = Z[1,2,0,1]*exp(-cost(1->2)) = exp(-1)*exp(-1) = exp(-2)
-    # # V[2,3,0,1] = 2.0
-    # print(f"V_soft at (2,3,0,1): {V_soft_output[2,3,0,1].item()}")
-
-    # print("\n--- Full V_soft tensor (origin node slice example) ---")
-    # print(V_soft_output[origin_node_test, :, :, :])
-    pass

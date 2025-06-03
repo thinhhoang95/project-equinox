@@ -199,7 +199,7 @@ def backward_tres():
 import pickle 
 from equinox.dp.trespass.forward_svi_log import forward_soft_value_iteration
 
-def forward_svi():
+def forward_svi(headless=False):
     # Load the route graph
     G = nx.read_gml("data/graph/LEMD_EGLL_2023_04_01.gml")
     node_to_idx = {node: i for i, node in enumerate(G.nodes())}
@@ -264,31 +264,67 @@ def forward_svi():
     takeoff_ssm = datestr_to_seconds_since_midnight(estimated_takeoff_time_str)
     # landing_ssm = datestr_to_seconds_since_midnight(estimated_landing_time_str) # This variable is not used in the current function scope
     
-    # Time bin parameters (consistent with other functions)
+    # Time bin parameters
     delta_t_wall_clock_sec = 300.0  # 5 minutes
-    max_flight_duration_hours = 5.0
-    num_time_bins_wall_clock = int(max_flight_duration_hours * 3600 / delta_t_wall_clock_sec) + 1
+    # max_flight_duration_hours = 5.0 # Original static definition
+    # num_time_bins_wall_clock = int(max_flight_duration_hours * 3600 / delta_t_wall_clock_sec) + 1 # Original static definition
     
-    # Climb time parameters
-    delta_t_climb_sec = 30.0  # 30 seconds for climb bins
-    max_climb_time_hours = 0.75
-    num_rho_bins = 37 # this number is from the tres_forward pass: maximum is 36 + 1 for the NUMBER OF BINS (0 to 36, which is 37 bins)
+    # Climb time parameters (original static definitions, now derived)
+    # delta_t_climb_sec = 30.0  # 30 seconds for climb bins
+    # max_climb_time_hours = 0.75
+    # num_rho_bins = 37 # this number is from the tres_forward pass: maximum is 36 + 1 for the NUMBER OF BINS (0 to 36, which is 37 bins)
     
-    # Phase parameters
-    num_phases = 3  # CLIMB=0, CRUISE=1, DESCENT=2
+    # Phase parameters (original static definition, now derived)
+    # num_phases = 3  # CLIMB=0, CRUISE=1, DESCENT=2
+
+    # Dynamically determine num_time_bins_wall_clock, num_rho_bins, and num_phases from transitions
+    max_k_val = 0
+    max_rho_val = 0
+    max_phase_val = 0
+    if transitions:
+        # Structure of t: u_idx, k_u, rho_u, u_alt_ft, phase_u, v_idx, k_v, rho_v, v_alt_ft, phase_v, ...
+        max_k_val = max(max(t[1] for t in transitions), max(t[6] for t in transitions))
+        max_rho_val = max(max(t[2] for t in transitions), max(t[7] for t in transitions))
+        max_phase_val = max(max(t[4] for t in transitions), max(t[9] for t in transitions))
+
+    num_time_bins_wall_clock = max_k_val + 1
+    num_rho_bins = max_rho_val + 1
+    num_phases = max_phase_val + 1
+
+    # Check against a configured max duration, if necessary (optional, similar to backward_svi's warning)
+    # This part is illustrative; you might want to adjust max_flight_duration_hours if it's still a relevant concept
+    # or rely solely on transition data.
+    configured_max_flight_duration_hours = 5.0 
+    max_bins_from_config = int(configured_max_flight_duration_hours * 3600 / delta_t_wall_clock_sec) + 1
+    if num_time_bins_wall_clock > max_bins_from_config:
+        print(f"Warning: max_k_val from transitions ({max_k_val}) suggests more time bins ({num_time_bins_wall_clock}) than a typical configured max duration would imply ({max_bins_from_config}). Using derived value from transitions.")
+    elif not transitions:
+        print("Warning: No transitions loaded. num_time_bins_wall_clock, num_rho_bins, num_phases derived as 1. This might be too small if transitions are expected.")
     
     # Set min_wall_clock_time_sec to takeoff time
     min_wall_clock_time_sec = float(takeoff_ssm)
 
     print(f"Calling forward_soft_value_iteration with:")
     print(f"  num_nodes: {num_nodes}")
-    print(f"  num_time_bins_wall_clock: {num_time_bins_wall_clock}")
-    print(f"  num_rho_bins: {num_rho_bins}")
-    print(f"  num_phases: {num_phases}")
+    print(f"  num_time_bins_wall_clock: {num_time_bins_wall_clock} (derived from transitions, max_k_val: {max_k_val})")
+    print(f"  num_rho_bins: {num_rho_bins} (derived from transitions, max_rho_val: {max_rho_val})")
+    print(f"  num_phases: {num_phases} (derived from transitions, max_phase_val: {max_phase_val})")
     print(f"  transitions count: {len(transitions)}")
     print(f"  origin_node_idx: {origin_node_idx}")
     print(f"  min_wall_clock_time_sec: {min_wall_clock_time_sec}")
     print(f"  delta_t_wall_clock_sec: {delta_t_wall_clock_sec}")
+
+    # Ask for confirmation before proceeding with the forward SVI computation
+    if not headless:
+        print("\nAbout to run forward soft value iteration with the above parameters.")
+        confirmation = input("Proceed? (Y/n): ").strip().lower()
+        if confirmation in ['n', 'no']:
+            print("Aborted by user.")
+            return None
+        elif confirmation not in ['', 'y', 'yes']:
+            print("Invalid input. Assuming 'no' and aborting.")
+            return None
+        print("Proceeding with forward SVI computation...")
 
     # Call forward_soft_value_iteration
     import time
@@ -338,7 +374,153 @@ def forward_svi():
     np.save("data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_V_FWD.npy", V_soft_np)
     return V_soft_np
 
+from equinox.dp.trespass.backward_svi_log import backward_soft_value_iteration
+
+def backward_svi(headless=False):
+    # Load the route graph
+    G = nx.read_gml("data/graph/LEMD_EGLL_2023_04_01.gml")
+    node_to_idx = {node: i for i, node in enumerate(G.nodes())}
+    idx_to_node = {i: node for i, node in enumerate(G.nodes())}
+
+    num_nodes = len(G.nodes())
+
+    # Load the distance matrix
+    dist_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_distances.npy")
+
+    # Load the airspace charges matrix
+    ac_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_charges.npy")
+
+    # Load the wind model (using WindFree for simplicity and consistency with forward_svi example)
+    wind_model = WindFree()
+
+    # Load the cost model
+    cost_model = cost_model_1
+
+    # Estimated takeoff time (used for defining the time window start for k_idx)
+    estimated_takeoff_time_str = "2023-04-01 10:15:00"
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Load transitions - these define the state space and connections
+    # Ensure this is the correct transitions file. The forward SVI uses REACHABLE.
+    transitions = pickle.load(open("data/graph/transitions/LEMD_EGLL_2023_04_01_REACHABLE.pkl", "rb"))
+    
+    goal_node_idx = node_to_idx["EGLL"] 
+
+    # Convert matrices to torch tensors
+    distance_matrix_d = torch.tensor(dist_matrix, dtype=torch.float32, device=device)
+    airspace_charge_matrix_ac = torch.tensor(ac_matrix, dtype=torch.float32, device=device)
+
+    # Set up time parameters
+    from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
+    takeoff_ssm = datestr_to_seconds_since_midnight(estimated_takeoff_time_str)
+    
+    # Time bin parameters (should be consistent with those used to generate transitions)
+    delta_t_wall_clock_sec = 300.0  # 5 minutes
+    max_flight_duration_hours = 5.0
+    num_time_bins_wall_clock = int(max_flight_duration_hours * 3600 / delta_t_wall_clock_sec) + 1
+    
+    # Profile time bins (rho_bins)
+    # num_rho_bins = 37 # From forward_svi example, should match transition generation logic
+    # Let's try to infer num_rho_bins and num_phases from transitions data if possible, or set explicitly.
+    # Max rho_u_idx and rho_v_idx from transitions + 1
+    # Max phase_u and phase_v from transitions + 1
+    max_k_val = 0
+    max_rho_val = 0
+    max_phase_val = 0
+    if transitions:
+        max_k_val = max(max(t[1] for t in transitions), max(t[6] for t in transitions))
+        # Correct indices for rho and phase based on backward_svi_log.py unpacking:
+        # u_idx, k_u, rho_u, u_alt_ft, phase_u
+        # v_idx, k_v, rho_v, v_alt_ft, phase_v
+        # trans[2] = rho_u, trans[4] = phase_u
+        # trans[7] = rho_v, trans[9] = phase_v
+        max_rho_val = max(max(t[2] for t in transitions), max(t[7] for t in transitions)) 
+        max_phase_val = max(max(t[4] for t in transitions), max(t[9] for t in transitions))
+
+    num_time_bins_wall_clock_actual = max_k_val + 1 # Ensure this is large enough for all k in transitions
+    if num_time_bins_wall_clock_actual > num_time_bins_wall_clock:
+        print(f"Warning: max_k_val from transitions ({max_k_val}) suggests more time bins than configured ({num_time_bins_wall_clock}). Using {num_time_bins_wall_clock_actual}.")
+        num_time_bins_wall_clock = num_time_bins_wall_clock_actual
+    elif not transitions:
+         print("Warning: No transitions loaded. num_time_bins_wall_clock might be too small.")
+
+    num_rho_bins = max_rho_val + 1
+    num_phases = max_phase_val + 1
+    
+    # Set min_wall_clock_time_sec to takeoff time (anchor for k_idx calculations)
+    min_wall_clock_time_sec = float(takeoff_ssm)
+
+    print(f"Calling backward_soft_value_iteration with:")
+    print(f"  num_nodes: {num_nodes}")
+    print(f"  num_time_bins_wall_clock: {num_time_bins_wall_clock} (derived: {max_k_val+1})")
+    print(f"  num_rho_bins: {num_rho_bins} (derived: {max_rho_val+1})")
+    print(f"  num_phases: {num_phases} (derived: {max_phase_val+1})")
+    print(f"  transitions count: {len(transitions)}")
+    print(f"  goal_node_idx: {goal_node_idx}")
+    print(f"  min_wall_clock_time_sec (for k_idx interpretation): {min_wall_clock_time_sec}")
+    print(f"  delta_t_wall_clock_sec: {delta_t_wall_clock_sec}")
+
+    # Ask for confirmation before proceeding with the backward SVI computation
+    if not headless:
+        print("\nAbout to run backward soft value iteration with the above parameters.")
+        confirmation = input("Proceed? (Y/n): ").strip().lower()
+        if confirmation in ['n', 'no']:
+            print("Aborted by user.")
+            return None
+        elif confirmation not in ['', 'y', 'yes']:
+            print("Invalid input. Assuming 'no' and aborting.")
+            return None
+        print("Proceeding with backward SVI computation...")
+
+    # Call backward_soft_value_iteration
+    import time
+    time_start = time.time()
+    V_soft_bwd = backward_soft_value_iteration(
+        state_transitions=transitions,
+        G=G, 
+        idx_to_node=idx_to_node,
+        goal_node_idx=goal_node_idx,
+        cost_model=cost_model,
+        num_nodes=num_nodes,
+        num_time_bins_wall_clock=num_time_bins_wall_clock,
+        num_rho_bins=num_rho_bins,
+        num_phases=num_phases,
+        distance_matrix_d=distance_matrix_d,
+        airspace_charge_matrix_ac=airspace_charge_matrix_ac,
+        wind_model=wind_model,
+        min_wall_clock_time_sec=min_wall_clock_time_sec,
+        delta_t_wall_clock_sec=delta_t_wall_clock_sec,
+        device=device,
+        verbose=True
+    )
+    time_end = time.time()
+    print(f"Backward SVI completed successfully in {time_end - time_start:.2f} seconds")
+    
+    print(f"\nBackward SVI (cost-to-go) completed successfully!")
+    print(f"V_soft_bwd shape: {V_soft_bwd.shape}")
+    print(f"Number of finite values: {torch.isfinite(V_soft_bwd).sum().item()}")
+    print(f"Number of infinite values: {torch.isinf(V_soft_bwd).sum().item()}")
+    
+    # Print some sample values at the goal node
+    print(f"\nSample V_soft_bwd values at goal node {goal_node_idx}:")
+    for k in range(min(5, num_time_bins_wall_clock)):
+        for rho in range(min(3, num_rho_bins)):
+            for phase in range(num_phases):
+                val = V_soft_bwd[goal_node_idx, k, rho, phase].item()
+                if torch.isfinite(V_soft_bwd[goal_node_idx, k, rho, phase]):
+                    print(f"  V_soft_bwd[{goal_node_idx}, {k}, {rho}, {phase}] = {val:.4f}")
+
+    V_soft_bwd_np = V_soft_bwd.cpu().numpy()
+    import os
+    os.makedirs("data/graph/V_soft", exist_ok=True)
+    np.save("data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_V_BWD.npy", V_soft_bwd_np)
+    return V_soft_bwd_np
+
+
 if __name__ == '__main__':
-    # forward_tres()
-    # backward_tres()
-    forward_svi()
+    forward_tres()
+    backward_tres()
+    backward_svi(headless=True)
+    forward_svi(headless=True) # headless = false: ask for confirmation
+    print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')
