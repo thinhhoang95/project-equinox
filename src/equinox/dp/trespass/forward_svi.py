@@ -1,3 +1,9 @@
+# *****************************************************************************
+# ATTENTION: This implementation does not use the graph topological sort.
+# So it is INCORRECT. Consult `forward_svi_log.py` for the correct implementation
+# (and improved performance).
+# *****************************************************************************
+
 import torch
 import math
 

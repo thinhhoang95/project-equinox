@@ -262,7 +262,7 @@ def forward_soft_value_iteration(
     )
 
     if verbose:
-        print(f"Processing {len(sorted_transitions)} state transitions in log‐space...")
+        print(f"Processing {len(sorted_transitions)} state transitions in log-space...")
 
     # 5. Main loop: for each transition, update L(v) = logaddexp( L(v),  L(u) - cost(u→v) ).
     for i, trans in enumerate(sorted_transitions):
