@@ -5,7 +5,7 @@ from equinox.route.get_wind import get_wind
 # For type hinting, actual instances are passed as arguments
 from equinox.cost.cost_rev1 import CostRev1 
 from equinox.wind.wind_model import WindModel
-
+import networkx as nx
 # Conversion factor from meters per second to knots
 MPS_TO_KNOTS = 1.94384
 
@@ -14,6 +14,8 @@ def forward_soft_value_iteration(
     # The tuple contains, in this exact order:
     # (u_idx, k_u_idx, rho_u_idx, phase_u, u_alt_ft,
     #  v_idx, k_v_idx, rho_v_idx, phase_v, v_alt_ft)
+    G: nx.DiGraph,
+    idx_to_node: dict[int, str], # Added: mapping from integer index to string node ID in G
     origin_node_idx: int,
     cost_model: CostRev1,
     num_nodes: int,
@@ -22,7 +24,6 @@ def forward_soft_value_iteration(
     num_phases: int,
     distance_matrix_d: torch.Tensor,
     airspace_charge_matrix_ac: torch.Tensor,
-    node_coords_deg: torch.Tensor,  # Shape [num_nodes, 2] (latitude, longitude) in degrees
     wind_model: WindModel,
     min_wall_clock_time_sec: float,   # Absolute start time for k_idx=0 in seconds
     delta_t_wall_clock_sec: float,    # Duration of each wall-clock time bin in seconds
@@ -30,18 +31,176 @@ def forward_soft_value_iteration(
     verbose: bool = False
 ) -> torch.Tensor:
     """
-    Computes the soft forward value function V(s) via a log‐space “sum of exponentials.”
-    We store L(s) := log Z(s), where Z(s) = sum_{u→s} exp( - cost(u→s) ) * Z(u).
-    At the end, V(s) = -L(s).  Any unreachable state remains at +inf.
-
-    Algorithmic changes from the original “linear‐Z” version:
-      • We keep everything in float64 (double) and in log‐space.
-      • L_val is initialized to -∞ for all states, except origin states get log(1/|origins|).
-      • On each transition u→v, we compute:   a_u := L(u) – cost(u→v).
-      • Then we do:  L(v) ← logaddexp( old L(v),  a_u ).
-      • This avoids underflow, because we never directly compute exp(–large_value)
-        in isolation; we combine “log‐masses” via logaddexp, which is numerically stable.
+    Computes the soft forward value function V(s) via log-space soft value iteration.
+    
+    This function implements a numerically stable version of forward soft value iteration
+    using log-space computations to avoid numerical underflow issues that can occur
+    with exponential operations on large negative values.
+    
+    The algorithm maintains L(s) := log Z(s), where Z(s) represents the partition function
+    Z(s) = sum_{u→s} exp(-cost(u→s)) * Z(u) for all transitions u→s leading to state s.
+    The final soft value function is V(s) = -L(s).
+    
+    ## Parameters
+    
+    - **state_transitions** (`list[tuple[int, int, int, int, float, int, int, int, int, float]]`):
+      List of state transitions, where each transition is a tuple:
+      `(u_idx, k_u_idx, rho_u_idx, phase_u, u_alt_ft, v_idx, k_v_idx, rho_v_idx, phase_v, v_alt_ft)`
+      representing a transition from state u to state v with their respective indices,
+      time bins, climb time bins, phases, and altitudes.
+    
+    - **G** (`nx.DiGraph`): NetworkX directed graph representing the route network with node coordinates.
+    
+    - **idx_to_node** (`dict[int, str]`): Mapping from integer node indices to string node IDs in the graph.
+    
+    - **origin_node_idx** (`int`): Index of the origin node where the journey begins.
+    
+    - **cost_model** (`CostRev1`): Cost model instance implementing the CostRev1 interface for computing
+      transition costs including fuel, time, and airspace charges.
+    
+    - **num_nodes** (`int`): Total number of nodes in the network.
+    
+    - **num_time_bins_wall_clock** (`int`): Number of wall-clock time bins for discretization.
+    
+    - **num_rho_bins** (`int`): Number of climb time bins for vertical profile discretization.
+    
+    - **num_phases** (`int`): Number of flight phases (typically 3: CLIMB, CRUISE, DESCENT).
+    
+    - **distance_matrix_d** (`torch.Tensor`): Tensor of pairwise distances between nodes in meters.
+    
+    - **airspace_charge_matrix_ac** (`torch.Tensor`): Tensor of airspace charges between node pairs.
+    
+    - **wind_model** (`WindModel`): Wind model instance for computing wind effects on flight segments.
+    
+    - **min_wall_clock_time_sec** (`float`): Absolute start time for k_idx=0 in seconds since midnight.
+    
+    - **delta_t_wall_clock_sec** (`float`): Duration of each wall-clock time bin in seconds.
+    
+    - **device** (`torch.device`): PyTorch device (CPU or CUDA) for tensor computations.
+    
+    - **verbose** (`bool`, optional): If True, prints detailed progress information during computation.
+      Defaults to False.
+    
+    ## Returns
+    
+    **torch.Tensor**: Soft value function V with shape `(num_nodes, num_time_bins_wall_clock,
+    num_rho_bins, num_phases)`. Values represent the negative log partition function,
+    with +inf for unreachable states.
+    
+    ## Algorithm Details
+    
+    - All computations are performed in float64 precision and log-space for numerical stability
+    - L_val is initialized to -∞ for all states except origin states which get log(1/|origins|)
+    - For each transition u→v: compute a_u := L(u) - cost(u→v)
+    - Update: L(v) ← logaddexp(old L(v), a_u) using numerically stable log-sum-exp
+    - Final result: V(s) = -L(s), with unreachable states remaining at +∞
+    
+    ## Example
+    
+    ```python
+    import torch
+    import networkx as nx
+    from equinox.cost.cost_model_1 import cost_model_1
+    from equinox.wind.wind_free import WindFree
+    
+    # Load route graph and setup
+    G = nx.read_gml("data/graph/LEMD_EGLL_2023_04_01.gml")
+    node_to_idx = {node: i for i, node in enumerate(G.nodes())}
+    idx_to_node = {i: node for i, node in enumerate(G.nodes())}
+    
+    # Load precomputed transitions from forward pass
+    import pickle
+    transitions = pickle.load(open("data/graph/transitions/LEMD_EGLL_2023_04_01_REACHABLE.pkl", "rb"))
+    
+    # Setup parameters
+    origin_node_idx = node_to_idx["LEMD"]
+    num_nodes = len(G.nodes())
+    num_time_bins_wall_clock = 61  # 5 hours at 5-minute intervals
+    num_rho_bins = 37  # climb time discretization
+    num_phases = 3  # CLIMB, CRUISE, DESCENT
+    
+    # Load distance and airspace charge matrices
+    import numpy as np
+    dist_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_distances.npy")
+    ac_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_charges.npy")
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    distance_matrix_d = torch.tensor(dist_matrix, dtype=torch.float32, device=device)
+    airspace_charge_matrix_ac = torch.tensor(ac_matrix, dtype=torch.float32, device=device)
+    
+    # Time parameters
+    from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
+    takeoff_time_str = "2023-04-01 10:15:00"
+    min_wall_clock_time_sec = float(datestr_to_seconds_since_midnight(takeoff_time_str))
+    delta_t_wall_clock_sec = 300.0  # 5 minutes
+    
+    # Wind model
+    wind_model = WindFree()  # No wind for simplicity
+    
+    # Compute soft value function
+    V_soft = forward_soft_value_iteration(
+        state_transitions=transitions,
+        G=G,
+        idx_to_node=idx_to_node,
+        origin_node_idx=origin_node_idx,
+        cost_model=cost_model_1,
+        num_nodes=num_nodes,
+        num_time_bins_wall_clock=num_time_bins_wall_clock,
+        num_rho_bins=num_rho_bins,
+        num_phases=num_phases,
+        distance_matrix_d=distance_matrix_d,
+        airspace_charge_matrix_ac=airspace_charge_matrix_ac,
+        wind_model=wind_model,
+        min_wall_clock_time_sec=min_wall_clock_time_sec,
+        delta_t_wall_clock_sec=delta_t_wall_clock_sec,
+        device=device,
+        verbose=True
+    )
+    
+    print(f"V_soft shape: {V_soft.shape}")
+    print(f"Finite values: {torch.isfinite(V_soft).sum().item()}")
+    # Save results
+    np.save("V_soft_results.npy", V_soft.cpu().numpy())
+    ```
+    
+    ## Note
+    
+    This log-space implementation avoids numerical underflow that can occur when
+    computing exp(-large_cost) directly, making it suitable for problems with
+    large cost values or many transitions. The function requires precomputed
+    state transitions from a forward reachability analysis.
     """
+
+    # 0. Extract node coordinates from G using idx_to_node mapping
+    node_coords_deg = torch.zeros((num_nodes, 2), dtype=torch.float32, device=device)
+    for i in range(num_nodes):
+        if i not in idx_to_node:
+            # This case should ideally not happen if idx_to_node is complete for 0..num_nodes-1
+            # If it can, we might need to decide how to handle missing nodes (e.g., skip, error, default coords)
+            # For now, assume idx_to_node covers all relevant indices.
+            if verbose:
+                print(f"Warning: Index {i} not in idx_to_node. Cannot fetch coordinates for this index.")
+            # Depending on strictness, could raise ValueError here or fill with NaN/default.
+            # Let's assume for now that all nodes 0..num_nodes-1 are in G and idx_to_node.
+            # If a node_idx appears in transitions, it MUST be in idx_to_node and G.
+            # If num_nodes is just a maximum and not all indices are used, this is fine.
+            continue # Skip if node index is not in the map; it implies it might not be in G under this ID.
+
+        node_name_str = idx_to_node[i]
+        if node_name_str not in G.nodes:
+            raise ValueError(f"Node name '{node_name_str}' (for index {i}) not found in graph G. Nodes: {list(G.nodes)[:5]}...")
+
+        node_data = G.nodes[node_name_str]
+        try:
+            lat = float(node_data['lat'])
+            lon = float(node_data['lon'])
+        except KeyError as e:
+            raise ValueError(f"Node '{node_name_str}' in G is missing 'lat' or 'lon' attribute: {e}")
+        except ValueError as e:
+            raise ValueError(f"Could not convert lat/lon to float for node '{node_name_str}': {e}")
+
+        node_coords_deg[i, 0] = lat
+        node_coords_deg[i, 1] = lon
 
     # 1. Create L_val and fill with -∞ (unreachable)
     L_val = torch.full(
@@ -77,10 +236,29 @@ def forward_soft_value_iteration(
                 )
 
     # 4. Sort transitions so that when we visit (u→v), L(u) is already finalized.
-    #    Primary key: k_u (source time), then u_idx, then rho_u, then phase_u.
+    #    Primary key: topological sort order of u_idx (via its string name),
+    #    then k_u (source time), then rho_u, then phase_u.
+    try:
+        # G contains string node IDs. topological_sort works on these directly.
+        topo_order_str_nodes = list(nx.topological_sort(G))
+        # node_to_topo_rank will map string node names to their rank.
+        node_str_to_topo_rank = {node_name_str: rank for rank, node_name_str in enumerate(topo_order_str_nodes)}
+    except nx.NetworkXUnfeasible: # Not a DAG
+        raise ValueError("The graph G must be a Directed Acyclic Graph (DAG) for topological sorting.")
+    except Exception as e:
+        raise ValueError(f"Error during topological sort: {e}. Ensure G is a DAG.")
+
     sorted_transitions = sorted(
         state_transitions,
-        key=lambda x: (x[1], x[0], x[2], x[3])
+        key=lambda x: (
+            node_str_to_topo_rank.get(idx_to_node.get(x[0]), float('inf')),
+            x[1], # k_u
+            x[2], # rho_u
+            x[3]  # phase_u
+        )
+        # x[0] is u_idx (integer). idx_to_node[x[0]] gives string name.
+        # .get on idx_to_node for safety, though u_idx should always be in it if transitions are valid.
+        # .get on node_str_to_topo_rank for safety, though all nodes from valid transitions should be in G.
     )
 
     if verbose:
@@ -129,7 +307,7 @@ def forward_soft_value_iteration(
         # cost_uv_tensor.shape == [1], dtype=float64.  Extract as Python float.
         cost_uv = float(cost_uv_tensor.item())
 
-        # d) Form the “incoming log‐mass” from u→v:  a_u = L(u) - cost_uv
+        # d) Form the "incoming log‐mass" from u→v:  a_u = L(u) - cost_uv
         #    Since L_s_u is a torch.float64 tensor, and cost_uv is a Python float,
         #    (L_s_u - cost_uv) remains a torch.float64 scalar on `device`.
         a_u = L_s_u - cost_uv
@@ -141,7 +319,7 @@ def forward_soft_value_iteration(
         L_val[v_idx, k_v, rho_v, phase_v] = new_L_v
 
         if verbose and (i % (len(sorted_transitions)//100 + 1) == 0 or i == len(sorted_transitions)-1):
-            # Only print if this transition’s contribution is not extremely far below
+            # Only print if this transition's contribution is not extremely far below
             # the current L(v).  (We could check e^{ a_u - new_L_v } > threshold, etc.)
             print(
                 f"  Transition {i+1}/{len(sorted_transitions)}:  "

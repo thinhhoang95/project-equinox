@@ -222,38 +222,38 @@ def forward_svi():
     wind_model = WindFree()
 
     # Load the performance model for a typical narrow body jet
-    performance_model = Performance(
-        climb_speed_profile=NARROW_BODY_JET_CLIMB_PROFILE,
-        descent_speed_profile=NARROW_BODY_JET_DESCENT_PROFILE,
-        climb_vertical_speed_profile=NARROW_BODY_JET_CLIMB_VS_PROFILE,
-        descent_vertical_speed_profile=NARROW_BODY_JET_DESCENT_VS_PROFILE,
-        cruise_altitude_ft=35000.0,
-        cruise_speed_kts=450.0,
-    )
+    # performance_model = Performance(
+    #     climb_speed_profile=NARROW_BODY_JET_CLIMB_PROFILE,
+    #     descent_speed_profile=NARROW_BODY_JET_DESCENT_PROFILE,
+    #     climb_vertical_speed_profile=NARROW_BODY_JET_CLIMB_VS_PROFILE,
+    #     descent_vertical_speed_profile=NARROW_BODY_JET_DESCENT_VS_PROFILE,
+    #     cruise_altitude_ft=35000.0,
+    #     cruise_speed_kts=450.0,
+    # )
 
     # Load the cost model
     cost_model_instance = cost_model_1
 
     # Estimated landing time
-    estimated_landing_time_str = "2023-04-01 12:00:00"
+    # estimated_landing_time_str = "2023-04-01 12:00:00"
     # Estimated takeoff time
     estimated_takeoff_time_str = "2023-04-01 10:15:00"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     transitions = pickle.load(open("data/graph/transitions/LEMD_EGLL_2023_04_01_REACHABLE.pkl", "rb"))
     origin_node_idx = node_to_idx["LEMD"]
-    goal_node_idx = node_to_idx["EGLL"]
-    cost_model = cost_model_1
+    # goal_node_idx = node_to_idx["EGLL"] # Not used in forward_svi
+    cost_model = cost_model_1 # Already defined as cost_model_instance
     num_nodes = len(G.nodes())
 
-    # Extract node coordinates from the graph
-    node_coords_deg = torch.zeros((num_nodes, 2), dtype=torch.float32, device=device)
-    for node_name, node_idx in node_to_idx.items():
-        node_data = G.nodes[node_name]
-        lat = float(node_data['lat'])
-        lon = float(node_data['lon'])
-        node_coords_deg[node_idx, 0] = lat  # latitude
-        node_coords_deg[node_idx, 1] = lon  # longitude
+    # Extract node coordinates from the graph - REMOVED, will be done inside forward_soft_value_iteration
+    # node_coords_deg = torch.zeros((num_nodes, 2), dtype=torch.float32, device=device)
+    # for node_name, node_idx_val in node_to_idx.items(): # Use node_to_idx for correct mapping
+    #     node_data = G.nodes[node_name]
+    #     lat = float(node_data['lat'])
+    #     lon = float(node_data['lon'])
+    #     node_coords_deg[node_idx_val, 0] = lat  # latitude
+    #     node_coords_deg[node_idx_val, 1] = lon  # longitude
 
     # Convert matrices to torch tensors
     distance_matrix_d = torch.tensor(dist_matrix, dtype=torch.float32, device=device)
@@ -262,7 +262,7 @@ def forward_svi():
     # Set up time parameters
     from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
     takeoff_ssm = datestr_to_seconds_since_midnight(estimated_takeoff_time_str)
-    landing_ssm = datestr_to_seconds_since_midnight(estimated_landing_time_str)
+    # landing_ssm = datestr_to_seconds_since_midnight(estimated_landing_time_str) # This variable is not used in the current function scope
     
     # Time bin parameters (consistent with other functions)
     delta_t_wall_clock_sec = 300.0  # 5 minutes
@@ -295,6 +295,8 @@ def forward_svi():
     time_start = time.time()
     V_soft = forward_soft_value_iteration(
         state_transitions=transitions,
+        G=G, 
+        idx_to_node=idx_to_node,
         origin_node_idx=origin_node_idx,
         cost_model=cost_model,
         num_nodes=num_nodes,
@@ -303,7 +305,7 @@ def forward_svi():
         num_phases=num_phases,
         distance_matrix_d=distance_matrix_d,
         airspace_charge_matrix_ac=airspace_charge_matrix_ac,
-        node_coords_deg=node_coords_deg,
+        # node_coords_deg=node_coords_deg, # REMOVED
         wind_model=wind_model,
         min_wall_clock_time_sec=min_wall_clock_time_sec,
         delta_t_wall_clock_sec=delta_t_wall_clock_sec,
