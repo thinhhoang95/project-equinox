@@ -519,8 +519,8 @@ def backward_svi(headless=False):
 
 
 if __name__ == '__main__':
-    forward_tres()
-    backward_tres()
+    # forward_tres()
+    # backward_tres()
     backward_svi(headless=True)
     forward_svi(headless=True) # headless = false: ask for confirmation
     print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')

@@ -234,7 +234,8 @@ def forward_soft_value_iteration(
     else:
         num_actual = len(actual_origin_states)
         # initial_logmass = math.log(1.0 / num_actual)  # double‐precision log
-        original_states_probs = {39:-1.16657401, 40:-0.75997401, 41:-1.52747401, 42:-5.57117401} # these are log-probs, not values (values = -log-probs!)
+        original_states_probs = {39: 0.0, 40: 0.0, 41: 0.0, 42: 0.0}
+        # original_states_probs = {39:-1.16657401, 40:-0.75997401, 41:-1.52747401, 42:-5.57117401} # these are log-probs, not values (values = -log-probs!)
         for (k_u, rho_u, phase_u) in actual_origin_states:
             L_val[origin_node_idx, k_u, rho_u, phase_u] = original_states_probs[k_u]
             if verbose:
