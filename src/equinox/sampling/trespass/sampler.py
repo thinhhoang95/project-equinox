@@ -43,7 +43,7 @@ def sample_tres_trajectory(
     Returns:
         A list of state tuples representing the sampled trajectory.
         Each state is (node_id, k, rho, phase).
-        Returns None if sampling fails or max_steps is reached before goal.
+        Raises exceptions if sampling fails for debugging purposes.
     """
     # Initial state
     current_node_idx = node_to_idx[origin_node_id]
@@ -82,9 +82,7 @@ def sample_tres_trajectory(
         Z_b_i = backward_values[current_node_idx, current_k, current_rho, current_phase].item()
 
         if not np.isfinite(Z_b_i) or Z_b_i == 0:
-            print(f"Warning: Z_b[i] is {Z_b_i} at state {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. Sampling failed.")
-            # This can happen if the state is unreachable or has no path to the goal in the backward pass.
-            return None # Or handle as per requirements, e.g., empty trajectory part
+            raise ValueError(f"Z_b[i] is {Z_b_i} at state {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. State is unreachable or has no path to goal.")
 
         possible_next_states = []
         probabilities = []
@@ -103,8 +101,7 @@ def sample_tres_trajectory(
         relevant_costs = edge_costs_uv.values()[mask]       # Shape [num_relevant_edges]
 
         if relevant_edges_indices.shape[1] == 0:
-            # print(f"No outgoing edges found from state {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. Sampling failed.")
-            return None 
+            raise RuntimeError(f"No outgoing edges found from state {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. State is terminal or graph is incomplete.")
 
         for edge_idx in range(relevant_edges_indices.shape[1]):
             next_node_idx = relevant_edges_indices[4, edge_idx].item()
@@ -118,7 +115,7 @@ def sample_tres_trajectory(
             Z_b_j = backward_values[next_node_idx, next_k, next_rho, next_phase].item()
 
             if not np.isfinite(Z_b_j):
-                # print(f"Warning: Z_b[j] is {Z_b_j} for next state {idx_to_node[next_node_idx], next_k, next_rho, next_phase}. Skipping this transition.")
+                print(f"Warning: Z_b[j] is {Z_b_j} for next state {idx_to_node[next_node_idx], next_k, next_rho, next_phase}. Skipping this transition.")
                 continue
 
             # π(j | i) = e^{-c_{ij}} Z_b[j] / Z_b[i]
@@ -141,14 +138,12 @@ def sample_tres_trajectory(
 
 
         if not possible_next_states:
-            print(f"No valid next states with finite probabilities from {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. Sampling failed.")
-            return None # Stuck
+            raise RuntimeError(f"No valid next states with finite probabilities from {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. All transitions have invalid probabilities.")
 
         # Normalize probabilities
         probabilities = np.array(probabilities)
         if np.sum(probabilities) == 0: # Should not happen if we checked prob > 0
-            print(f"Sum of probabilities is zero. State: {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. Sampling failed.")
-            return None
+            raise ValueError(f"Sum of probabilities is zero at state: {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. All probabilities are invalid.")
             
         probabilities /= np.sum(probabilities)
 
@@ -156,16 +151,11 @@ def sample_tres_trajectory(
         try:
             choice_idx = np.random.choice(len(possible_next_states), p=probabilities)
         except ValueError as e:
-            print(f"Error during np.random.choice: {e}")
-            print(f"Probabilities: {probabilities}")
-            print(f"Sum of probabilities: {np.sum(probabilities)}")
-            return None
-
+            raise ValueError(f"Error during np.random.choice at state {idx_to_node[current_node_idx], current_k, current_rho, current_phase}: {e}. Probabilities: {probabilities}, Sum: {np.sum(probabilities)}")
 
         next_state = possible_next_states[choice_idx]
         
         current_node_idx, current_k, current_rho, current_phase = next_state
         trajectory.append((idx_to_node[current_node_idx], current_k, current_rho, current_phase))
 
-    # print(f"Max steps {max_steps} reached before finding goal. Sampling failed.")
-    return None # Max steps reached
+    raise RuntimeError(f"Max steps {max_steps} reached before finding goal {goal_node_id}. Trajectory may be stuck in a loop or goal is unreachable.")
