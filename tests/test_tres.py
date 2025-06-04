@@ -9,6 +9,7 @@ from equinox.cost.cost_model_1 import cost_model_1
 from equinox.wind.wind_date import WindDate
 from equinox.vnav.vnav_performance import Performance
 from equinox.vnav.vnav_profiles_rev1 import NARROW_BODY_JET_CLIMB_PROFILE, NARROW_BODY_JET_DESCENT_PROFILE, NARROW_BODY_JET_CLIMB_VS_PROFILE, NARROW_BODY_JET_DESCENT_VS_PROFILE
+from equinox.dp.trespass.sparse_io_utils import save_sparse_coo_tensor_with_convention, load_sparse_coo_tensor_with_convention
 
 def forward_tres():
     
@@ -374,7 +375,7 @@ def forward_svi(headless=False):
     np.save("data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_V_FWD.npy", V_soft_np)
     return V_soft_np
 
-from equinox.dp.trespass.backward_svi_log import backward_soft_value_iteration
+from equinox.dp.trespass.backward_svi_log_cost import backward_soft_value_iteration
 
 def backward_svi(headless=False):
     # Load the route graph
@@ -476,7 +477,7 @@ def backward_svi(headless=False):
     # Call backward_soft_value_iteration
     import time
     time_start = time.time()
-    V_soft_bwd = backward_soft_value_iteration(
+    V_soft_bwd, edge_costs = backward_soft_value_iteration(
         state_transitions=transitions,
         G=G, 
         idx_to_node=idx_to_node,
@@ -515,12 +516,138 @@ def backward_svi(headless=False):
     import os
     os.makedirs("data/graph/V_soft", exist_ok=True)
     np.save("data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_V_BWD.npy", V_soft_bwd_np)
+    save_sparse_coo_tensor_with_convention(edge_costs, "data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_COST.pt")
     return V_soft_bwd_np
+
+from equinox.sampling.trespass.sampler import sample_tres_trajectory
+
+def test_tres_sampler(headless=True):
+    print("\n--- Test TRes Sampler ---")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # Load the route graph
+    G = nx.read_gml("data/graph/LEMD_EGLL_2023_04_01.gml")
+    node_to_idx = {node: i for i, node in enumerate(G.nodes())}
+    idx_to_node = {i: node for i, node in enumerate(G.nodes())}
+    num_nodes = len(G.nodes())
+
+    # Load backward soft value function (log values)
+    try:
+        V_soft_bwd_np = np.load("data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_V_BWD.npy")
+    except FileNotFoundError:
+        print("Backward value function file not found. Please run backward_svi first.")
+        print("Skipping TRes Sampler test.")
+        return
+
+    # Convert log values V_bwd to Z_b values for the sampler
+    Z_b_values = torch.exp(torch.from_numpy(V_soft_bwd_np).to(device))
+
+    # Load edge costs
+    try:
+        edge_costs_tensor, interpretation_note = load_sparse_coo_tensor_with_convention(
+            "data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_COST.pt",
+            target_device=device
+        )
+        print(f"Edge costs loaded. Interpretation Note: {interpretation_note}")
+    except FileNotFoundError:
+        print("Edge costs file not found. Please run backward_svi first.")
+        print("Skipping TRes Sampler test.")
+        return
+
+    origin_node_id = "LEMD"
+    goal_node_id = "EGLL"
+
+    # Time parameters (consistent with backward_svi)
+    estimated_takeoff_time_str = "2023-04-01 10:15:00" # From backward_svi test
+    from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight # Already imported
+    takeoff_ssm = datestr_to_seconds_since_midnight(estimated_takeoff_time_str)
+    
+    min_wall_clock_time_sec = float(takeoff_ssm)
+    delta_t_wall_clock_sec = 300.0  # 5 minutes, from backward_svi test
+
+    # Initial state parameters
+    initial_k = 0 # Assuming k=0 corresponds to min_wall_clock_time_sec (takeoff time)
+    
+    # num_rho_bins is Z_b_values.shape[2]
+    # rho_idx is 0 for "no climb time remaining". Max index is for full climb time remaining.
+    if Z_b_values.shape[2] > 0:
+        initial_rho = Z_b_values.shape[2] - 1 
+    else:
+        print("Error: Number of rho bins is 0. Cannot determine initial_rho.")
+        return
+        
+    initial_phase = 0 # 0: CLIMB
+
+    print(f"Starting sampling from {origin_node_id} (idx {node_to_idx[origin_node_id]}) to {goal_node_id} (idx {node_to_idx[goal_node_id]})")
+    print(f"Initial state: k={initial_k}, rho={initial_rho}, phase={initial_phase}")
+    print(f"Z_b shape: {Z_b_values.shape}")
+    print(f"Edge costs indices shape: {edge_costs_tensor.indices().shape}, values shape: {edge_costs_tensor.values().shape}")
+
+
+    num_samples = 100
+    successful_samples = 0
+    failed_samples = 0
+    trajectories = []
+
+    for i in range(num_samples):
+        print(f"\nSampling trajectory {i+1}/{num_samples}...")
+        trajectory = sample_tres_trajectory(
+            G=G,
+            node_to_idx=node_to_idx,
+            idx_to_node=idx_to_node,
+            origin_node_id=origin_node_id,
+            goal_node_id=goal_node_id,
+            initial_k=initial_k,
+            initial_rho=initial_rho,
+            initial_phase=initial_phase,
+            backward_values=Z_b_values, # This is Z_b = exp(V_bwd)
+            edge_costs_uv=edge_costs_tensor,
+            min_wall_clock_time_sec=min_wall_clock_time_sec,
+            delta_t_wall_clock_sec=delta_t_wall_clock_sec,
+            device=device,
+            max_steps=200 # Max steps per trajectory
+        )
+        if trajectory:
+            successful_samples += 1
+            trajectories.append(trajectory)
+            print(f"  Successfully sampled trajectory {i+1} with {len(trajectory)} steps.")
+            # print(f"  Trajectory: {trajectory}") # Can be very verbose
+            # Print first and last few states
+            if len(trajectory) > 5:
+                print(f"    Start: {trajectory[:3]}")
+                print(f"    End: {trajectory[-3:]}")
+            else:
+                print(f"    Trajectory: {trajectory}")
+        else:
+            failed_samples += 1
+            print(f"  Failed to sample trajectory {i+1}.")
+
+    print("\n--- Sampler Test Results ---")
+    print(f"Total attempts: {num_samples}")
+    print(f"Successful trajectories: {successful_samples}")
+    print(f"Failed trajectories: {failed_samples}")
+
+    if trajectories:
+        avg_len = np.mean([len(t) for t in trajectories])
+        min_len = np.min([len(t) for t in trajectories])
+        max_len = np.max([len(t) for t in trajectories])
+        print(f"Average trajectory length: {avg_len:.2f}")
+        print(f"Min trajectory length: {min_len}")
+        print(f"Max trajectory length: {max_len}")
+    
+    # Example of checking a specific state if needed for debugging
+    # origin_idx_val = node_to_idx[origin_node_id]
+    # initial_Z_b_val = Z_b_values[origin_idx_val, initial_k, initial_rho, initial_phase].item()
+    # print(f"Initial Z_b({origin_node_id}, k={initial_k}, rho={initial_rho}, phase={initial_phase}) = {initial_Z_b_val}")
+    # if not np.isfinite(initial_Z_b_val) or initial_Z_b_val == 0:
+    #    print("Warning: Initial Z_b value is not suitable for starting sampling.")
 
 
 if __name__ == '__main__':
     # forward_tres()
     # backward_tres()
-    backward_svi(headless=True)
-    forward_svi(headless=True) # headless = false: ask for confirmation
-    print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')
+    # backward_svi(headless=True)
+    # forward_svi(headless=True) # headless = false: ask for confirmation
+    # print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')
+    test_tres_sampler(headless=False)
