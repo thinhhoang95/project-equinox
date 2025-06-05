@@ -1,3 +1,7 @@
+# ********************************************************
+# Use trespass.ipynb to inspect the results from this code
+# ********************************************************
+
 import torch
 import numpy as np
 import networkx as nx
@@ -668,7 +672,7 @@ def test_tres_sampler(headless=True):
     print(f"Edge costs indices shape: {edge_costs_tensor.indices().shape}, values shape: {edge_costs_tensor.values().shape}")
 
 
-    num_samples = 100
+    num_samples = 1000
     successful_samples = 0
     failed_samples = 0
     trajectories = []
@@ -738,9 +742,9 @@ def test_tres_sampler(headless=True):
 
 
 if __name__ == '__main__':
-    forward_tres()
-    backward_tres()
-    backward_svi(headless=True)
-    forward_svi(headless=True) # headless = false: ask for confirmation
+    # forward_tres()
+    # backward_tres()
+    # backward_svi(headless=True)
+    # forward_svi(headless=True) # headless = false: ask for confirmation
     print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')
     test_tres_sampler(headless=False)
