@@ -598,14 +598,10 @@ def test_tres_sampler(headless=True):
             idx_to_node=idx_to_node,
             origin_node_id=origin_node_id,
             goal_node_id=goal_node_id,
-            initial_k=initial_k,
             initial_rho=initial_rho,
             initial_phase=initial_phase,
             backward_values=Z_b_values, # This is Z_b = exp(V_bwd)
             edge_costs_uv=edge_costs_tensor,
-            min_wall_clock_time_sec=min_wall_clock_time_sec,
-            delta_t_wall_clock_sec=delta_t_wall_clock_sec,
-            device=device,
             max_steps=200 # Max steps per trajectory
         )
         if trajectory:
@@ -635,6 +631,20 @@ def test_tres_sampler(headless=True):
         print(f"Average trajectory length: {avg_len:.2f}")
         print(f"Min trajectory length: {min_len}")
         print(f"Max trajectory length: {max_len}")
+
+    # Save trajectories to a file
+    import os
+    os.makedirs("data/graph/trajectories", exist_ok=True)
+    
+    # Save trajectories as text file with waypoint names separated by whitespace
+    with open("data/graph/trajectories/LEMD_EGLL_2023_04_01_CLB_trajectories.txt", "w") as f:
+        for i, trajectory in enumerate(trajectories):
+            # Extract waypoint names from trajectory tuples (waypoint_name, k, rho, phase)
+            waypoint_names = [str(step[0]) for step in trajectory]
+            trajectory_line = " ".join(waypoint_names)
+            f.write(f"{trajectory_line}\n")
+    
+    print(f"Saved {len(trajectories)} trajectories to data/graph/trajectories/LEMD_EGLL_2023_04_01_CLB_trajectories.txt")
     
     # Example of checking a specific state if needed for debugging
     # origin_idx_val = node_to_idx[origin_node_id]

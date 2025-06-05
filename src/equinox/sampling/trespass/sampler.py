@@ -9,18 +9,17 @@ def sample_tres_trajectory(
     idx_to_node: dict,
     origin_node_id: str,
     goal_node_id: str,
-    initial_k: int,
     initial_rho: int,
     initial_phase: int,
     backward_values: torch.Tensor, # V_soft_bwd_np from test_tres.py (num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases)
     edge_costs_uv: torch.Tensor, # edge_costs from backward_svi (sparse COO)
-    min_wall_clock_time_sec: float, # Used for time interpretation if needed, not directly in sampling logic
-    delta_t_wall_clock_sec: float, # Used for time interpretation if needed
-    max_steps: int = 1000, # Max steps to prevent infinite loops
-    device: torch.device = torch.device("cpu")
+    max_steps: int = 1000 # Max steps to prevent infinite loops
 ):
     """
     Samples a single trajectory using the TResPASS algorithm.
+    The initial wall-clock time bin (k) is sampled uniformly from all valid starting k bins
+    for the given origin_node_id, initial_rho, and initial_phase, based on finite and positive
+    values in `backward_values`.
 
     Args:
         G: The route graph.
@@ -28,26 +27,39 @@ def sample_tres_trajectory(
         idx_to_node: Mapping from integer index to node ID.
         origin_node_id: The starting node ID (e.g., "LEMD").
         goal_node_id: The target node ID (e.g., "EGLL").
-        initial_k: Initial wall-clock time bin index.
         initial_rho: Initial climb time remaining bin index.
         initial_phase: Initial flight phase (0: CLIMB, 1: CRUISE, 2: DESCENT).
         backward_values: The precomputed backward soft value function (Z_b in pseudo-code).
                          Shape: (num_nodes, num_k_bins, num_rho_bins, num_phase_bins)
         edge_costs_uv: Sparse COO tensor of edge costs.
                        Indices: (u_idx, k_u, rho_u, phase_u, v_idx, k_v, rho_v, phase_v)
-        min_wall_clock_time_sec: The absolute time (seconds since midnight) corresponding to k=0.
-        delta_t_wall_clock_sec: The duration of each wall-clock time bin.
         max_steps: Maximum number of steps in a trajectory to prevent infinite loops.
-        device: PyTorch device.
 
     Returns:
         A list of state tuples representing the sampled trajectory.
         Each state is (node_id, k, rho, phase).
         Raises exceptions if sampling fails for debugging purposes.
     """
-    # Initial state
     current_node_idx = node_to_idx[origin_node_id]
-    current_k = initial_k
+    
+    num_k_bins = backward_values.shape[1]
+    
+    # Find valid initial k values
+    valid_initial_ks = []
+    for k_candidate in range(num_k_bins):
+        val = backward_values[current_node_idx, k_candidate, initial_rho, initial_phase].item()
+        if np.isfinite(val) and val > 0: # Z_b must be finite and positive
+            valid_initial_ks.append(k_candidate)
+
+    if not valid_initial_ks:
+        raise ValueError(
+            f"No valid initial k found for origin_node_id='{origin_node_id}' (idx={current_node_idx}), "
+            f"initial_rho={initial_rho}, initial_phase={initial_phase}. "
+            "All Z_b values are non-positive or non-finite."
+        )
+
+    # Uniformly sample initial_k from the valid ones
+    current_k = np.random.choice(valid_initial_ks)
     current_rho = initial_rho
     current_phase = initial_phase
 
