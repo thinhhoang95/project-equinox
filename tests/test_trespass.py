@@ -369,10 +369,35 @@ def forward_svi(headless=False):
     # Convert V_soft to a numpy array
     V_soft_np = V_soft.cpu().numpy()
     # Save V_soft to a file
-    # Create the directory if it doesn't exist
     import os
     os.makedirs("data/graph/V_soft", exist_ok=True)
-    np.save("data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_V_FWD.npy", V_soft_np)
+    
+    # Create sparse tensor for saving: store only finite values from V_soft
+    finite_mask = torch.isfinite(V_soft)
+    # nonzero(as_tuple=False) returns (N, D) tensor, transpose to (D, N) for sparse_coo_tensor
+    sparse_indices = finite_mask.nonzero(as_tuple=False).transpose(0, 1)
+    sparse_values = V_soft[finite_mask]
+
+    V_soft_sparse = torch.sparse_coo_tensor(
+        indices=sparse_indices,
+        values=sparse_values,
+        size=V_soft.shape,
+        dtype=V_soft.dtype,
+        device=V_soft.device
+    ).coalesce()
+
+    output_dir_path = "data/graph/V_soft" 
+    sparse_file_name = "LEMD_EGLL_2023_04_01_V_FWD_SPRSE.pt" 
+    sparse_file_path = os.path.join(output_dir_path, sparse_file_name)
+    
+    # save_sparse_coo_tensor_with_convention is imported at the top of test_trespass.py
+    save_sparse_coo_tensor_with_convention(
+        V_soft_sparse, 
+        sparse_file_path,
+        "Implicit zeros should be treated as float('inf'). Only explicitly stored values are actual costs."
+    )
+    print(f"Saved sparse V_soft (finite values only) to {sparse_file_path}")
+
     return V_soft_np
 
 from equinox.dp.trespass.backward_svi_log_cost import backward_soft_value_iteration
@@ -515,7 +540,33 @@ def backward_svi(headless=False):
     V_soft_bwd_np = V_soft_bwd.cpu().numpy()
     import os
     os.makedirs("data/graph/V_soft", exist_ok=True)
-    np.save("data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_V_BWD.npy", V_soft_bwd_np)
+    
+    # Create sparse tensor for saving: store only finite values from V_soft_bwd
+    finite_mask = torch.isfinite(V_soft_bwd)
+    # nonzero(as_tuple=False) returns (N, D) tensor, transpose to (D, N) for sparse_coo_tensor
+    sparse_indices = finite_mask.nonzero(as_tuple=False).transpose(0, 1)
+    sparse_values = V_soft_bwd[finite_mask]
+
+    V_soft_bwd_sparse = torch.sparse_coo_tensor(
+        indices=sparse_indices,
+        values=sparse_values,
+        size=V_soft_bwd.shape,
+        dtype=V_soft_bwd.dtype,
+        device=V_soft_bwd.device
+    ).coalesce()
+
+    output_dir_path = "data/graph/V_soft" 
+    sparse_file_name = "LEMD_EGLL_2023_04_01_V_BWD_SPRSE.pt" 
+    sparse_file_path = os.path.join(output_dir_path, sparse_file_name)
+    
+    # save_sparse_coo_tensor_with_convention is imported at the top of test_trespass.py
+    save_sparse_coo_tensor_with_convention(
+        V_soft_bwd_sparse, 
+        sparse_file_path,
+        "Implicit zeros should be treated as float('inf'). Only explicitly stored values are actual costs."
+    )
+    print(f"Saved sparse V_soft_bwd (finite values only) to {sparse_file_path}")
+    
     save_sparse_coo_tensor_with_convention(edge_costs, "data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_COST.pt")
     return V_soft_bwd_np
 
@@ -532,9 +583,41 @@ def test_tres_sampler(headless=True):
     idx_to_node = {i: node for i, node in enumerate(G.nodes())}
     num_nodes = len(G.nodes())
 
-    # Load backward soft value function (log values)
+    # Load backward soft value function (log values) from sparse format
     try:
-        V_soft_bwd_np = np.load("data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_V_BWD.npy")
+        V_soft_bwd_sparse, interpretation_note = load_sparse_coo_tensor_with_convention(
+            "data/graph/V_soft/LEMD_EGLL_2023_04_01_V_BWD_SPRSE.pt",
+            target_device=device
+            # interpretation_note="Implicit zeros should be treated as float('inf'). Only explicitly stored values are actual costs."
+        )
+        print(f"Loaded sparse backward value function. Interpretation: {interpretation_note}")
+        # V_soft_bwd_np = V_soft_bwd_sparse.to_dense().cpu().numpy() # Original line
+
+        # New logic to fill unspecified sparse entries with -inf when converting to dense
+        # 1. Coalesce the sparse tensor (good practice, ensures unique indices).
+        V_soft_bwd_sparse_coalesced = V_soft_bwd_sparse.coalesce()
+
+        # 2. Create a dense tensor filled with -infinity.
+        #    Use the sparse tensor's dtype and device.
+        V_soft_bwd_dense_filled = torch.full(
+            V_soft_bwd_sparse_coalesced.shape,
+            -float('inf'),
+            dtype=V_soft_bwd_sparse_coalesced.dtype,
+            device=V_soft_bwd_sparse_coalesced.device
+        )
+
+        # 3. Get indices and values from the coalesced sparse tensor.
+        indices = V_soft_bwd_sparse_coalesced.indices()
+        values = V_soft_bwd_sparse_coalesced.values()
+
+        # 4. Place the explicit values from the sparse tensor into the dense tensor.
+        #    This is done only if there are any explicit values.
+        if values.numel() > 0:
+            V_soft_bwd_dense_filled[tuple(indices)] = values
+        
+        # 5. Convert to numpy array on CPU.
+        V_soft_bwd_np = V_soft_bwd_dense_filled.cpu().numpy()
+
     except FileNotFoundError:
         print("Backward value function file not found. Please run backward_svi first.")
         print("Skipping TRes Sampler test.")
@@ -548,7 +631,7 @@ def test_tres_sampler(headless=True):
         edge_costs_tensor, interpretation_note = load_sparse_coo_tensor_with_convention(
             "data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_COST.pt",
             target_device=device
-        )
+        ) # actually, sparse values are defaulted to 0 here (which is wrong, should be inf instead), but it does not matter because we never select these values during the sampling process
         print(f"Edge costs loaded. Interpretation Note: {interpretation_note}")
     except FileNotFoundError:
         print("Edge costs file not found. Please run backward_svi first.")
@@ -655,9 +738,9 @@ def test_tres_sampler(headless=True):
 
 
 if __name__ == '__main__':
-    # forward_tres()
-    # backward_tres()
-    # backward_svi(headless=True)
-    # forward_svi(headless=True) # headless = false: ask for confirmation
-    # print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')
+    forward_tres()
+    backward_tres()
+    backward_svi(headless=True)
+    forward_svi(headless=True) # headless = false: ask for confirmation
+    print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')
     test_tres_sampler(headless=False)

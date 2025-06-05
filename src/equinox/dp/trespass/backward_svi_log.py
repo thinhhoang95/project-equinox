@@ -1,3 +1,8 @@
+# ********************************************************
+# CAUTION: This file does not output the edge costs.
+# Please use backward_svi_log_cost.py for that.
+# ********************************************************
+
 import torch
 import math
 
