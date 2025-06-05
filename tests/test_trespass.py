@@ -567,7 +567,7 @@ def backward_svi(headless=False):
     )
     print(f"Saved sparse V_soft_bwd (finite values only) to {sparse_file_path}")
     
-    save_sparse_coo_tensor_with_convention(edge_costs, "data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_COST.pt")
+    save_sparse_coo_tensor_with_convention(edge_costs, "data/graph/V_soft/LEMD_EGLL_2023_04_01_COST.pt")
     return V_soft_bwd_np
 
 from equinox.sampling.trespass.sampler import sample_tres_trajectory
@@ -629,7 +629,7 @@ def test_tres_sampler(headless=True):
     # Load edge costs
     try:
         edge_costs_tensor, interpretation_note = load_sparse_coo_tensor_with_convention(
-            "data/graph/V_soft/LEMD_EGLL_2023_04_01_CLB_COST.pt",
+            "data/graph/V_soft/LEMD_EGLL_2023_04_01_COST.pt",
             target_device=device
         ) # actually, sparse values are defaulted to 0 here (which is wrong, should be inf instead), but it does not matter because we never select these values during the sampling process
         print(f"Edge costs loaded. Interpretation Note: {interpretation_note}")
