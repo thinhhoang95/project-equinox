@@ -9,7 +9,6 @@ import math
 
 from equinox.route.get_wind import get_wind
 # For type hinting, actual instances are passed as arguments
-from equinox.cost.cost_rev1 import CostRev1 
 from equinox.wind.wind_model import WindModel
 import networkx as nx
 # Conversion factor from meters per second to knots
@@ -23,7 +22,7 @@ def forward_soft_value_iteration(
     G: nx.DiGraph,
     idx_to_node: dict[int, str], # Added: mapping from integer index to string node ID in G
     origin_node_idx: int,
-    cost_model: CostRev1,
+    cost_model: torch.nn.Module,
     num_nodes: int,
     num_time_bins_wall_clock: int,
     num_rho_bins: int,
@@ -332,12 +331,7 @@ def forward_soft_value_iteration(
         if verbose and (i % (len(sorted_transitions)//100 + 1) == 0 or i == len(sorted_transitions)-1):
             # Only print if this transition's contribution is not extremely far below
             # the current L(v).  (We could check e^{ a_u - new_L_v } > threshold, etc.)
-            print(
-                f"  Transition {i+1}/{len(sorted_transitions)}:  "
-                f"u=({u_idx},{k_u},{rho_u},{phase_u}) L(u)={L_s_u:.3f}, "
-                f"cost={cost_uv:.3f},  a_u={a_u:.3f}  ->  "
-                f"new L(v={v_idx},{k_v},{rho_v},{phase_v})={new_L_v:.3f}"
-            )
+            print(f"  Transition {i+1}/{len(sorted_transitions)}:  u=({u_idx},{k_u},{rho_u},{phase_u}) L(u)={L_s_u:.3f}, cost={cost_uv:.3f},  a_u={a_u:.3f}  ->  new L(v={v_idx},{k_v},{rho_v},{phase_v})={new_L_v:.3f}", end='\r', flush=True)
 
     # 6. Convert back:  V_soft(s) = -L_val(s).  If L_val(s) = -inf (unreachable), V_soft(s) = +inf.
     V_soft = -L_val

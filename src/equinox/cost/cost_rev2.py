@@ -31,6 +31,7 @@ class CostRev2(nn.Module):
                  beta1: float,
                  beta2: float,
                  beta3: float, # Added beta3 for preference score
+                 num_waypoints: int,
                  knots_ac_dist: list[float] = None,
                  knots_wind: list[float] = None,
                  device: torch.device = None):
@@ -46,6 +47,12 @@ class CostRev2(nn.Module):
         self.beta1 = nn.Parameter(torch.tensor(beta1, dtype=torch.float32), requires_grad=False)
         self.beta2 = nn.Parameter(torch.tensor(beta2, dtype=torch.float32), requires_grad=False)
         self.beta3 = nn.Parameter(torch.tensor(beta3, dtype=torch.float32), requires_grad=False) # Added beta3
+
+        self.preference_matrix_p = nn.Parameter(torch.zeros((num_waypoints, num_waypoints), dtype=torch.float32), requires_grad=True)
+
+        # Make the LEMD-RBO edge highly preferred
+        with torch.no_grad():
+            self.preference_matrix_p[185, 546] = -200.0 # LEMD-RBO is highly preferred!
 
         _knots_ac_dist = knots_ac_dist if knots_ac_dist is not None else DEFAULT_KNOTS_AC_DIST
         _knots_wind = knots_wind if knots_wind is not None else DEFAULT_KNOTS_WIND
@@ -121,7 +128,6 @@ class CostRev2(nn.Module):
                 edge_indices: Tuple[torch.Tensor, torch.Tensor], # Tuple of (u_indices, v_indices)
                 distance_matrix_d: Union[torch.Tensor, np.ndarray],
                 airspace_charge_matrix_ac: Union[torch.Tensor, np.ndarray],
-                preference_matrix_p: Union[torch.Tensor, np.ndarray], # Added preference matrix
                 tailwind_values_w: torch.Tensor # Batch of tailwind values
                ) -> torch.Tensor:
         """
@@ -131,7 +137,6 @@ class CostRev2(nn.Module):
             edge_indices: Tuple (u_indices, v_indices) of 1D integer tensors for start and end nodes.
             distance_matrix_d: 2D torch.Tensor or numpy.ndarray for distances D. D[i,j] = d(i,j).
             airspace_charge_matrix_ac: 2D torch.Tensor or numpy.ndarray for airspace charges AC.
-            preference_matrix_p: 2D torch.Tensor or numpy.ndarray for preference scores P. P[i,j] = p(i,j).
             tailwind_values_w: 1D torch.Tensor for tailwind w_tail(e, t_e) for each edge.
                                Positive for tailwind, negative for headwind.
 
@@ -147,7 +152,7 @@ class CostRev2(nn.Module):
         inf_mask = torch.isinf(dist_e_batch)
 
         ac_e_batch = self.get_airspace_charge_batched(u_indices, v_indices, airspace_charge_matrix_ac)
-        pref_e_batch = self.get_preference_score_batched(u_indices, v_indices, preference_matrix_p) # Get preference scores
+        pref_e_batch = self.get_preference_score_batched(u_indices, v_indices, self.preference_matrix_p) # Get preference scores
         
         # ac_dist_product_batch = ac_e_batch * dist_e_batch
         ac_dist_product_batch = dist_e_batch # for testing
@@ -183,7 +188,7 @@ def run_sanity_tests():
     
     beta0, beta1, beta2, beta3 = 0.1, 1.0, 0.5, 0.2 # Example coefficients, added beta3
 
-    cost_model = CostRev2(beta0, beta1, beta2, beta3, device=device) # Added beta3
+    cost_model = CostRev2(beta0, beta1, beta2, beta3, num_waypoints=4, device=device) # Added beta3
     print(f"Model initialized on device: {cost_model.device}")
     # print(f"Default knots for AC*Dist: {cost_model.plm_ac_dist.knot_points.tolist()}") # Removed, IdentityPLM has no knot_points
     # print(f"Default knots for Wind: {cost_model.plm_wind.knot_points.tolist()}") # Removed, IdentityPLM has no knot_points
@@ -204,13 +209,6 @@ def run_sanity_tests():
         [5.0, 8.0, 15.0, 0.0]
     ], dtype=torch.float32, device=device)
 
-    preference_matrix_torch = torch.tensor([ # Example preference matrix
-        [0.0, 5.0, 0.0, -2.0],
-        [5.0, 0.0, 1.0, 3.0],
-        [0.0, 1.0, 0.0, -4.0],
-        [-2.0, 3.0, -4.0, 0.0]
-    ], dtype=torch.float32, device=device)
-
     # Test Case 1: Batch of edges with Torch tensor inputs
     print(f"\n--- Test Case: Batch of Edges with Torch Tensors ---")
     u_indices_batch = torch.tensor([0, 0, 1, 2], device=device, dtype=torch.long)
@@ -218,21 +216,20 @@ def run_sanity_tests():
     # Edges: (0,1), (0,3), (1,2), (2,3)
     # Dists: 150, 300, 200, 100
     # ACs:   10,  5,   12,  15
-    # Prefs: 5,  -2,   1,  -4 (from preference_matrix_torch)
     # AC*Dist: 1500, 1500, 2400, 1500
 
     tailwind_batch_pos = torch.tensor([30.0, 10.0, 20.0, 40.0], dtype=torch.float32, device=device)
     tailwind_batch_neg = torch.tensor([-20.0, -5.0, -15.0, -25.0], dtype=torch.float32, device=device)
 
-    costs_batch_pos = cost_model((u_indices_batch, v_indices_batch), distance_matrix_torch, airspace_charge_matrix_torch, preference_matrix_torch, tailwind_batch_pos)
+    costs_batch_pos = cost_model((u_indices_batch, v_indices_batch), distance_matrix_torch, airspace_charge_matrix_torch, tailwind_batch_pos)
     print(f"Edges: {[(u.item(),v.item()) for u,v in zip(u_indices_batch, v_indices_batch)]}")
     print(f"Tailwinds (pos): {tailwind_batch_pos.tolist()}")
-    print(f"Preference Scores: {preference_matrix_torch[u_indices_batch, v_indices_batch].tolist()}")
+    print(f"Preference Scores: {cost_model.preference_matrix_p[u_indices_batch, v_indices_batch].tolist()}")
     print(f"Costs (pos): {costs_batch_pos.tolist()}")
     
-    costs_batch_neg = cost_model((u_indices_batch, v_indices_batch), distance_matrix_torch, airspace_charge_matrix_torch, preference_matrix_torch, tailwind_batch_neg)
+    costs_batch_neg = cost_model((u_indices_batch, v_indices_batch), distance_matrix_torch, airspace_charge_matrix_torch, tailwind_batch_neg)
     print(f"Tailwinds (neg): {tailwind_batch_neg.tolist()}")
-    print(f"Preference Scores: {preference_matrix_torch[u_indices_batch, v_indices_batch].tolist()}")
+    print(f"Preference Scores: {cost_model.preference_matrix_p[u_indices_batch, v_indices_batch].tolist()}")
     print(f"Costs (neg): {costs_batch_neg.tolist()}")
 
     if torch.all(costs_batch_pos < costs_batch_neg):
@@ -250,7 +247,7 @@ def run_sanity_tests():
     v_indices_nonexist = torch.tensor([1, 2], device=device, dtype=torch.long)
     tailwind_nonexist = torch.tensor([10.0, 10.0], dtype=torch.float32, device=device)
     
-    costs_nonexist = cost_model((u_indices_nonexist, v_indices_nonexist), distance_matrix_torch, airspace_charge_matrix_torch, preference_matrix_torch, tailwind_nonexist)
+    costs_nonexist = cost_model((u_indices_nonexist, v_indices_nonexist), distance_matrix_torch, airspace_charge_matrix_torch, tailwind_nonexist)
     print(f"Edges: {[(u.item(),v.item()) for u,v in zip(u_indices_nonexist, v_indices_nonexist)]}")
     print(f"Costs: {costs_nonexist.tolist()}")
     if torch.isinf(costs_nonexist[1]):
@@ -267,13 +264,12 @@ def run_sanity_tests():
         print(f"\n--- Test Case: Batch with NumPy array inputs for matrices ---")
         distance_matrix_np = distance_matrix_torch.cpu().numpy()
         airspace_charge_matrix_np = airspace_charge_matrix_torch.cpu().numpy()
-        preference_matrix_np = preference_matrix_torch.cpu().numpy() # Convert preference matrix to NumPy
         
         # Using same u_indices_batch, v_indices_batch, tailwind_batch_pos from Test Case 1
-        costs_batch_np_inputs = cost_model((u_indices_batch, v_indices_batch), distance_matrix_np, airspace_charge_matrix_np, preference_matrix_np, tailwind_batch_pos)
+        costs_batch_np_inputs = cost_model((u_indices_batch, v_indices_batch), distance_matrix_np, airspace_charge_matrix_np, tailwind_batch_pos)
         print(f"Edges: {[(u.item(),v.item()) for u,v in zip(u_indices_batch, v_indices_batch)]}")
         print(f"Tailwinds: {tailwind_batch_pos.tolist()}")
-        print(f"Preference Scores: {preference_matrix_torch[u_indices_batch, v_indices_batch].tolist()}") # Still use torch for easy indexing here for print
+        print(f"Preference Scores: {cost_model.preference_matrix_p[u_indices_batch, v_indices_batch].tolist()}")
         print(f"Costs (NumPy matrix inputs): {costs_batch_np_inputs.tolist()}")
         
         if isinstance(costs_batch_np_inputs, torch.Tensor) and \

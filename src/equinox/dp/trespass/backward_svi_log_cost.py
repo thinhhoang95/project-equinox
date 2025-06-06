@@ -3,7 +3,6 @@ import math
 
 from equinox.route.get_wind import get_wind
 # For type hinting, actual instances are passed as arguments
-from equinox.cost.cost_rev1 import CostRev1
 from equinox.wind.wind_model import WindModel
 import networkx as nx
 # Conversion factor from meters per second to knots
@@ -21,7 +20,7 @@ def backward_soft_value_iteration(
     G: nx.DiGraph,
     idx_to_node: dict[int, str],
     goal_node_idx: int, # Changed from origin_node_idx
-    cost_model: CostRev1,
+    cost_model: torch.nn.Module,
     num_nodes: int,
     num_time_bins_wall_clock: int,
     num_rho_bins: int,
@@ -279,10 +278,11 @@ def backward_soft_value_iteration(
 
         if verbose and (i % (len(sorted_transitions)//100 + 1) == 0 or i == len(sorted_transitions)-1):
             print(
-                f"  Bwd Transition {i+1}/{len(sorted_transitions)}: "
+                f"\r  Bwd Transition {i+1}/{len(sorted_transitions)}: "
                 f"u=({u_idx},{k_u},{rho_u},{phase_u}), L(v={v_idx},{k_v},{rho_v},{phase_v})={L_s_v:.3f}, "
                 f"cost(u→v)={cost_uv:.3f}, a_v={a_v:.3f}  ->  "
-                f"new L(u)={new_L_u:.3f}"
+                f"new L(u)={new_L_u:.3f}",
+                end="", flush=True
             )
 
     # After the loop, construct the sparse edge_costs_uv tensor
