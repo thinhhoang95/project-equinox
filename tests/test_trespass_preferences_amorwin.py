@@ -11,18 +11,12 @@
 # To use the older cost model, use test_trespass.py
 # *************************************************************
 
-# *************************************************************
-# This code calls the wind model directly, leading to wasted computation in
-# sequential interpolation. The new code (amorwin) amortizes the wind interpolations
-# and uses a wind model that does not require interpolation.
-# *************************************************************
-
 import os
 import torch
 import numpy as np
 import networkx as nx
 from datetime import datetime
-from equinox.dp.trespass.forward_svi_log import forward_soft_value_iteration
+from equinox.dp.trespass.amorwin.forward_svi_log import forward_soft_value_iteration
 from equinox.dp.trespass.tres_forward import tres_forward, save_transitions
 from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight, seconds_since_midnight_to_datetime
 from equinox.cost.cost_rev2 import CostRev2
@@ -110,21 +104,15 @@ def forward_svi(headless=False):
     # Load the airspace charges matrix
     ac_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_charges.npy")
 
-    # Load the wind model
-    # Consistent with test_forward_dp, using a 2024 date for wind data,
-    # while flight times (landing time here) are for 2023.
-    # wind_model = WindDate(date_str="2024-04-01", data_dir="data/era5")
-    wind_model = WindFree()
-
-    # Load the performance model for a typical narrow body jet
-    # performance_model = Performance(
-    #     climb_speed_profile=NARROW_BODY_JET_CLIMB_PROFILE,
-    #     descent_speed_profile=NARROW_BODY_JET_DESCENT_PROFILE,
-    #     climb_vertical_speed_profile=NARROW_BODY_JET_CLIMB_VS_PROFILE,
-    #     descent_vertical_speed_profile=NARROW_BODY_JET_DESCENT_VS_PROFILE,
-    #     cruise_altitude_ft=35000.0,
-    #     cruise_speed_kts=450.0,
-    # )
+    # Load pre-computed wind averages
+    wind_avg_file_path = "data/graph/wind_averages/LEMD_EGLL_2023_04_01_wind_avg.pt"
+    try:
+        avg_tailwind_knots_per_transition = torch.load(wind_avg_file_path)
+        print(f"Loaded pre-computed wind averages from {wind_avg_file_path} with shape {avg_tailwind_knots_per_transition.shape}")
+    except FileNotFoundError:
+        print(f"Wind averages file not found at {wind_avg_file_path}.")
+        print("Please run the `amortize_wind_average` function first.")
+        return
 
     # Estimated landing time
     # estimated_landing_time_str = "2023-04-01 12:00:00"
@@ -136,15 +124,6 @@ def forward_svi(headless=False):
     origin_node_idx = node_to_idx["LEMD"]
     # goal_node_idx = node_to_idx["EGLL"] # Not used in forward_svi
     num_nodes = len(G.nodes())
-
-    # Extract node coordinates from the graph - REMOVED, will be done inside forward_soft_value_iteration
-    # node_coords_deg = torch.zeros((num_nodes, 2), dtype=torch.float32, device=device)
-    # for node_name, node_idx_val in node_to_idx.items(): # Use node_to_idx for correct mapping
-    #     node_data = G.nodes[node_name]
-    #     lat = float(node_data['lat'])
-    #     lon = float(node_data['lon'])
-    #     node_coords_deg[node_idx_val, 0] = lat  # latitude
-    #     node_coords_deg[node_idx_val, 1] = lon  # longitude
 
     # Convert matrices to torch tensors
     distance_matrix_d = torch.tensor(dist_matrix, dtype=torch.float32, device=device)
@@ -222,7 +201,8 @@ def forward_svi(headless=False):
     time_start = time.time()
     V_soft = forward_soft_value_iteration(
         state_transitions=transitions,
-        G=G, 
+        avg_tailwind_knots_per_transition=avg_tailwind_knots_per_transition.to(device),
+        G=G,
         idx_to_node=idx_to_node,
         origin_node_idx=origin_node_idx,
         cost_model=cost_model_instance,
@@ -232,10 +212,6 @@ def forward_svi(headless=False):
         num_phases=num_phases,
         distance_matrix_d=distance_matrix_d,
         airspace_charge_matrix_ac=airspace_charge_matrix_ac,
-        # node_coords_deg=node_coords_deg, # REMOVED
-        wind_model=wind_model,
-        min_wall_clock_time_sec=min_wall_clock_time_sec,
-        delta_t_wall_clock_sec=delta_t_wall_clock_sec,
         device=device,
         verbose=True
     )
@@ -627,11 +603,11 @@ def test_tres_sampler(headless=True):
 if __name__ == '__main__':
     # Super initialization of the cost model, graph, and other global variables
     _initialize_cost_model()
-    thinning()
-    amortize_wind_average()
+    # thinning()
+    # amortize_wind_average()
     # forward_tres()
     # backward_tres()
     # backward_svi(headless=True)
-    # forward_svi(headless=True) # headless = false: ask for confirmation
+    forward_svi(headless=True) # headless = false: ask for confirmation
     # print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')
     # test_tres_sampler(headless=False)
