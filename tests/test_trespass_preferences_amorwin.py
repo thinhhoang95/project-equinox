@@ -16,6 +16,7 @@ import torch
 import numpy as np
 import networkx as nx
 from datetime import datetime
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from equinox.dp.trespass.amorwin.forward_svi_log import forward_soft_value_iteration
 from equinox.dp.trespass.tres_forward import tres_forward, save_transitions
 from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight, seconds_since_midnight_to_datetime
@@ -266,7 +267,7 @@ def forward_svi(headless=False):
 
     return V_soft_np
 
-from equinox.dp.trespass.backward_svi_log_cost import backward_soft_value_iteration
+from equinox.dp.trespass.amorwin.backward_svi_log_cost import backward_soft_value_iteration
 
 def backward_svi(headless=False):
     global cost_model_instance
@@ -282,8 +283,14 @@ def backward_svi(headless=False):
     # Load the airspace charges matrix
     ac_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_charges.npy")
 
-    # Load the wind model (using WindFree for simplicity and consistency with forward_svi example)
-    wind_model = WindFree()
+    # Load pre-computed wind averages
+    wind_avg_file_path = "data/graph/wind_averages/LEMD_EGLL_2023_04_01_wind_avg.pt"
+    try:
+        avg_tailwind_knots_per_transition = torch.load(wind_avg_file_path)
+        print(f"Loaded pre-computed wind averages from {wind_avg_file_path}")
+    except FileNotFoundError:
+        print(f"Wind averages file not found at {wind_avg_file_path}. Please run `amortize_wind_average` first.")
+        return
 
     # Estimated takeoff time (used for defining the time window start for k_idx)
     estimated_takeoff_time_str = "2023-04-01 10:15:00"
@@ -367,7 +374,8 @@ def backward_svi(headless=False):
     time_start = time.time()
     V_soft_bwd, edge_costs = backward_soft_value_iteration(
         state_transitions=transitions,
-        G=G, 
+        avg_tailwind_knots_per_transition=avg_tailwind_knots_per_transition.to(device),
+        G=G,
         idx_to_node=idx_to_node,
         goal_node_idx=goal_node_idx,
         cost_model=cost_model_instance,
@@ -377,9 +385,6 @@ def backward_svi(headless=False):
         num_phases=num_phases,
         distance_matrix_d=distance_matrix_d,
         airspace_charge_matrix_ac=airspace_charge_matrix_ac,
-        wind_model=wind_model,
-        min_wall_clock_time_sec=min_wall_clock_time_sec,
-        delta_t_wall_clock_sec=delta_t_wall_clock_sec,
         device=device,
         verbose=True
     )
@@ -600,14 +605,60 @@ def test_tres_sampler(headless=True):
     #    print("Warning: Initial Z_b value is not suitable for starting sampling.")
 
 
+def run_backward_svi_wrapper():
+    """Wrapper function for backward_svi to run in separate process"""
+    _initialize_cost_model()
+    print("Starting backward SVI in parallel process...")
+    return backward_svi(headless=True)
+
+
+def run_forward_svi_wrapper():
+    """Wrapper function for forward_svi to run in separate process"""
+    _initialize_cost_model()
+    print("Starting forward SVI in parallel process...")
+    return forward_svi(headless=True)
+
+
+def run_svi_parallel():
+    """Run both backward and forward SVI in parallel using multiprocessing"""
+    print("Running backward and forward SVI in parallel...")
+    
+    with ProcessPoolExecutor(max_workers=2) as executor:
+        # Submit both tasks
+        future_backward = executor.submit(run_backward_svi_wrapper)
+        future_forward = executor.submit(run_forward_svi_wrapper)
+        
+        # Wait for both to complete and get results
+        results = {}
+        for future in as_completed([future_backward, future_forward]):
+            try:
+                if future == future_backward:
+                    results['backward'] = future.result()
+                    print("Backward SVI completed successfully!")
+                elif future == future_forward:
+                    results['forward'] = future.result()
+                    print("Forward SVI completed successfully!")
+            except Exception as exc:
+                if future == future_backward:
+                    print(f"Backward SVI generated an exception: {exc}")
+                elif future == future_forward:
+                    print(f"Forward SVI generated an exception: {exc}")
+                raise
+    
+    print("Both SVI computations completed!")
+    return results
+
+
 if __name__ == '__main__':
     # Super initialization of the cost model, graph, and other global variables
-    _initialize_cost_model()
+    _initialize_cost_model() # always ON
     # thinning()
     # amortize_wind_average()
     # forward_tres()
     # backward_tres()
-    # backward_svi(headless=True)
-    forward_svi(headless=True) # headless = false: ask for confirmation
+    
+    # Run both SVI functions in parallel
+    run_svi_parallel()
+    
     # print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')
     # test_tres_sampler(headless=False)
