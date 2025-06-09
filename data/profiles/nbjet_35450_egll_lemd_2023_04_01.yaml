@@ -1,0 +1,31 @@
+aircraft_model: NARROW_BODY_JET
+charges_file_path: data/graph/LEMD_EGLL_2023_04_01_charges.npy
+climb_phase_switch_allowance_climb_time_bins: 10
+cost_model_beta0: 0.0
+cost_model_beta1: 0.01
+cost_model_beta2: 0.0
+cost_model_beta3: 1.0
+cruise_altitude_ft: 35000.0
+cruise_speed_kts: 450.0
+delta_t_seconds: 600
+device_preference: cuda
+distances_file_path: data/graph/LEMD_EGLL_2023_04_01_distances.npy
+estimated_landing_time_str: '2023-04-01 12:00:00'
+estimated_takeoff_time_str: '2023-04-01 10:15:00'
+etto_delta_t_seconds: 30
+file_prefix: LEMD_EGLL_2023_04_01
+goal_elevation_ft: 0.0
+goal_node: EGLL
+graph_file_path: data/graph/LEMD_EGLL_2023_04_01.gml
+initial_alt_ft: 0.0
+landing_time_str: '2023-04-01 12:00:00'
+max_elapsed_time_since_takeoff_hours: 0.75
+max_flight_duration_hours: 5.0
+origin_node: LEMD
+output_dir: data/graph/transitions
+source_elevation_ft: 0.0
+takeoff_time_str: '2023-04-01 10:15:00'
+thinning_output_file_name: LEMD_EGLL_2023_04_01_REACHABLE_WIND
+tres_backward_output_file_name: LEMD_EGLL_2023_04_01_CLSR_WIND
+tres_forward_output_file_name: LEMD_EGLL_2023_04_01_CLB_WIND
+wind_avg_file_path: data/graph/wind_averages/LEMD_EGLL_2023_04_01_wind_avg.pt

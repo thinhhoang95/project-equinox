@@ -14,88 +14,50 @@
 import os
 import torch
 import numpy as np
-import networkx as nx
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from equinox.dp.trespass.amorwin.forward_svi_log import forward_soft_value_iteration
 from equinox.dp.trespass.tres_forward import tres_forward, save_transitions
 from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
-from equinox.cost.cost_rev2 import CostRev2
-from equinox.wind.wind_date import WindDate
-from equinox.vnav.vnav_performance import Performance
-from equinox.vnav.vnav_profiles_rev1 import NARROW_BODY_JET_CLIMB_PROFILE, NARROW_BODY_JET_DESCENT_PROFILE, NARROW_BODY_JET_CLIMB_VS_PROFILE, NARROW_BODY_JET_DESCENT_VS_PROFILE
 from equinox.dp.trespass.sparse_io_utils import save_sparse_coo_tensor_with_convention, load_sparse_coo_tensor_with_convention
 import pickle
 
+from equinox.config import RunConfiguration
 
-def _initialize_cost_model():
-    global cost_model_instance
-    global G 
-    global node_to_idx
-    global idx_to_node
-
-    # Load the route graph
-    G = nx.read_gml("data/graph/LEMD_EGLL_2023_04_01.gml")
-    node_to_idx = {node: i for i, node in enumerate(G.nodes())}
-    idx_to_node = {i: node for i, node in enumerate(G.nodes())}
-    cost_model_instance = CostRev2(beta0=0.0, beta1=1e-2, beta2=0.0, beta3=1.0, num_waypoints=len(G.nodes()), device="cpu")
-    print(f"Cost model initialized with {len(G.nodes())} waypoints")
-
-def forward_tres():
+def forward_tres(config: RunConfiguration, components: dict):
     
     print('Test: Forward Dynamic Programming (forward_dp_vec2)')
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = components['device']
     print(f"Using device: {device}")
 
-    # Load the route graph
-    G = nx.read_gml("data/graph/LEMD_EGLL_2023_04_01.gml")
-
-    node_list_for_matrix = list(G.nodes()) # Consistent order for matrix indexing
-    node_to_idx_for_matrix = {nid: i for i, nid in enumerate(node_list_for_matrix)}
-    num_actual_nodes = len(node_list_for_matrix)
-
-    # Load the distance matrix
-    dist_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_distances.npy")
-    
-    # Load the airspace charges matrix
-    ac_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_charges.npy")
-
-    # Load the wind model
-    wind_model = WindDate(date_str="2024-04-01", data_dir="data/era5")
-
-    # Load the performance model for a typical narrow body jet
-    performance_model = Performance(
-        climb_speed_profile=NARROW_BODY_JET_CLIMB_PROFILE,
-        descent_speed_profile=NARROW_BODY_JET_DESCENT_PROFILE,
-        climb_vertical_speed_profile=NARROW_BODY_JET_CLIMB_VS_PROFILE,
-        descent_vertical_speed_profile=NARROW_BODY_JET_DESCENT_VS_PROFILE,
-        cruise_altitude_ft=35000.0,
-        cruise_speed_kts=450.0,
-    )
-
-    # Load the cost model
-    cost_model_instance = cost_model_1
+    G = components['graph']
+    dist_matrix = components['dist_matrix']
+    ac_matrix = components['ac_matrix']
+    wind_model = components['wind_model']
+    performance_model = components['performance_model']
+    cost_model_instance = components['cost_model']
+    num_actual_nodes = components['num_nodes']
     
     # Takeoff time
-    takeoff_time_str = "2023-04-01 12:00:00"
+    takeoff_time_str = config.takeoff_time_str
 
     try:
         eta_final, alt_final, phase_final, transitions_list = tres_forward(
             graph=G,
-            source_node_id="LEMD",
+            source_node_id=config.origin_node,
             takeoff_time_str=takeoff_time_str,
-            source_elevation_ft=0.0, # Assuming SFO at sea level
-            goal_elevation_ft=0.0,   # Not used during forward DP
+            source_elevation_ft=config.source_elevation_ft,
+            goal_elevation_ft=config.goal_elevation_ft,
             cost_model=cost_model_instance,
             wind_model=wind_model,
             performance_model=performance_model,
             dist_matrix_np=dist_matrix,
             ac_matrix_np=ac_matrix,
-            initial_alt_ft=0.0, # Start at 0ft AMSL if source_elevation_ft is 0 for profile alignment
-            delta_t_seconds=600, # time window length
-            max_flight_duration_hours=5, # max duration to consider for time bins
-            etto_delta_t_seconds=30, # ETTO bin width
-            max_elapsed_time_since_takeoff_hours=0.75, # max elapsed time to consider for ETTO bins
+            initial_alt_ft=config.initial_alt_ft,
+            delta_t_seconds=config.delta_t_seconds,
+            max_flight_duration_hours=config.max_flight_duration_hours,
+            etto_delta_t_seconds=config.etto_delta_t_seconds,
+            max_elapsed_time_since_takeoff_hours=config.max_elapsed_time_since_takeoff_hours,
             device=device
         )
         # transitions_list = [(node_1, eps_1, alt_1, node_2, eps_2, alt_2)]
@@ -134,13 +96,11 @@ def forward_tres():
         #             print(f"  Phase: {active_phase_val if active_phase_val != -1 else 'N/A'}")
 
         # Dump the value function V to a file
-        import os
-
-        output_dir = "data/graph/transitions"
+        output_dir = config.output_dir
         os.makedirs(output_dir, exist_ok=True)
         
         # Save the transitions_list to a file
-        save_transitions(transitions_list, output_dir, "LEMD_EGLL_2023_04_01_CLB_WIND")
+        save_transitions(transitions_list, output_dir, config.tres_forward_output_file_name)
 
         return transitions_list
 
@@ -151,63 +111,35 @@ def forward_tres():
 
 import pickle
 import networkx as nx
-from equinox.cost.cost_model_1 import cost_model_1
 from equinox.wind.wind_date import WindDate
 from equinox.vnav.vnav_performance import Performance
 from equinox.vnav.vnav_profiles_rev1 import NARROW_BODY_JET_CLIMB_PROFILE, NARROW_BODY_JET_DESCENT_PROFILE, NARROW_BODY_JET_CLIMB_VS_PROFILE, NARROW_BODY_JET_DESCENT_VS_PROFILE
 import numpy as np
 import torch
 
-def backward_tres():
-    transitions_list = pickle.load(open("data/graph/transitions/LEMD_EGLL_2023_04_01_CLB_WIND.pkl", "rb")) # from test_toc_forward_dp.ipynb, to be rewritten into a more comprehensive package
+def backward_tres(config: RunConfiguration, components: dict):
+    forward_pass_output_path = os.path.join(config.output_dir, config.tres_forward_output_file_name + ".pkl")
+    transitions_list = pickle.load(open(forward_pass_output_path, "rb"))
     
-    # Load the route graph
-    G = nx.read_gml("data/graph/LEMD_EGLL_2023_04_01.gml")
-    node_to_idx = {node: i for i, node in enumerate(G.nodes())}
-    idx_to_node = {i: node for i, node in enumerate(G.nodes())}
-
-    node_list_for_matrix = list(G.nodes()) # Consistent order for matrix indexing
-    # node_to_idx_for_matrix = {nid: i for i, nid in enumerate(node_list_for_matrix)} # Not directly used in this test script main flow
-    num_actual_nodes = len(node_list_for_matrix)
-
-    # Load the distance matrix
-    dist_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_distances.npy")
-
-    # Load the airspace charges matrix
-    ac_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_charges.npy")
-
-    # Load the wind model
-    # Consistent with test_forward_dp, using a 2024 date for wind data,
-    # while flight times (landing time here) are for 2023.
-    wind_model = WindDate(date_str="2024-04-01", data_dir="data/era5") # or WindFree()
-
-    # Load the performance model for a typical narrow body jet
-    performance_model = Performance(
-        climb_speed_profile=NARROW_BODY_JET_CLIMB_PROFILE,
-        descent_speed_profile=NARROW_BODY_JET_DESCENT_PROFILE,
-        climb_vertical_speed_profile=NARROW_BODY_JET_CLIMB_VS_PROFILE,
-        descent_vertical_speed_profile=NARROW_BODY_JET_DESCENT_VS_PROFILE,
-        cruise_altitude_ft=35000.0,
-        cruise_speed_kts=450.0,
-    )
-
-    # Load the cost model
-    cost_model_instance = cost_model_1
+    # Load from components
+    G = components['graph']
+    wind_model = components['wind_model']
+    performance_model = components['performance_model']
+    device = components['device']
 
     # Estimated landing time
-    estimated_landing_time_str = "2023-04-01 12:00:00"
+    estimated_landing_time_str = config.estimated_landing_time_str
     # Estimated takeoff time
-    estimated_takeoff_time_str = "2023-04-01 10:15:00"
+    estimated_takeoff_time_str = config.estimated_takeoff_time_str
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     from equinox.dp.trespass.tres_backward import tres_backward
 
     state_closure_list = tres_backward(
         graph=G,
-        goal_node_id="EGLL",
+        goal_node_id=config.goal_node,
         estimated_landing_time_str=estimated_landing_time_str,
-        origin_elevation_ft=0.0,
-        destination_elevation_ft=0.0,
+        origin_elevation_ft=config.source_elevation_ft,
+        destination_elevation_ft=config.goal_elevation_ft,
         wind_model=wind_model,
         performance_model=performance_model,
         transitions_list=transitions_list,
@@ -215,80 +147,66 @@ def backward_tres():
         final_alt_ft=0.0,
         delta_t_seconds_wall_clock=300,
         delta_t_seconds_climb=30,
-        max_flight_duration_hours=5,
-        climb_phase_switch_allowance_climb_time_bins=10,
+        max_flight_duration_hours=config.max_flight_duration_hours,
+        climb_phase_switch_allowance_climb_time_bins=config.climb_phase_switch_allowance_climb_time_bins,
         device=device
     )
 
-    save_transitions(state_closure_list, "data/graph/transitions", "LEMD_EGLL_2023_04_01_CLSR_WIND")
+    save_transitions(state_closure_list, config.output_dir, config.tres_backward_output_file_name)
 
     return state_closure_list
 
-def thinning():
+def thinning(config: RunConfiguration, components: dict):
     from equinox.dp.trespass.thinning import thin_closures
     from equinox.dp.trespass.tres_forward import save_transitions
     # Load closure_list from the backward tres pass
-    closure_list = pickle.load(open("data/graph/transitions/LEMD_EGLL_2023_04_01_CLSR_WIND.pkl", "rb"))
+    backward_pass_output_path = os.path.join(config.output_dir, config.tres_backward_output_file_name + ".pkl")
+    closure_list = pickle.load(open(backward_pass_output_path, "rb"))
     print(f"Loaded {len(closure_list)} closures from backward tres pass")
-    thinned_closures = thin_closures(node_to_idx['LEMD'], node_to_idx['EGLL'], 36, G, closure_list)
-    save_transitions(thinned_closures, 'data/graph/transitions', 'LEMD_EGLL_2023_04_01_REACHABLE_WIND')
 
-def amortize_wind_average():
+    G = components['graph']
+    node_to_idx = components['node_to_idx']
+
+    thinned_closures = thin_closures(node_to_idx[config.origin_node], node_to_idx[config.goal_node], 36, G, closure_list)
+    save_transitions(thinned_closures, config.output_dir, config.thinning_output_file_name)
+
+def amortize_wind_average(config: RunConfiguration, components: dict):
     print("Pre-computing wind averages on all transititions")
     # Calculate the average wind for all transitions
-    from equinox.wind.wind_date import WindDate
-    from equinox.wind.wind_model import WindModel 
-    wind_model = WindDate(date_str="2024-04-01", data_dir="data/era5")
+    wind_model = components['wind_model']
 
     # Load the transitions
-    transitions = pickle.load(open("data/graph/transitions/LEMD_EGLL_2023_04_01_REACHABLE_WIND.pkl", "rb"))
+    thinned_transitions_path = os.path.join(config.output_dir, config.thinning_output_file_name + ".pkl")
+    transitions = pickle.load(open(thinned_transitions_path, "rb"))
 
     delta_t_wall_clock_sec = 300.0  # 5 minutes
-    max_flight_duration_hours = 5.0
+    max_flight_duration_hours = config.max_flight_duration_hours
     num_time_bins_wall_clock = int(max_flight_duration_hours * 3600 / delta_t_wall_clock_sec) + 1
-    estimated_takeoff_time_str = "2023-04-01 10:15:00"
+    estimated_takeoff_time_str = config.estimated_takeoff_time_str
     takeoff_ssm = datestr_to_seconds_since_midnight(estimated_takeoff_time_str)
     min_wall_clock_time_sec = float(takeoff_ssm)
 
-    # Load the route graph
-    G = nx.read_gml("data/graph/LEMD_EGLL_2023_04_01.gml")
-    node_to_idx = {node: i for i, node in enumerate(G.nodes())}
-    idx_to_node = {i: node for i, node in enumerate(G.nodes())}
-
-    # Extract node coordinates from the graph
-    node_coords_deg = torch.zeros((len(G.nodes()), 2), dtype=torch.float32)
-    for node_name, node_idx_val in node_to_idx.items():
-        node_data = G.nodes[node_name]
-        lat = node_data['lat']
-        lon = node_data['lon']
-        node_coords_deg[node_idx_val, 0] = lat
-        node_coords_deg[node_idx_val, 1] = lon
+    node_coords_deg = components['node_coords_deg']
 
     wind_avg = wind_model.get_average_tailwind_on_edges_knots(transitions, node_coords_deg, min_wall_clock_time_sec, delta_t_wall_clock_sec, num_integration_steps=3)
     # Save the wind averages to a file for later use
-    wind_avg_file_path = "data/graph/wind_averages/LEMD_EGLL_2023_04_01_wind_avg.pt"
+    wind_avg_file_path = config.wind_avg_file_path
     os.makedirs(os.path.dirname(wind_avg_file_path), exist_ok=True)
     torch.save(wind_avg, wind_avg_file_path)
     print(f"Saved wind averages tensor of shape {wind_avg.shape} to {wind_avg_file_path}")
 
-def forward_svi(headless=False):
-    global cost_model_instance
-    global G 
-    global node_to_idx
-    global idx_to_node
-
-    node_list_for_matrix = list(G.nodes()) # Consistent order for matrix indexing
-    # node_to_idx_for_matrix = {nid: i for i, nid in enumerate(node_list_for_matrix)} # Not directly used in this test script main flow
-    num_actual_nodes = len(node_list_for_matrix)
-
-    # Load the distance matrix
-    dist_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_distances.npy")
-
-    # Load the airspace charges matrix
-    ac_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_charges.npy")
+def forward_svi(config: RunConfiguration, components: dict, headless=False):
+    dist_matrix = components['dist_matrix']
+    ac_matrix = components['ac_matrix']
+    G = components['graph']
+    idx_to_node = components['idx_to_node']
+    cost_model_instance = components['cost_model']
+    origin_node_idx = components['origin_node_idx']
+    device = components['device']
+    num_nodes = components['num_nodes']
 
     # Load pre-computed wind averages
-    wind_avg_file_path = "data/graph/wind_averages/LEMD_EGLL_2023_04_01_wind_avg.pt"
+    wind_avg_file_path = config.wind_avg_file_path
     try:
         avg_tailwind_knots_per_transition = torch.load(wind_avg_file_path)
         print(f"Loaded pre-computed wind averages from {wind_avg_file_path} with shape {avg_tailwind_knots_per_transition.shape}")
@@ -297,16 +215,12 @@ def forward_svi(headless=False):
         print("Please run the `amortize_wind_average` function first.")
         return
 
-    # Estimated landing time
-    # estimated_landing_time_str = "2023-04-01 12:00:00"
     # Estimated takeoff time
-    estimated_takeoff_time_str = "2023-04-01 10:15:00"
+    estimated_takeoff_time_str = config.estimated_takeoff_time_str
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    transitions = pickle.load(open("data/graph/transitions/LEMD_EGLL_2023_04_01_REACHABLE_WIND.pkl", "rb"))
-    origin_node_idx = node_to_idx["LEMD"]
-    # goal_node_idx = node_to_idx["EGLL"] # Not used in forward_svi
-    num_nodes = len(G.nodes())
+    device = components['device']
+    thinned_transitions_path = os.path.join(config.output_dir, config.thinning_output_file_name + ".pkl")
+    transitions = pickle.load(open(thinned_transitions_path, "rb"))
 
     # Convert matrices to torch tensors
     distance_matrix_d = torch.tensor(dist_matrix, dtype=torch.float32, device=device)
@@ -315,21 +229,10 @@ def forward_svi(headless=False):
     # Set up time parameters
     from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
     takeoff_ssm = datestr_to_seconds_since_midnight(estimated_takeoff_time_str)
-    # landing_ssm = datestr_to_seconds_since_midnight(estimated_landing_time_str) # This variable is not used in the current function scope
     
     # Time bin parameters
     delta_t_wall_clock_sec = 300.0  # 5 minutes
-    # max_flight_duration_hours = 5.0 # Original static definition
-    # num_time_bins_wall_clock = int(max_flight_duration_hours * 3600 / delta_t_wall_clock_sec) + 1 # Original static definition
     
-    # Climb time parameters (original static definitions, now derived)
-    # delta_t_climb_sec = 30.0  # 30 seconds for climb bins
-    # max_climb_time_hours = 0.75
-    # num_rho_bins = 37 # this number is from the tres_forward pass: maximum is 36 + 1 for the NUMBER OF BINS (0 to 36, which is 37 bins)
-    
-    # Phase parameters (original static definition, now derived)
-    # num_phases = 3  # CLIMB=0, CRUISE=1, DESCENT=2
-
     # Dynamically determine num_time_bins_wall_clock, num_rho_bins, and num_phases from transitions
     max_k_val = 0
     max_rho_val = 0
@@ -347,7 +250,7 @@ def forward_svi(headless=False):
     # Check against a configured max duration, if necessary (optional, similar to backward_svi's warning)
     # This part is illustrative; you might want to adjust max_flight_duration_hours if it's still a relevant concept
     # or rely solely on transition data.
-    configured_max_flight_duration_hours = 5.0 
+    configured_max_flight_duration_hours = config.max_flight_duration_hours
     max_bins_from_config = int(configured_max_flight_duration_hours * 3600 / delta_t_wall_clock_sec) + 1
     if num_time_bins_wall_clock > max_bins_from_config:
         print(f"Warning: max_k_val from transitions ({max_k_val}) suggests more time bins ({num_time_bins_wall_clock}) than a typical configured max duration would imply ({max_bins_from_config}). Using derived value from transitions.")
@@ -418,8 +321,8 @@ def forward_svi(headless=False):
     # Convert V_soft to a numpy array
     V_soft_np = V_soft.cpu().numpy()
     # Save V_soft to a file
-    import os
-    os.makedirs("data/graph/V_soft", exist_ok=True)
+    output_dir_path = "data/graph/V_soft" 
+    os.makedirs(output_dir_path, exist_ok=True)
     
     # Create sparse tensor for saving: store only finite values from V_soft
     finite_mask = torch.isfinite(V_soft)
@@ -435,8 +338,7 @@ def forward_svi(headless=False):
         device=V_soft.device
     ).coalesce()
 
-    output_dir_path = "data/graph/V_soft" 
-    sparse_file_name = "LEMD_EGLL_2023_04_01_V_FWD_SPRSE_WIND.pt" 
+    sparse_file_name = f"{config.file_prefix}_V_FWD_SPRSE_WIND.pt"
     sparse_file_path = os.path.join(output_dir_path, sparse_file_name)
     
     # save_sparse_coo_tensor_with_convention is imported at the top of test_trespass.py
@@ -451,22 +353,18 @@ def forward_svi(headless=False):
 
 from equinox.dp.trespass.amorwin.backward_svi_log_cost import backward_soft_value_iteration
 
-def backward_svi(headless=False):
-    global cost_model_instance
-    global G 
-    global node_to_idx
-    global idx_to_node
-
-    num_nodes = len(G.nodes())
-
-    # Load the distance matrix
-    dist_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_distances.npy")
-
-    # Load the airspace charges matrix
-    ac_matrix = np.load("data/graph/LEMD_EGLL_2023_04_01_charges.npy")
+def backward_svi(config: RunConfiguration, components: dict, headless=False):
+    num_nodes = components['num_nodes']
+    dist_matrix = components['dist_matrix']
+    ac_matrix = components['ac_matrix']
+    G = components['graph']
+    idx_to_node = components['idx_to_node']
+    goal_node_idx = components['goal_node_idx']
+    cost_model_instance = components['cost_model']
+    device = components['device']
 
     # Load pre-computed wind averages
-    wind_avg_file_path = "data/graph/wind_averages/LEMD_EGLL_2023_04_01_wind_avg.pt"
+    wind_avg_file_path = config.wind_avg_file_path
     try:
         avg_tailwind_knots_per_transition = torch.load(wind_avg_file_path)
         print(f"Loaded pre-computed wind averages from {wind_avg_file_path}")
@@ -475,15 +373,12 @@ def backward_svi(headless=False):
         return
 
     # Estimated takeoff time (used for defining the time window start for k_idx)
-    estimated_takeoff_time_str = "2023-04-01 10:15:00"
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    estimated_takeoff_time_str = config.estimated_takeoff_time_str
     
     # Load transitions - these define the state space and connections
     # Ensure this is the correct transitions file. The forward SVI uses REACHABLE.
-    transitions = pickle.load(open("data/graph/transitions/LEMD_EGLL_2023_04_01_REACHABLE_WIND.pkl", "rb"))
-    
-    goal_node_idx = node_to_idx["EGLL"] 
+    thinned_transitions_path = os.path.join(config.output_dir, config.thinning_output_file_name + ".pkl")
+    transitions = pickle.load(open(thinned_transitions_path, "rb"))
 
     # Convert matrices to torch tensors
     distance_matrix_d = torch.tensor(dist_matrix, dtype=torch.float32, device=device)
@@ -495,7 +390,7 @@ def backward_svi(headless=False):
     
     # Time bin parameters (should be consistent with those used to generate transitions)
     delta_t_wall_clock_sec = 300.0  # 5 minutes
-    max_flight_duration_hours = 5.0
+    max_flight_duration_hours = config.max_flight_duration_hours
     num_time_bins_wall_clock = int(max_flight_duration_hours * 3600 / delta_t_wall_clock_sec) + 1
     
     # Profile time bins (rho_bins)
@@ -588,8 +483,8 @@ def backward_svi(headless=False):
                     print(f"  V_soft_bwd[{goal_node_idx}, {k}, {rho}, {phase}] = {val:.4f}")
 
     V_soft_bwd_np = V_soft_bwd.cpu().numpy()
-    import os
-    os.makedirs("data/graph/V_soft", exist_ok=True)
+    output_dir_path = "data/graph/V_soft"
+    os.makedirs(output_dir_path, exist_ok=True)
     
     # Create sparse tensor for saving: store only finite values from V_soft_bwd
     finite_mask = torch.isfinite(V_soft_bwd)
@@ -605,8 +500,7 @@ def backward_svi(headless=False):
         device=V_soft_bwd.device
     ).coalesce()
 
-    output_dir_path = "data/graph/V_soft" 
-    sparse_file_name = "LEMD_EGLL_2023_04_01_V_BWD_SPRSE_WIND.pt" 
+    sparse_file_name = f"{config.file_prefix}_V_BWD_SPRSE_WIND.pt"
     sparse_file_path = os.path.join(output_dir_path, sparse_file_name)
     
     # save_sparse_coo_tensor_with_convention is imported at the top of test_trespass.py
@@ -617,38 +511,32 @@ def backward_svi(headless=False):
     )
     print(f"Saved sparse V_soft_bwd (finite values only) to {sparse_file_path}")
     
-    save_sparse_coo_tensor_with_convention(edge_costs, "data/graph/V_soft/LEMD_EGLL_2023_04_01_COST_WIND.pt")
+    edge_costs_path = os.path.join(output_dir_path, f"{config.file_prefix}_COST_WIND.pt")
+    save_sparse_coo_tensor_with_convention(edge_costs, edge_costs_path)
     return V_soft_bwd_np
 
 from equinox.sampling.trespass.sampler import sample_tres_trajectory
 
-def test_tres_sampler(headless=True):
+def test_tres_sampler(config: RunConfiguration, components: dict, headless=True):
     print("\n--- Test TRes Sampler ---")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = components['device']
     print(f"Using device: {device}")
 
     # Load the route graph
-    G = nx.read_gml("data/graph/LEMD_EGLL_2023_04_01.gml")
-    node_to_idx = {node: i for i, node in enumerate(G.nodes())}
-    idx_to_node = {i: node for i, node in enumerate(G.nodes())}
-    num_nodes = len(G.nodes())
+    G = components['graph']
+    node_to_idx = components['node_to_idx']
+    idx_to_node = components['idx_to_node']
 
     # Load backward soft value function (log values) from sparse format
     try:
+        v_bwd_sparse_path = os.path.join("data/graph/V_soft", f"{config.file_prefix}_V_BWD_SPRSE_WIND.pt")
         V_soft_bwd_sparse, interpretation_note = load_sparse_coo_tensor_with_convention(
-            "data/graph/V_soft/LEMD_EGLL_2023_04_01_V_BWD_SPRSE_WIND.pt",
+            v_bwd_sparse_path,
             target_device=device
-            # interpretation_note="Implicit zeros should be treated as float('inf'). Only explicitly stored values are actual costs."
         )
         print(f"Loaded sparse backward value function. Interpretation: {interpretation_note}")
-        # V_soft_bwd_np = V_soft_bwd_sparse.to_dense().cpu().numpy() # Original line
 
-        # New logic to fill unspecified sparse entries with -inf when converting to dense
-        # 1. Coalesce the sparse tensor (good practice, ensures unique indices).
         V_soft_bwd_sparse_coalesced = V_soft_bwd_sparse.coalesce()
-
-        # 2. Create a dense tensor filled with -infinity.
-        #    Use the sparse tensor's dtype and device.
         V_soft_bwd_dense_filled = torch.full(
             V_soft_bwd_sparse_coalesced.shape,
             -float('inf'),
@@ -656,16 +544,12 @@ def test_tres_sampler(headless=True):
             device=V_soft_bwd_sparse_coalesced.device
         )
 
-        # 3. Get indices and values from the coalesced sparse tensor.
         indices = V_soft_bwd_sparse_coalesced.indices()
         values = V_soft_bwd_sparse_coalesced.values()
 
-        # 4. Place the explicit values from the sparse tensor into the dense tensor.
-        #    This is done only if there are any explicit values.
         if values.numel() > 0:
             V_soft_bwd_dense_filled[tuple(indices)] = values
         
-        # 5. Convert to numpy array on CPU.
         V_soft_bwd_np = V_soft_bwd_dense_filled.cpu().numpy()
 
     except FileNotFoundError:
@@ -678,32 +562,31 @@ def test_tres_sampler(headless=True):
 
     # Load edge costs
     try:
+        edge_costs_path = os.path.join("data/graph/V_soft", f"{config.file_prefix}_COST_WIND.pt")
         edge_costs_tensor, interpretation_note = load_sparse_coo_tensor_with_convention(
-            "data/graph/V_soft/LEMD_EGLL_2023_04_01_COST_WIND.pt",
+            edge_costs_path,
             target_device=device
-        ) # actually, sparse values are defaulted to 0 here (which is wrong, should be inf instead), but it does not matter because we never select these values during the sampling process
+        )
         print(f"Edge costs loaded. Interpretation Note: {interpretation_note}")
     except FileNotFoundError:
         print("Edge costs file not found. Please run backward_svi first.")
         print("Skipping TRes Sampler test.")
         return
 
-    origin_node_id = "LEMD"
-    goal_node_id = "EGLL"
+    origin_node_id = config.origin_node
+    goal_node_id = config.goal_node
 
     # Time parameters (consistent with backward_svi)
-    estimated_takeoff_time_str = "2023-04-01 10:15:00" # From backward_svi test
-    from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight # Already imported
+    estimated_takeoff_time_str = config.estimated_takeoff_time_str
+    from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
     takeoff_ssm = datestr_to_seconds_since_midnight(estimated_takeoff_time_str)
     
     min_wall_clock_time_sec = float(takeoff_ssm)
     delta_t_wall_clock_sec = 300.0  # 5 minutes, from backward_svi test
 
     # Initial state parameters
-    initial_k = 0 # Assuming k=0 corresponds to min_wall_clock_time_sec (takeoff time)
+    initial_k = 0
     
-    # num_rho_bins is Z_b_values.shape[2]
-    # rho_idx is 0 for "no climb time remaining". Max index is for full climb time remaining.
     if Z_b_values.shape[2] > 0:
         initial_rho = Z_b_values.shape[2] - 1 
     else:
@@ -741,8 +624,6 @@ def test_tres_sampler(headless=True):
             successful_samples += 1
             trajectories.append(trajectory)
             print(f"  Successfully sampled trajectory {i+1} with {len(trajectory)} steps.")
-            # print(f"  Trajectory: {trajectory}") # Can be very verbose
-            # Print first and last few states
             if len(trajectory) > 5:
                 print(f"    Start: {trajectory[:3]}")
                 print(f"    End: {trajectory[-3:]}")
@@ -766,63 +647,52 @@ def test_tres_sampler(headless=True):
         print(f"Max trajectory length: {max_len}")
 
     # Save trajectories to a file
-    import os
-    os.makedirs("data/graph/trajectories", exist_ok=True)
+    trajectories_dir = "data/graph/trajectories"
+    os.makedirs(trajectories_dir, exist_ok=True)
     
     # Save trajectories as text file with waypoint names separated by whitespace
-    with open("data/graph/trajectories/LEMD_EGLL_2023_04_01_CLB_trajectories.txt", "w") as f:
+    trajectories_file_path = os.path.join(trajectories_dir, f"{config.file_prefix}_CLB_trajectories.txt")
+    with open(trajectories_file_path, "w") as f:
         for i, trajectory in enumerate(trajectories):
-            # Extract waypoint names from trajectory tuples (waypoint_name, k, rho, phase)
             waypoint_names = [str(step[0]) for step in trajectory]
             trajectory_line = " ".join(waypoint_names)
             f.write(f"{trajectory_line}\n")
     
-    print(f"Saved {len(trajectories)} trajectories to data/graph/trajectories/LEMD_EGLL_2023_04_01_CLB_trajectories.txt")
-    
-    # Example of checking a specific state if needed for debugging
-    # origin_idx_val = node_to_idx[origin_node_id]
-    # initial_Z_b_val = Z_b_values[origin_idx_val, initial_k, initial_rho, initial_phase].item()
-    # print(f"Initial Z_b({origin_node_id}, k={initial_k}, rho={initial_rho}, phase={initial_phase}) = {initial_Z_b_val}")
-    # if not np.isfinite(initial_Z_b_val) or initial_Z_b_val == 0:
-    #    print("Warning: Initial Z_b value is not suitable for starting sampling.")
+    print(f"Saved {len(trajectories)} trajectories to {trajectories_file_path}")
 
 
-def run_backward_svi_wrapper():
+def run_backward_svi_wrapper(config, components):
     """Wrapper function for backward_svi to run in separate process"""
-    _initialize_cost_model()
     print("Starting backward SVI in parallel process...")
-    return backward_svi(headless=True)
+    return backward_svi(config, components, headless=True)
 
 
-def run_forward_svi_wrapper():
+def run_forward_svi_wrapper(config, components):
     """Wrapper function for forward_svi to run in separate process"""
-    _initialize_cost_model()
     print("Starting forward SVI in parallel process...")
-    return forward_svi(headless=True)
+    return forward_svi(config, components, headless=True)
 
 
-def run_forward_tres_wrapper():
+def run_forward_tres_wrapper(config, components):
     """Wrapper function for forward_tres to run in separate process"""
-    _initialize_cost_model()
     print("Starting forward tres in parallel process...")
-    return forward_tres()
+    return forward_tres(config, components)
 
 
-def run_backward_tres_wrapper():
+def run_backward_tres_wrapper(config, components):
     """Wrapper function for backward_tres to run in separate process"""
-    _initialize_cost_model()
     print("Starting backward tres in parallel process...")
-    return backward_tres()
+    return backward_tres(config, components)
 
 
-def run_tres_parallel():
+def run_tres_parallel(config, components):
     """Run both forward and backward tres passes in parallel using multiprocessing"""
     print("Running forward and backward tres passes in parallel...")
     
     with ProcessPoolExecutor(max_workers=2) as executor:
         # Submit both tasks
-        future_forward = executor.submit(run_forward_tres_wrapper)
-        future_backward = executor.submit(run_backward_tres_wrapper)
+        future_forward = executor.submit(run_forward_tres_wrapper, config, components)
+        future_backward = executor.submit(run_backward_tres_wrapper, config, components)
         
         # Wait for both to complete and get results
         results = {}
@@ -845,14 +715,14 @@ def run_tres_parallel():
     return results
 
 
-def run_svi_parallel():
+def run_svi_parallel(config, components):
     """Run both backward and forward SVI in parallel using multiprocessing"""
     print("Running backward and forward SVI in parallel...")
     
     with ProcessPoolExecutor(max_workers=2) as executor:
         # Submit both tasks
-        future_backward = executor.submit(run_backward_svi_wrapper)
-        future_forward = executor.submit(run_forward_svi_wrapper)
+        future_backward = executor.submit(run_backward_svi_wrapper, config, components)
+        future_forward = executor.submit(run_forward_svi_wrapper, config, components)
         
         # Wait for both to complete and get results
         results = {}
@@ -878,21 +748,28 @@ def run_svi_parallel():
 if __name__ == '__main__':
     import time
     time_start = time.time()
-    # Super initialization of the cost model, graph, and other global variables
-    _initialize_cost_model() # always ON
+    
+    # Load configuration
+    CONFIG_PATH = "data/profiles/nbjet_35450_egll_lemd_2023_04_01.yaml"
+    config = RunConfiguration.load_from_yaml(CONFIG_PATH)
+    
+    # Initialize components
+    components = config.initialize_all_components()
 
     # Run tres passes (they CANNOT be run in parallel because backward_tres depends on the forward passes)
-    run_forward_tres_wrapper()
-    run_backward_tres_wrapper()
+    run_forward_tres_wrapper(config, components)
+    run_backward_tres_wrapper(config, components)
 
-    thinning()
-    amortize_wind_average()
+    thinning(config, components)
+    amortize_wind_average(config, components)
     
     # Run both SVI functions in parallel
-    run_svi_parallel()
+    run_svi_parallel(config, components)
+    # forward_svi(config, components, headless=False)
+    # backward_svi(config, components, headless=False)
     
     print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')
-    # test_tres_sampler(headless=False)
+    test_tres_sampler(config, components, headless=False)
 
     time_end = time.time()
     print(f"Total clock time: {time_end - time_start} seconds")
