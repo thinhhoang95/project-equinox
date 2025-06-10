@@ -55,8 +55,8 @@ class CostRev2(nn.Module):
         self.preference_matrix_p = nn.Parameter(torch.zeros((num_waypoints, num_waypoints), dtype=torch.float32), requires_grad=True)
 
         # Make the LEMD-RBO edge highly preferred
-        with torch.no_grad():
-            self.preference_matrix_p[185, 546] = -200.0 # LEMD-RBO is highly preferred!
+        # with torch.no_grad():
+        #     self.preference_matrix_p[185, 546] = -200.0 # LEMD-RBO is highly preferred!
 
         _knots_ac_dist = knots_ac_dist if knots_ac_dist is not None else DEFAULT_KNOTS_AC_DIST
         _knots_wind = knots_wind if knots_wind is not None else DEFAULT_KNOTS_WIND
@@ -156,6 +156,9 @@ class CostRev2(nn.Module):
 
         cost_component_ac_dist = self.plm_ac_dist(ac_dist_product_batch) 
         cost_component_wind = self.plm_wind(tailwind_tensor_batch)
+
+        # For shortest time
+        # cost_component_ac_dist = ac_dist_product_batch / (450.0 + cost_component_wind)
 
         total_cost_batch = self.beta0 + \
                            self.beta1 * cost_component_ac_dist + \

@@ -351,7 +351,7 @@ def forward_svi(config: RunConfiguration, components: dict, headless=False):
 
     return V_soft_np
 
-from equinox.dp.trespass.amorwin.backward_svi_log_cost import backward_soft_value_iteration
+from equinox.dp.trespass.amorwin.backward_svi_log_cost_hardmin import backward_hard_value_iteration
 
 def backward_svi(config: RunConfiguration, components: dict, headless=False):
     num_nodes = components['num_nodes']
@@ -449,7 +449,7 @@ def backward_svi(config: RunConfiguration, components: dict, headless=False):
     # Call backward_soft_value_iteration
     import time
     time_start = time.time()
-    V_soft_bwd, edge_costs = backward_soft_value_iteration(
+    V_soft_bwd, edge_costs = backward_hard_value_iteration(
         state_transitions=transitions,
         avg_tailwind_knots_per_transition=avg_tailwind_knots_per_transition.to(device),
         G=G,
@@ -515,7 +515,7 @@ def backward_svi(config: RunConfiguration, components: dict, headless=False):
     save_sparse_coo_tensor_with_convention(edge_costs, edge_costs_path)
     return V_soft_bwd_np
 
-from equinox.sampling.trespass.sampler import sample_tres_trajectory
+from equinox.sampling.trespass.sampler_log import sample_tres_trajectory
 
 def test_tres_sampler(config: RunConfiguration, components: dict, headless=True):
     print("\n--- Test TRes Sampler ---")
@@ -539,7 +539,7 @@ def test_tres_sampler(config: RunConfiguration, components: dict, headless=True)
         V_soft_bwd_sparse_coalesced = V_soft_bwd_sparse.coalesce()
         V_soft_bwd_dense_filled = torch.full(
             V_soft_bwd_sparse_coalesced.shape,
-            -float('inf'),
+            float('inf'),
             dtype=V_soft_bwd_sparse_coalesced.dtype,
             device=V_soft_bwd_sparse_coalesced.device
         )
@@ -556,9 +556,6 @@ def test_tres_sampler(config: RunConfiguration, components: dict, headless=True)
         print("Backward value function file not found. Please run backward_svi first.")
         print("Skipping TRes Sampler test.")
         return
-
-    # Convert log values V_bwd to Z_b values for the sampler
-    Z_b_values = torch.exp(torch.from_numpy(V_soft_bwd_np).to(device))
 
     # Load edge costs
     try:
@@ -587,8 +584,8 @@ def test_tres_sampler(config: RunConfiguration, components: dict, headless=True)
     # Initial state parameters
     initial_k = 0
     
-    if Z_b_values.shape[2] > 0:
-        initial_rho = Z_b_values.shape[2] - 1 
+    if V_soft_bwd_dense_filled.shape[2] > 0:
+        initial_rho = V_soft_bwd_dense_filled.shape[2] - 1 
     else:
         print("Error: Number of rho bins is 0. Cannot determine initial_rho.")
         return
@@ -597,7 +594,7 @@ def test_tres_sampler(config: RunConfiguration, components: dict, headless=True)
 
     print(f"Starting sampling from {origin_node_id} (idx {node_to_idx[origin_node_id]}) to {goal_node_id} (idx {node_to_idx[goal_node_id]})")
     print(f"Initial state: k={initial_k}, rho={initial_rho}, phase={initial_phase}")
-    print(f"Z_b shape: {Z_b_values.shape}")
+    print(f"V_bwd shape: {V_soft_bwd_dense_filled.shape}")
     print(f"Edge costs indices shape: {edge_costs_tensor.indices().shape}, values shape: {edge_costs_tensor.values().shape}")
 
 
@@ -605,10 +602,11 @@ def test_tres_sampler(config: RunConfiguration, components: dict, headless=True)
     successful_samples = 0
     failed_samples = 0
     trajectories = []
+    all_trajectory_costs = []
 
     for i in range(num_samples):
         print(f"\nSampling trajectory {i+1}/{num_samples}...")
-        trajectory = sample_tres_trajectory(
+        trajectory, trajectory_costs = sample_tres_trajectory(
             G=G,
             node_to_idx=node_to_idx,
             idx_to_node=idx_to_node,
@@ -616,14 +614,17 @@ def test_tres_sampler(config: RunConfiguration, components: dict, headless=True)
             goal_node_id=goal_node_id,
             initial_rho=initial_rho,
             initial_phase=initial_phase,
-            backward_values=Z_b_values, # This is Z_b = exp(V_bwd)
+            soft_cost_to_go=V_soft_bwd_dense_filled, # This is V_bwd
             edge_costs_uv=edge_costs_tensor,
             max_steps=200 # Max steps per trajectory
         )
         if trajectory:
             successful_samples += 1
             trajectories.append(trajectory)
+            all_trajectory_costs.append(trajectory_costs)
             print(f"  Successfully sampled trajectory {i+1} with {len(trajectory)} steps.")
+            total_cost = np.sum(trajectory_costs)
+            print(f"    Total cost: {total_cost:.4f}")
             if len(trajectory) > 5:
                 print(f"    Start: {trajectory[:3]}")
                 print(f"    End: {trajectory[-3:]}")
@@ -646,6 +647,15 @@ def test_tres_sampler(config: RunConfiguration, components: dict, headless=True)
         print(f"Min trajectory length: {min_len}")
         print(f"Max trajectory length: {max_len}")
 
+        all_total_costs = [np.sum(c) for c in all_trajectory_costs]
+        if all_total_costs:
+            avg_cost = np.mean(all_total_costs)
+            min_cost = np.min(all_total_costs)
+            max_cost = np.max(all_total_costs)
+            print(f"Average trajectory cost: {avg_cost:.2f}")
+            print(f"Min trajectory cost: {min_cost:.2f}")
+            print(f"Max trajectory cost: {max_cost:.2f}")
+
     # Save trajectories to a file
     trajectories_dir = "data/graph/trajectories"
     os.makedirs(trajectories_dir, exist_ok=True)
@@ -656,7 +666,8 @@ def test_tres_sampler(config: RunConfiguration, components: dict, headless=True)
         for i, trajectory in enumerate(trajectories):
             waypoint_names = [str(step[0]) for step in trajectory]
             trajectory_line = " ".join(waypoint_names)
-            f.write(f"{trajectory_line}\n")
+            total_cost = np.sum(all_trajectory_costs[i])
+            f.write(f"{total_cost},{trajectory_line}\n")
     
     print(f"Saved {len(trajectories)} trajectories to {trajectories_file_path}")
 
@@ -757,16 +768,16 @@ if __name__ == '__main__':
     components = config.initialize_all_components()
 
     # Run tres passes (they CANNOT be run in parallel because backward_tres depends on the forward passes)
-    run_forward_tres_wrapper(config, components)
-    run_backward_tres_wrapper(config, components)
+    # run_forward_tres_wrapper(config, components)
+    # run_backward_tres_wrapper(config, components)
 
-    thinning(config, components)
-    amortize_wind_average(config, components)
+    # thinning(config, components)
+    # amortize_wind_average(config, components)
     
-    # Run both SVI functions in parallel
+    # # Run both SVI functions in parallel
     run_svi_parallel(config, components)
-    # forward_svi(config, components, headless=False)
-    # backward_svi(config, components, headless=False)
+    # # forward_svi(config, components, headless=False)
+    # # backward_svi(config, components, headless=False)
     
     print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')
     test_tres_sampler(config, components, headless=False)

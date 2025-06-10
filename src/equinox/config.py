@@ -17,6 +17,10 @@ class RunConfiguration:
     charges_file_path: str = "data/graph/LEMD_EGLL_2023_04_01_charges.npy"
     wind_avg_file_path: str = "data/graph/wind_averages/LEMD_EGLL_2023_04_01_wind_avg.pt"
     
+    # Wind model parameters
+    wind_date: Optional[str] = "2023-04-01"
+    wind_data_dir: str = "data/era5"
+    
     # Cost model parameters
     cost_model_beta0: float = 0.0
     cost_model_beta1: float = 1e-2
@@ -96,10 +100,18 @@ class RunConfiguration:
         print(f"Cost model initialized with {num_waypoints} waypoints")
         return cost_model_instance
     
-    def initialize_wind_model(self) -> 'WindFree':
-        """Initialize the wind model."""
-        from equinox.wind.wind_free import WindFree
-        return WindFree()
+    def initialize_wind_model(self) -> Any:
+        """Initialize the wind model based on configuration."""
+        if self.wind_date:
+            from equinox.wind.wind_date import WindDate
+
+            print(f"Initializing WindDate model for date: {self.wind_date}")
+            return WindDate(date_str=self.wind_date, data_dir=self.wind_data_dir)
+        else:
+            from equinox.wind.wind_free import WindFree
+
+            print("Initializing WindFree model")
+            return WindFree()
     
     def initialize_performance_model(self) -> 'Performance':
         """Initialize the performance model with configuration parameters."""
