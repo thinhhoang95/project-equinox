@@ -139,6 +139,8 @@ def sample_tres_trajectory(
             #           = exp( -cost(i,j) + V_bwd[j] - V_bwd[i] )
             # This is consistent with the prompt's π(j | i) = e^{-c_{ij}} Z_b[j] / Z_b[i]
             # where Z_b[i] is from the backward pass (our backward_values).
+
+            print(f"{idx_to_node[current_node_idx], current_k, current_rho, current_phase} → {idx_to_node[next_node_idx], next_k, next_rho, next_phase}  Cost: {cost_ij}, Z_b[j]: {Z_b_j}, Z_b[i]: {Z_b_i}")
             
             prob = np.exp(-cost_ij) * Z_b_j / Z_b_i
             

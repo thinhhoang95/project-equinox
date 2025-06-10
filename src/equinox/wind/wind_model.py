@@ -333,6 +333,116 @@ class WindModel:
         
         return u_torch, v_torch
 
+    def get_average_tailwind_on_edges_knots(
+        self,
+        transitions: list[tuple],
+        node_coords_deg: torch.Tensor,
+        min_wall_clock_time_sec: float,
+        delta_t_wall_clock_sec: float,
+        num_integration_steps: int = 3,
+    ) -> torch.Tensor:
+        """
+        Computes the average tailwind component in knots over a list of flight edges.
+
+        For each transition, it samples points along the great-circle-approximated path
+        in space and time, queries the wind at these points, projects the wind onto the
+        flight path to get the tailwind at each sample point, and returns the
+        averaged tailwind for each transition.
+
+        Args:
+            transitions (list[tuple]): A list of state transitions. Each tuple is expected
+                to be in the format: (u_idx, k_u_idx, rho_u_idx, u_alt_ft, phase_u,
+                                      v_idx, k_v_idx, rho_v_idx, v_alt_ft, phase_v).
+            node_coords_deg (torch.Tensor): A tensor of shape [num_nodes, 2] containing
+                the latitude and longitude for each node index.
+            min_wall_clock_time_sec (float): The absolute start time for k_idx=0.
+            delta_t_wall_clock_sec (float): The duration of each wall-clock time bin in seconds.
+            num_integration_steps (int): The number of points to sample along each edge.
+
+        Returns:
+            torch.Tensor: A tensor of shape [num_transitions] containing the
+                averaged tailwind in knots for each transition.
+        """
+        if not transitions:
+            return torch.empty((0,), device=node_coords_deg.device)
+        
+        if num_integration_steps < 1:
+            raise ValueError("num_integration_steps must be at least 1.")
+
+        original_device = node_coords_deg.device
+        original_dtype = node_coords_deg.dtype
+        MPS_TO_KNOTS = 1.94384
+
+        # 1. Unpack transitions
+        transitions_np = np.array(transitions, dtype=object)
+        u_indices = transitions_np[:, 0].astype(int)
+        k_u_indices = transitions_np[:, 1].astype(int)
+        u_alts_ft = transitions_np[:, 3].astype(float)
+        v_indices = transitions_np[:, 5].astype(int)
+        k_v_indices = transitions_np[:, 6].astype(int)
+        v_alts_ft = transitions_np[:, 8].astype(float)
+
+        num_transitions = len(transitions)
+
+        # 2. Get start/end coordinates and times
+        u_coords = node_coords_deg[u_indices]
+        v_coords = node_coords_deg[v_indices]
+
+        u_lats_rad = torch.deg2rad(u_coords[:, 0])
+        v_lats_rad = torch.deg2rad(v_coords[:, 0])
+        dlon_rad = torch.deg2rad(v_coords[:, 1] - u_coords[:, 1])
+
+        # 3. Calculate bearing unit vector for each transition
+        x_bearing = torch.sin(dlon_rad) * torch.cos(v_lats_rad)
+        y_bearing = torch.cos(u_lats_rad) * torch.sin(v_lats_rad) - torch.sin(u_lats_rad) * torch.cos(v_lats_rad) * torch.cos(dlon_rad)
+        bearing_rad = torch.atan2(x_bearing, y_bearing)
+        e_track = torch.sin(bearing_rad) # East component of track vector
+        n_track = torch.cos(bearing_rad) # North component of track vector
+
+        # 4. Generate integration points
+        if num_integration_steps == 1:
+            weights = torch.tensor([0.5], device=original_device, dtype=original_dtype)
+        else:
+            weights = torch.linspace(0, 1, num_integration_steps, device=original_device, dtype=original_dtype)
+
+        # Use broadcasting to create sample points
+        u_coords_expanded = u_coords.unsqueeze(1)
+        v_coords_expanded = v_coords.unsqueeze(1)
+        weights_expanded = weights.view(1, -1, 1)
+
+        interp_coords = u_coords_expanded * (1 - weights.view(1,-1))[:,:,None] + v_coords_expanded * weights.view(1,-1)[:,:,None]
+        interp_lats = interp_coords[:, :, 0]
+        interp_lons = interp_coords[:, :, 1]
+        
+        u_alts_pt = torch.tensor(u_alts_ft, device=original_device, dtype=original_dtype)
+        v_alts_pt = torch.tensor(v_alts_ft, device=original_device, dtype=original_dtype)
+        interp_alts_ft = u_alts_pt.unsqueeze(1) * (1 - weights) + v_alts_pt.unsqueeze(1) * weights
+        
+        time_min_sec_midnight = self._time_min.hour * 3600 + self._time_min.minute * 60 + self._time_min.second
+        u_times_sec_midnight = min_wall_clock_time_sec + torch.tensor(k_u_indices, device=original_device, dtype=original_dtype) * delta_t_wall_clock_sec
+        v_times_sec_midnight = min_wall_clock_time_sec + torch.tensor(k_v_indices, device=original_device, dtype=original_dtype) * delta_t_wall_clock_sec
+        u_etas = u_times_sec_midnight - time_min_sec_midnight
+        v_etas = v_times_sec_midnight - time_min_sec_midnight
+        interp_etas = u_etas.unsqueeze(1) * (1 - weights) + v_etas.unsqueeze(1) * weights
+
+        # 5. Get wind components for all flattened points
+        u_components, v_components = self.get_wind_components_batched(
+            interp_lats.flatten(), interp_lons.flatten(), interp_alts_ft.flatten(), interp_etas.flatten()
+        )
+
+        u_unflattened = u_components.view(num_transitions, num_integration_steps)
+        v_unflattened = v_components.view(num_transitions, num_integration_steps)
+        
+        # 6. Project wind onto track for each integration point
+        # e_track and n_track have shape [num_transitions], need to expand for broadcasting
+        tailwind_mps_per_point = u_unflattened * e_track.unsqueeze(1) + v_unflattened * n_track.unsqueeze(1)
+
+        # 7. Average tailwind and convert to knots
+        avg_tailwind_mps = torch.nan_to_num(tailwind_mps_per_point, nan=0.0).mean(axis=1)
+        avg_tailwind_knots = avg_tailwind_mps * MPS_TO_KNOTS
+
+        return avg_tailwind_knots.to(device=original_device, dtype=original_dtype)
+
     def get_cape_cin(self, lat: float, lon: float, time: datetime, 
                      interpolate: bool = True) -> tuple[float, float]:
         """

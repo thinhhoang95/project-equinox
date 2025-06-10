@@ -1,15 +1,11 @@
 import torch
 import math
 
-from equinox.route.get_wind import get_wind
-# For type hinting, actual instances are passed as arguments
-from equinox.wind.wind_model import WindModel
 import networkx as nx
-# Conversion factor from meters per second to knots
-MPS_TO_KNOTS = 1.94384
 
 def backward_soft_value_iteration(
     state_transitions: list[tuple[int, int, int, float, int, int, int, float, int, int]], # Note: types for alt and phase might be swapped in usage
+    avg_tailwind_knots_per_transition: torch.Tensor,
     # The tuple, based on apparent usage in forward_svi (unpacking on L262 fwd_svi):
     # (u_idx, k_u, rho_u, u_alt_ft, phase_u,
     #  v_idx, k_v, rho_v, v_alt_ft, phase_v)
@@ -27,9 +23,6 @@ def backward_soft_value_iteration(
     num_phases: int,
     distance_matrix_d: torch.Tensor,
     airspace_charge_matrix_ac: torch.Tensor,
-    wind_model: WindModel,
-    min_wall_clock_time_sec: float,
-    delta_t_wall_clock_sec: float,
     device: torch.device,
     verbose: bool = False
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -55,6 +48,8 @@ def backward_soft_value_iteration(
       Similarly for `v_alt_ft` and `phase_v`.
       The types in the signature `(..., float, int, ..., float, int)` reflect this `alt, phase` order.
 
+    - **avg_tailwind_knots_per_transition** (`torch.Tensor`): A 1D tensor of pre-computed
+      average tailwind in knots for each transition, matching the order of `state_transitions`.
     - **G** (`nx.DiGraph`): NetworkX directed graph.
     - **idx_to_node** (`dict[int, str]`): Mapping from integer node indices to string node IDs.
     - **goal_node_idx** (`int`): Index of the goal node.
@@ -65,9 +60,6 @@ def backward_soft_value_iteration(
     - **num_phases** (`int`): Number of flight phases.
     - **distance_matrix_d** (`torch.Tensor`): Pairwise distances between nodes.
     - **airspace_charge_matrix_ac** (`torch.Tensor`): Airspace charges.
-    - **wind_model** (`WindModel`): Wind model instance.
-    - **min_wall_clock_time_sec** (`float`): Absolute start time for k_idx=0.
-    - **delta_t_wall_clock_sec** (`float`): Duration of each wall-clock time bin.
     - **device** (`torch.device`): PyTorch device.
     - **verbose** (`bool`, optional): If True, prints progress. Defaults to False.
 
@@ -97,27 +89,6 @@ def backward_soft_value_iteration(
     - Update: L(u) ← logaddexp(old L(u), a_v).
     - Final result: V(s) = -L(s).
     """
-
-    # 0. Extract node coordinates
-    node_coords_deg = torch.zeros((num_nodes, 2), dtype=torch.float32, device=device)
-    for i in range(num_nodes):
-        if i not in idx_to_node:
-            if verbose:
-                print(f"Warning: Index {i} not in idx_to_node. Cannot fetch coordinates.")
-            continue
-        node_name_str = idx_to_node[i]
-        if node_name_str not in G.nodes:
-            raise ValueError(f"Node name \'{node_name_str}\' (for index {i}) not found in graph G.")
-        node_data = G.nodes[node_name_str]
-        try:
-            lat = float(node_data['lat'])
-            lon = float(node_data['lon'])
-        except KeyError as e:
-            raise ValueError(f"Node \'{node_name_str}\' in G is missing \'lat\' or \'lon\': {e}")
-        except ValueError as e:
-            raise ValueError(f"Could not convert lat/lon for node \'{node_name_str}\': {e}")
-        node_coords_deg[i, 0] = lat
-        node_coords_deg[i, 1] = lon
 
     # 1. Create L_val and fill with -∞
     L_val = torch.full(
@@ -196,6 +167,9 @@ def backward_soft_value_iteration(
     # - rho_v (ascending)
     # trans[5] = v_idx, trans[6] = k_v, trans[9] = phase_v, trans[7] = rho_v
     
+    # Associate original indices with transitions before sorting
+    indexed_transitions = list(enumerate(state_transitions))
+    
     # Create a reverse map for topological rank (higher value for earlier nodes in topo sort)
     # No, we need lower value for nodes that are "later" in topological sort (closer to typical sinks)
     # so that when sorted ascending, these appear first, and their predecessors later.
@@ -205,22 +179,22 @@ def backward_soft_value_iteration(
     # So, we need transitions sorted such that L(v) is known.
     # Iterating transitions sorted by v_idx (reverse topo), k_v, phase_v, rho_v.
 
-    sorted_transitions = sorted(
-        state_transitions,
+    sorted_indexed_transitions = sorted(
+        indexed_transitions,
         key=lambda x: (
-            node_str_to_topo_rank.get(idx_to_node.get(x[5]), float('-inf')), # v_idx topo rank
-            x[6],  # k_v
-            x[9],  # phase_v
-            x[7]   # rho_v
+            node_str_to_topo_rank.get(idx_to_node.get(x[1][5]), float('-inf')), # v_idx topo rank
+            x[1][6],  # k_v
+            x[1][9],  # phase_v
+            x[1][7]   # rho_v
         ),
         reverse=True # Process v with higher topo rank first (effectively reverse topo order)
     )
 
     if verbose:
-        print(f"Processing {len(sorted_transitions)} state transitions in log-space (backward pass)...")
+        print(f"Processing {len(sorted_indexed_transitions)} state transitions in log-space (backward pass)...")
 
     # 5. Main loop: for each transition u→v, update L(u) = logaddexp( L(u), L(v) - cost(u→v) ).
-    for i, trans in enumerate(sorted_transitions):
+    for i, (original_index, trans) in enumerate(sorted_indexed_transitions):
         # Unpack based on assumed structure from forward_svi's usage:
         # trans[0]=u_idx, trans[1]=k_u, trans[2]=rho_u, trans[3]=u_alt_ft, trans[4]=phase_u
         # trans[5]=v_idx, trans[6]=k_v, trans[7]=rho_v, trans[8]=v_alt_ft, trans[9]=phase_v
@@ -233,22 +207,8 @@ def backward_soft_value_iteration(
             # If state v has an infinite cost-to-go (i.e., goal is unreachable from v), skip
             continue
 
-        # b) Compute tailwind for segment u->v. Wind is experienced when flying from u.
-        #    Use u's altitude (u_alt_ft = trans[3]) and u's departure time (k_u = trans[1]).
-        coords_src_edge = node_coords_deg[u_idx].unsqueeze(0).to(device=device, dtype=torch.float32)
-        coords_tgt_edge = node_coords_deg[v_idx].unsqueeze(0).to(device=device, dtype=torch.float32)
-        altitude_for_wind_ft = torch.tensor([u_alt_ft], device=device, dtype=torch.float32) # u_alt_ft from trans[3]
-        eta_src_sec_edge = min_wall_clock_time_sec + k_u * delta_t_wall_clock_sec # k_u from trans[1]
-        eta_src_tensor_edge = torch.tensor([eta_src_sec_edge], device=device, dtype=torch.float32)
-
-        tailwind_mps = get_wind(
-            coords_src_edge,
-            coords_tgt_edge,
-            altitude_for_wind_ft,
-            eta_src_tensor_edge,
-            wind_model
-        )
-        tailwind_knots = tailwind_mps * MPS_TO_KNOTS
+        # b) Retrieve pre-computed tailwind for this transition
+        tailwind_knots = avg_tailwind_knots_per_transition[original_index]
 
         # c) Compute cost_uv for the transition u → v
         edge_u_indices = torch.tensor([u_idx], device=device, dtype=torch.long)
@@ -276,9 +236,9 @@ def backward_soft_value_iteration(
         new_L_u = torch.logaddexp(old_L_u, torch.tensor(a_v, device=device, dtype=torch.float64)) # Ensure a_v is tensor for logaddexp
         L_val[u_idx, k_u, rho_u, phase_u] = new_L_u
 
-        if verbose and (i % (len(sorted_transitions)//100 + 1) == 0 or i == len(sorted_transitions)-1):
+        if verbose and (i % (len(sorted_indexed_transitions)//100 + 1) == 0 or i == len(sorted_indexed_transitions)-1):
             print(
-                f"\r  Bwd Transition {i+1}/{len(sorted_transitions)}: "
+                f"\r  Bwd Transition {i+1}/{len(sorted_indexed_transitions)}: "
                 f"u=({u_idx},{k_u},{rho_u},{phase_u}), L(v={v_idx},{k_v},{rho_v},{phase_v})={L_s_v:.3f}, "
                 f"cost(u→v)={cost_uv:.3f}, a_v={a_v:.3f}  ->  "
                 f"new L(u)={new_L_u:.3f}",
