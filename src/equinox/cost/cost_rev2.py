@@ -157,8 +157,8 @@ class CostRev2(nn.Module):
         cost_component_ac_dist = self.plm_ac_dist(ac_dist_product_batch) 
         cost_component_wind = self.plm_wind(tailwind_tensor_batch)
 
-        # For shortest time
-        # cost_component_ac_dist = ac_dist_product_batch / (450.0 + cost_component_wind)
+        # For shortest time, enable the following line
+        cost_component_ac_dist = ac_dist_product_batch / (450.0 + cost_component_wind)
 
         total_cost_batch = self.beta0 + \
                            self.beta1 * cost_component_ac_dist + \

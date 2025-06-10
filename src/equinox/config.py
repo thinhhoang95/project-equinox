@@ -61,6 +61,9 @@ class RunConfiguration:
     
     # Device configuration
     device_preference: str = "cuda"  # "cuda" or "cpu"
+
+    # Temperature
+    gamma: float = 0.01
     
     def get_device(self) -> torch.device:
         """Get the appropriate torch device based on availability and preference."""

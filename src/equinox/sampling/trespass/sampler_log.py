@@ -13,6 +13,7 @@ def sample_tres_trajectory(
     initial_phase: int,
     soft_cost_to_go: torch.Tensor, # V_bwd (num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases)
     edge_costs_uv: torch.Tensor, # edge_costs from backward_svi (sparse COO)
+    gamma: float = 0.1, # this temperature should also be the same as the temperature used in the backward_svi
     max_steps: int = 1000 # Max steps to prevent infinite loops
 ):
     """
@@ -34,6 +35,7 @@ def sample_tres_trajectory(
                          Shape: (num_nodes, num_k_bins, num_rho_bins, num_phase_bins).
         edge_costs_uv: Sparse COO tensor of edge costs.
                        Indices: (u_idx, k_u, rho_u, phase_u, v_idx, k_v, rho_v, phase_v)
+        gamma: The sampling temperature. Defaults to 1.0.
         max_steps: Maximum number of steps in a trajectory to prevent infinite loops.
 
     Returns:
@@ -145,16 +147,12 @@ def sample_tres_trajectory(
                 continue
 
             # The transition probability π(j | i) is derived from the soft Bellman equation.
-            # Z_b(i) = Σ_j exp(-cost(i,j)) * Z_b(j), where Z_b is the partition function.
-            # The probability of choosing transition i->j is the ratio of the "flow" through that
-            # edge to the total "flow" at state i:
-            # π(j | i) = (exp(-cost(i,j)) * Z_b(j)) / Z_b(i)
-            # With V_bwd = -log(Z_b), this becomes:
-            # π(j | i) = exp(-(cost_ij + V_bwd_j - V_bwd_i))
+            # With a temperature parameter γ, the un-normalized probability is:
+            # π(j | i) ∝ exp(-(cost_ij + V_bwd_j - V_bwd_i) / γ)
             
             # print(f"{idx_to_node[current_node_idx], current_k, current_rho, current_phase} → {idx_to_node[next_node_idx], next_k, next_rho, next_phase}  Cost: {cost_ij}, V_bwd[j]: {V_bwd_j}, V_bwd[i]: {V_bwd_i}")
             
-            prob = np.exp(-(cost_ij + V_bwd_j - V_bwd_i))
+            prob = np.exp(-(cost_ij + V_bwd_j - V_bwd_i) / gamma)
             
             if prob > 0 and np.isfinite(prob): # Ensure probability is valid
                 possible_next_transitions.append(
@@ -171,10 +169,15 @@ def sample_tres_trajectory(
 
         # Normalize probabilities
         probabilities = np.array(probabilities)
-        if np.sum(probabilities) == 0: # Should not happen if we checked prob > 0
+        probabilities_sum = np.sum(probabilities)
+        if probabilities_sum == 0: # Should not happen if we checked prob > 0
             raise ValueError(f"Sum of probabilities is zero at state: {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. All probabilities are invalid.")
-            
-        probabilities /= np.sum(probabilities)
+        else:
+            if abs(probabilities_sum - 1) > 1e-1:
+                # print(f"WARNING: Probabilities sum: {probabilities_sum} at state: {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. All probabilities are invalid.")
+                raise ValueError(f"Probabilities sum: {probabilities_sum} at state: {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. All probabilities are invalid.")
+
+        probabilities /= probabilities_sum # SHOULD NOT BE NECESSARY???
 
         # DEBUGGING
         # for i in range(len(possible_next_transitions)):
@@ -187,9 +190,10 @@ def sample_tres_trajectory(
 
         # Sample next state
         try:
-            # choice_idx = np.random.choice(len(possible_next_transitions), p=probabilities)
+            choice_idx = np.random.choice(len(possible_next_transitions), p=probabilities)
             # Greedy choice: pick the transition with the highest probability
-            choice_idx = int(np.argmax(probabilities))
+            # print("WARNING: DEBUGGING MODE, USING GREEDY CHOICE")
+            # choice_idx = int(np.argmax(probabilities))
         except ValueError as e:
             raise ValueError(f"Error during np.random.choice at state {idx_to_node[current_node_idx], current_k, current_rho, current_phase}: {e}. Probabilities: {probabilities}, Sum: {np.sum(probabilities)}")
 

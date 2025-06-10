@@ -351,7 +351,9 @@ def forward_svi(config: RunConfiguration, components: dict, headless=False):
 
     return V_soft_np
 
-from equinox.dp.trespass.amorwin.backward_svi_log_cost_hardmin import backward_hard_value_iteration
+# from equinox.dp.trespass.amorwin.backward_svi_log_cost import backward_soft_value_iteration
+# from equinox.dp.trespass.amorwin.backward_svi_log_cost_hardmin import backward_hard_value_iteration
+from equinox.dp.trespass.amorwin.backward_svi_log_cost_temp import backward_soft_value_iteration
 
 def backward_svi(config: RunConfiguration, components: dict, headless=False):
     num_nodes = components['num_nodes']
@@ -449,7 +451,8 @@ def backward_svi(config: RunConfiguration, components: dict, headless=False):
     # Call backward_soft_value_iteration
     import time
     time_start = time.time()
-    V_soft_bwd, edge_costs = backward_hard_value_iteration(
+    # V_soft_bwd, edge_costs = backward_hard_value_iteration(
+    V_soft_bwd, edge_costs = backward_soft_value_iteration(
         state_transitions=transitions,
         avg_tailwind_knots_per_transition=avg_tailwind_knots_per_transition.to(device),
         G=G,
@@ -463,7 +466,8 @@ def backward_svi(config: RunConfiguration, components: dict, headless=False):
         distance_matrix_d=distance_matrix_d,
         airspace_charge_matrix_ac=airspace_charge_matrix_ac,
         device=device,
-        verbose=True
+        verbose=True,
+        gamma=config.gamma # smaller gamma means more greedy towards the shortest path
     )
     time_end = time.time()
     print(f"Backward SVI completed successfully in {time_end - time_start:.2f} seconds")
@@ -574,12 +578,12 @@ def test_tres_sampler(config: RunConfiguration, components: dict, headless=True)
     goal_node_id = config.goal_node
 
     # Time parameters (consistent with backward_svi)
-    estimated_takeoff_time_str = config.estimated_takeoff_time_str
-    from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
-    takeoff_ssm = datestr_to_seconds_since_midnight(estimated_takeoff_time_str)
+    # estimated_takeoff_time_str = config.estimated_takeoff_time_str
+    # from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
+    # takeoff_ssm = datestr_to_seconds_since_midnight(estimated_takeoff_time_str)
     
-    min_wall_clock_time_sec = float(takeoff_ssm)
-    delta_t_wall_clock_sec = 300.0  # 5 minutes, from backward_svi test
+    # min_wall_clock_time_sec = float(takeoff_ssm)
+    # delta_t_wall_clock_sec = 300.0  # 5 minutes, from backward_svi test
 
     # Initial state parameters
     initial_k = 0
@@ -616,7 +620,8 @@ def test_tres_sampler(config: RunConfiguration, components: dict, headless=True)
             initial_phase=initial_phase,
             soft_cost_to_go=V_soft_bwd_dense_filled, # This is V_bwd
             edge_costs_uv=edge_costs_tensor,
-            max_steps=200 # Max steps per trajectory
+            max_steps=200, # Max steps per trajectory
+            gamma = config.gamma
         )
         if trajectory:
             successful_samples += 1
@@ -766,14 +771,14 @@ if __name__ == '__main__':
     
     # Initialize components
     components = config.initialize_all_components()
-
+    # ================================
     # Run tres passes (they CANNOT be run in parallel because backward_tres depends on the forward passes)
     # run_forward_tres_wrapper(config, components)
     # run_backward_tres_wrapper(config, components)
 
     # thinning(config, components)
     # amortize_wind_average(config, components)
-    
+    # ================================
     # # Run both SVI functions in parallel
     run_svi_parallel(config, components)
     # # forward_svi(config, components, headless=False)
