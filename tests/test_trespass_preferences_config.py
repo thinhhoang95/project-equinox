@@ -15,7 +15,7 @@ import os
 import torch
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from equinox.dp.trespass.amorwin.forward_svi_log import forward_soft_value_iteration
+from equinox.dp.trespass.amorwin.forward_svi_log_temp import forward_soft_value_iteration
 from equinox.dp.trespass.tres_forward import tres_forward, save_transitions
 from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
 from equinox.dp.trespass.sparse_io_utils import save_sparse_coo_tensor_with_convention, load_sparse_coo_tensor_with_convention
@@ -299,7 +299,8 @@ def forward_svi(config: RunConfiguration, components: dict, headless=False):
         distance_matrix_d=distance_matrix_d,
         airspace_charge_matrix_ac=airspace_charge_matrix_ac,
         device=device,
-        verbose=True
+        verbose=True,
+        gamma=config.gamma
     )
     time_end = time.time()
     print(f"Forward SVI completed successfully in {time_end - time_start:.2f} seconds")
@@ -354,6 +355,7 @@ def forward_svi(config: RunConfiguration, components: dict, headless=False):
 # from equinox.dp.trespass.amorwin.backward_svi_log_cost import backward_soft_value_iteration
 # from equinox.dp.trespass.amorwin.backward_svi_log_cost_hardmin import backward_hard_value_iteration
 from equinox.dp.trespass.amorwin.backward_svi_log_cost_temp import backward_soft_value_iteration
+from equinox.dp.trespass.amorwin.backward_gradient import backward_gradient_pass
 
 def backward_svi(config: RunConfiguration, components: dict, headless=False):
     num_nodes = components['num_nodes']
@@ -518,6 +520,189 @@ def backward_svi(config: RunConfiguration, components: dict, headless=False):
     edge_costs_path = os.path.join(output_dir_path, f"{config.file_prefix}_COST_WIND.pt")
     save_sparse_coo_tensor_with_convention(edge_costs, edge_costs_path)
     return V_soft_bwd_np
+
+
+# Implement the backward gradient pass HERE
+def backward_gradient_pass_test(config: RunConfiguration, components: dict, headless=True):
+    print("\n--- Running Backward Gradient Pass Test ---")
+    device = components['device']
+
+    # --- 1. Load all necessary data ---
+    print("Loading data for gradient pass...")
+    
+    # Load transitions to determine dimensions
+    thinned_transitions_path = os.path.join(config.output_dir, config.thinning_output_file_name + ".pkl")
+    try:
+        transitions = pickle.load(open(thinned_transitions_path, "rb"))
+        print(f"Loaded {len(transitions)} transitions.")
+    except FileNotFoundError:
+        print(f"Transitions file not found at {thinned_transitions_path}. Aborting.")
+        return
+
+    # Dynamically determine dimensions from transitions
+    max_k_val = max(max(t[1] for t in transitions), max(t[6] for t in transitions))
+    max_rho_val = max(max(t[2] for t in transitions), max(t[7] for t in transitions))
+    max_phase_val = max(max(t[4] for t in transitions), max(t[9] for t in transitions))
+    num_time_bins_wall_clock = max_k_val + 1
+    num_rho_bins = max_rho_val + 1
+    num_phases = max_phase_val + 1
+    num_nodes = components['num_nodes']
+    v_shape = (num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases)
+    print(f"Value function shape determined from transitions: {v_shape}")
+
+    def load_dense_v(path):
+        sparse_v, _ = load_sparse_coo_tensor_with_convention(path, target_device=device)
+        sparse_v = sparse_v.coalesce()
+        dense_v = torch.full(v_shape, float('inf'), dtype=sparse_v.dtype, device=device)
+        indices = sparse_v.indices()
+        values = sparse_v.values()
+        if values.numel() > 0:
+            dense_v[tuple(indices)] = values
+        return dense_v
+
+    # Load Forward and Backward Value Functions
+    try:
+        v_fwd_path = os.path.join("data/graph/V_soft", f"{config.file_prefix}_V_FWD_SPRSE_WIND.pt")
+        V_f = load_dense_v(v_fwd_path)
+        print("Loaded forward value function.")
+        
+        v_bwd_path = os.path.join("data/graph/V_soft", f"{config.file_prefix}_V_BWD_SPRSE_WIND.pt")
+        V_b = load_dense_v(v_bwd_path)
+        print("Loaded backward value function.")
+    except FileNotFoundError as e:
+        print(f"Value function file not found: {e}. Please run both SVI passes first. Aborting.")
+        return
+
+    # Load other required components
+    avg_tailwind_knots = torch.load(config.wind_avg_file_path).to(device)
+    dist_matrix = torch.tensor(components['dist_matrix'], dtype=torch.float64, device=device)
+    ac_matrix = torch.tensor(components['ac_matrix'], dtype=torch.float64, device=device)
+    cost_model = components['cost_model']
+    cost_model.to(torch.float64) # Ensure model is float64 for calculations
+    origin_node_idx = components['origin_node_idx']
+
+    # Load or create empirical counts
+    empirical_counts_path = os.path.join("data/empirical_counts", f"{config.file_prefix}_empirical_counts.pt")
+    try:
+        empirical_counts = torch.load(empirical_counts_path).to(device, dtype=torch.float64)
+        print(f"Loaded empirical counts from {empirical_counts_path}")
+    except FileNotFoundError:
+        print(f"Empirical counts not found. Creating a dummy count matrix.")
+        empirical_counts = torch.zeros((num_nodes, num_nodes), device=device, dtype=torch.float64)
+        # Create a dummy trajectory for testing
+        if len(transitions) > 20:
+            # Create a simple path from origin to somewhere
+            u,v = -1, origin_node_idx
+            for _ in range(20):
+                # Find a transition starting from v
+                found = False
+                for t in transitions:
+                    if t[0] == v:
+                        u, v = t[0], t[5]
+                        empirical_counts[u, v] = 1
+                        found = True
+                        break
+                if not found:
+                    break # No more segments in path
+        print("Dummy empirical counts created.")
+
+
+    # --- 2. Run the gradient pass ---
+    if not headless:
+        print("\nAbout to run gradient pass.")
+        confirmation = input("Proceed? (Y/n): ").strip().lower()
+        if confirmation in ['n', 'no']:
+            print("Aborted by user.")
+            return None
+    print("\nExecuting backward_gradient_pass...")
+    
+    # Ensure cost model preference matrix requires grad
+    cost_model.preference_matrix_p.requires_grad = True
+
+    likelihoods, grad = backward_gradient_pass(
+        state_transitions=transitions,
+        avg_tailwind_knots_per_transition=avg_tailwind_knots,
+        V_f=V_f,
+        V_b=V_b,
+        cost_model=cost_model,
+        empirical_counts=empirical_counts,
+        origin_node_idx=origin_node_idx,
+        num_nodes=num_nodes,
+        distance_matrix_d=dist_matrix,
+        airspace_charge_matrix_ac=ac_matrix,
+        device=device,
+        gamma=config.gamma,
+        verbose=True
+    )
+    # --- 2.1. Display the likelihood pass results ---
+    # Please write your code here
+    print("\n--- Top 10 Links by Expected Traversal Likelihood ---")
+    idx_to_node = components['idx_to_node']
+
+    # Move likelihoods tensor to CPU for processing with NumPy
+    likelihoods_np = likelihoods.cpu().numpy()
+
+    # Flatten the matrix and get indices that would sort it in descending order
+    flat_sorted_indices = np.argsort(likelihoods_np, axis=None)[::-1]
+
+    top_k = 10
+    count = 0
+    for flat_idx in flat_sorted_indices:
+        if count >= top_k:
+            break
+        likelihood_val = likelihoods_np.flat[flat_idx]
+        if likelihood_val <= 0.0:
+            break  # Stop if likelihoods are zero or negative
+
+        u_idx = flat_idx // num_nodes
+        v_idx = flat_idx % num_nodes
+
+        u_name = idx_to_node[u_idx]
+        v_name = idx_to_node[v_idx]
+
+        print(f"{count + 1}. {u_name} -> {v_name}: {likelihood_val:.6f}")
+        count += 1
+
+    if count == 0:
+        print("No links with positive traversal likelihood were found.")
+
+    # --- 3. Display results and perform a test optimizer step ---
+    print("\n--- Gradient Pass Results ---")
+    print(f"Shape of traversal likelihoods: {likelihoods.shape}")
+    print(f"Total traversal likelihood: {likelihoods.sum().item():.4f} (should be close to 1.0)")
+    print(f"Shape of final gradient: {grad.shape}")
+    print(f"Gradient norm: {torch.norm(grad).item()}")
+    print(f"Gradient (first 10 values): {grad[:10].tolist()}")
+
+    print("\n--- Testing SGD Step ---")
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, cost_model.parameters()), lr=0.01)
+    
+    # Manually assign gradients
+    param_idx = 0
+    for param in cost_model.parameters():
+        if param.requires_grad:
+            if param.grad is not None:
+                param.grad.zero_()
+            num_param_elements = param.numel()
+            grad_slice = grad[param_idx : param_idx + num_param_elements].view(param.shape).to(param.dtype)
+            param.grad = grad_slice
+            param_idx += num_param_elements
+
+    pref_matrix_before = cost_model.preference_matrix_p.detach().clone()
+    optimizer.step()
+    pref_matrix_after = cost_model.preference_matrix_p.detach().clone()
+    
+    change = torch.norm(pref_matrix_after - pref_matrix_before).item()
+    print(f"Norm of change in preference matrix after one SGD step: {change:.6f}")
+    if change > 1e-9:
+        print("OK: Parameters were updated.")
+    else:
+        print("WARNING: Parameters did not update. Check gradient calculation or optimizer setup.")
+
+    print("\nBackward gradient pass test finished.")
+    return grad, likelihoods
+
+
 
 from equinox.sampling.trespass.sampler_log import sample_tres_trajectory
 
@@ -780,12 +965,13 @@ if __name__ == '__main__':
     # amortize_wind_average(config, components)
     # ================================
     # # Run both SVI functions in parallel
-    run_svi_parallel(config, components)
+    # run_svi_parallel(config, components)
     # # forward_svi(config, components, headless=False)
     # # backward_svi(config, components, headless=False)
     
-    print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')
-    test_tres_sampler(config, components, headless=False)
+    # print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')
+    # test_tres_sampler(config, components, headless=False)
+    backward_gradient_pass_test(config, components, headless=True)
 
     time_end = time.time()
     print(f"Total clock time: {time_end - time_start} seconds")

@@ -158,12 +158,12 @@ class CostRev2(nn.Module):
         cost_component_wind = self.plm_wind(tailwind_tensor_batch)
 
         # For shortest time, enable the following line
-        cost_component_ac_dist = ac_dist_product_batch / (450.0 + cost_component_wind)
+        cost_component_ac_dist = ac_dist_product_batch / (450.0) # + cost_component_wind)
 
         total_cost_batch = self.beta0 + \
                            self.beta1 * cost_component_ac_dist + \
-                           self.beta2 * cost_component_wind + \
-                           self.beta3 * pref_e_batch # Add preference term
+                           self.beta2 * cost_component_wind - \
+                           self.beta3 * pref_e_batch # Subtract preference term
         
         # Apply infinite cost where distance was infinite
         total_cost_batch[inf_mask] = float('inf')
