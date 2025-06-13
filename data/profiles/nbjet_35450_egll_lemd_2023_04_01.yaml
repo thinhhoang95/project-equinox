@@ -32,3 +32,4 @@ wind_avg_file_path: data/graph/wind_averages/LEMD_EGLL_2023_04_01_wind_avg.pt
 wind_data_dir: data/era5
 wind_date: '2024-04-01'
 gamma: 0.001
+alpha_pref_reg: 1.0

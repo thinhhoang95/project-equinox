@@ -11,6 +11,10 @@
 # To use the older cost model, use test_trespass.py
 # *************************************************************
 
+# *************************************************************
+# For learning, use train.py script, but the tres passes must be run from this file first
+# *************************************************************
+
 import os
 import torch
 import numpy as np

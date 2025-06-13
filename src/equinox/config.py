@@ -64,6 +64,9 @@ class RunConfiguration:
 
     # Temperature
     gamma: float = 0.01
+
+    # Regularization parameters
+    alpha_pref_reg: float = 1.0
     
     def get_device(self) -> torch.device:
         """Get the appropriate torch device based on availability and preference."""
@@ -90,14 +93,15 @@ class RunConfiguration:
     
     def initialize_cost_model(self, num_waypoints: int) -> torch.nn.Module:
         """Initialize the cost model with configuration parameters."""
-        from equinox.cost.cost_rev2 import CostRev2
-        
+        from equinox.cost.cost_rev2_reg import CostRev2
+
         cost_model_instance = CostRev2(
             beta0=self.cost_model_beta0,
             beta1=self.cost_model_beta1,
             beta2=self.cost_model_beta2,
             beta3=self.cost_model_beta3,
             num_waypoints=num_waypoints,
+            alpha_pref_reg=self.alpha_pref_reg,
             device=self.get_device()
         )
         print(f"Cost model initialized with {num_waypoints} waypoints")
@@ -297,4 +301,6 @@ if __name__ == "__main__":
     # demo_configuration_usage()
     # print("\n" + "="*50 + "\n")
     # demo_initialization()
-    save_default_config_to_yaml("data/profiles/nbjet_35450_egll_lemd_2023_04_01.yaml")
+    response = input("Do you want to save the config to a yaml file? (y/n): ")
+    if response.lower() in ['y', 'yes']:
+        save_default_config_to_yaml("data/profiles/nbjet_35450_egll_lemd_2023_04_01.yaml")

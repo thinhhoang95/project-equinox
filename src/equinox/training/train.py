@@ -1,3 +1,8 @@
+# *************************************************************
+# Run test_trespass_preferences_config.py trespasses first!
+# Only tres_forward and tres_backward and thinning are needed
+# *************************************************************
+
 import os
 import pickle
 import torch
