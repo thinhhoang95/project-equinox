@@ -195,12 +195,15 @@ def amortize_wind_average(config: RunConfiguration, components: dict):
     torch.save(wind_avg, wind_avg_file_path)
     print(f"Saved wind averages tensor of shape {wind_avg.shape} to {wind_avg_file_path}")
 
-def forward_svi(config: RunConfiguration, components: dict, headless=False):
+def forward_svi(config: RunConfiguration, components: dict, headless=False, cost_model=None):
+    if cost_model is None:
+        raise FileNotFoundError("Cost model is required for forward SVI.")
+    
     dist_matrix = components['dist_matrix']
     ac_matrix = components['ac_matrix']
     G = components['graph']
     idx_to_node = components['idx_to_node']
-    cost_model_instance = components['cost_model']
+    cost_model_instance = cost_model
     origin_node_idx = components['origin_node_idx']
     device = components['device']
     num_nodes = components['num_nodes']
@@ -357,14 +360,17 @@ def forward_svi(config: RunConfiguration, components: dict, headless=False):
 from equinox.dp.trespass.amorwin.backward_svi_log_cost_temp import backward_soft_value_iteration
 from equinox.dp.trespass.amorwin.backward_gradient import backward_gradient_pass
 
-def backward_svi(config: RunConfiguration, components: dict, headless=False):
+def backward_svi(config: RunConfiguration, components: dict, headless=False, cost_model=None):
+    if cost_model is None:
+        raise FileNotFoundError("Cost model is required for backward SVI.")
+    
     num_nodes = components['num_nodes']
     dist_matrix = components['dist_matrix']
     ac_matrix = components['ac_matrix']
     G = components['graph']
     idx_to_node = components['idx_to_node']
     goal_node_idx = components['goal_node_idx']
-    cost_model_instance = components['cost_model']
+    cost_model_instance = cost_model 
     device = components['device']
 
     # Load pre-computed wind averages
@@ -523,8 +529,19 @@ def backward_svi(config: RunConfiguration, components: dict, headless=False):
 
 
 # Implement the backward gradient pass HERE
-def backward_gradient_pass_test(config: RunConfiguration, components: dict, headless=True):
-    print("\n--- Running Backward Gradient Pass Test ---")
+def inspect_link_likelihood(config: RunConfiguration, components: dict, headless=True,
+                                cost_model_path = None):
+    
+    if cost_model_path is None:
+        raise FileNotFoundError("Cost model path is required for backward gradient pass.")
+    
+    # Load the saved cost model
+    print(f"Loading cost model from: {cost_model_path}")
+    cost_model = components['cost_model']
+    cost_model.load_state_dict(torch.load(cost_model_path))
+    cost_model.to(torch.float64)  # Ensure model is float64 for calculations
+    print("Cost model loaded successfully.")
+
     device = components['device']
 
     # --- 1. Load all necessary data ---
@@ -635,7 +652,6 @@ def backward_gradient_pass_test(config: RunConfiguration, components: dict, head
         verbose=True
     )
     # --- 2.1. Display the likelihood pass results ---
-    # Please write your code here
     print("\n--- Top 10 Links by Expected Traversal Likelihood ---")
     idx_to_node = components['idx_to_node']
 
@@ -668,38 +684,16 @@ def backward_gradient_pass_test(config: RunConfiguration, components: dict, head
 
     # --- 3. Display results and perform a test optimizer step ---
     print("\n--- Gradient Pass Results ---")
+    print(f'*'*100)
+    print(f"CAUTION: The gradient may not be correct. Only check the traversal likelihoods.")
+    print(f'*'*100)
     print(f"Shape of traversal likelihoods: {likelihoods.shape}")
     print(f"Total traversal likelihood: {likelihoods.sum().item():.4f} (should be close to 1.0)")
     print(f"Shape of final gradient: {grad.shape}")
     print(f"Gradient norm: {torch.norm(grad).item()}")
     print(f"Gradient (first 10 values): {grad[:10].tolist()}")
 
-    print("\n--- Testing SGD Step ---")
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, cost_model.parameters()), lr=0.01)
-    
-    # Manually assign gradients
-    param_idx = 0
-    for param in cost_model.parameters():
-        if param.requires_grad:
-            if param.grad is not None:
-                param.grad.zero_()
-            num_param_elements = param.numel()
-            grad_slice = grad[param_idx : param_idx + num_param_elements].view(param.shape).to(param.dtype)
-            param.grad = grad_slice
-            param_idx += num_param_elements
 
-    pref_matrix_before = cost_model.preference_matrix_p.detach().clone()
-    optimizer.step()
-    pref_matrix_after = cost_model.preference_matrix_p.detach().clone()
-    
-    change = torch.norm(pref_matrix_after - pref_matrix_before).item()
-    print(f"Norm of change in preference matrix after one SGD step: {change:.6f}")
-    if change > 1e-9:
-        print("OK: Parameters were updated.")
-    else:
-        print("WARNING: Parameters did not update. Check gradient calculation or optimizer setup.")
-
-    print("\nBackward gradient pass test finished.")
     return grad, likelihoods
 
 
@@ -863,16 +857,16 @@ def test_tres_sampler(config: RunConfiguration, components: dict, headless=True)
     print(f"Saved {len(trajectories)} trajectories to {trajectories_file_path}")
 
 
-def run_backward_svi_wrapper(config, components):
+def run_backward_svi_wrapper(config, components, cost_model):
     """Wrapper function for backward_svi to run in separate process"""
     print("Starting backward SVI in parallel process...")
-    return backward_svi(config, components, headless=True)
+    return backward_svi(config, components, headless=True, cost_model=cost_model)
 
 
-def run_forward_svi_wrapper(config, components):
+def run_forward_svi_wrapper(config, components, cost_model):
     """Wrapper function for forward_svi to run in separate process"""
     print("Starting forward SVI in parallel process...")
-    return forward_svi(config, components, headless=True)
+    return forward_svi(config, components, headless=True, cost_model=cost_model)
 
 
 def run_forward_tres_wrapper(config, components):
@@ -917,14 +911,23 @@ def run_tres_parallel(config, components):
     return results
 
 
-def run_svi_parallel(config, components):
+def run_svi_parallel(config, components, cost_model_path = None):
     """Run both backward and forward SVI in parallel using multiprocessing"""
     print("Running backward and forward SVI in parallel...")
+
+    if cost_model_path is None:
+        raise FileNotFoundError("Cost model path is required for backward gradient pass.")
+    
+    # Load the saved cost model
+    print(f"Loading cost model from: {cost_model_path}")
+    cost_model = components['cost_model']
+    cost_model.load_state_dict(torch.load(cost_model_path))
+    cost_model.to(torch.float64)  # Ensure model is float64 for calculations
     
     with ProcessPoolExecutor(max_workers=2) as executor:
         # Submit both tasks
-        future_backward = executor.submit(run_backward_svi_wrapper, config, components)
-        future_forward = executor.submit(run_forward_svi_wrapper, config, components)
+        future_backward = executor.submit(run_backward_svi_wrapper, config, components, cost_model)
+        future_forward = executor.submit(run_forward_svi_wrapper, config, components, cost_model)
         
         # Wait for both to complete and get results
         results = {}
@@ -966,13 +969,15 @@ if __name__ == '__main__':
     # amortize_wind_average(config, components)
     # ================================
     # # Run both SVI functions in parallel
-    # run_svi_parallel(config, components)
+    cost_model_path = os.path.join(config.output_dir, "trained_models", f"{config.file_prefix}_cost_model.pt")
+    run_svi_parallel(config, components, cost_model_path=cost_model_path)
     # # forward_svi(config, components, headless=False)
     # # backward_svi(config, components, headless=False)
     
     # print('CAUTION: The forward SVI contains a hard-coded initial log-mass. This should be corrected in the future.')
     # test_tres_sampler(config, components, headless=False)
-    backward_gradient_pass_test(config, components, headless=True)
+    inspect_link_likelihood(config, components, headless=True,
+                            cost_model_path=cost_model_path)
 
     time_end = time.time()
     print(f"Total clock time: {time_end - time_start} seconds")
