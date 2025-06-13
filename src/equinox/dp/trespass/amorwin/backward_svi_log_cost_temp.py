@@ -24,6 +24,7 @@ def backward_soft_value_iteration(
     distance_matrix_d: torch.Tensor,
     airspace_charge_matrix_ac: torch.Tensor,
     device: torch.device,
+    gamma: float = 0.1, # this temperature should also be the same as the temperature used in the sampler
     verbose: bool = False
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -36,7 +37,9 @@ def backward_soft_value_iteration(
     The algorithm computes V(s), the soft-minimum cost to go from state s to the goal.
     The soft-Bellman equation for backward value iteration is:
     V(s) = softmin_{s→v} (cost(s→v) + V(v))
-    where softmin is the log-sum-exp operator: softmin(x_i) = -log(sum_i(exp(-x_i))).
+    where softmin is the log-sum-exp operator with temperature γ:
+    softmin({x_i}) = -γ * log(sum_i(exp(-x_i / γ))).
+    A smaller γ biases the process towards the shortest path (hard-min).
 
     ## Parameters
 
@@ -60,6 +63,8 @@ def backward_soft_value_iteration(
     - **distance_matrix_d** (`torch.Tensor`): Pairwise distances between nodes.
     - **airspace_charge_matrix_ac** (`torch.Tensor`): Airspace charges.
     - **device** (`torch.device`): PyTorch device.
+    - **gamma** (`float`): Temperature parameter for the soft-min operator. A smaller `gamma`
+      makes the soft-min approximate the hard-min more closely.
     - **verbose** (`bool`, optional): If True, prints progress. Defaults to False.
 
     ## Returns
@@ -86,7 +91,7 @@ def backward_soft_value_iteration(
       This typically means iterating nodes in reverse topological order.
     - For each transition u→v: compute `val_from_v := V(v) + cost(u→v)`.
     - Update: V(u) ← softmin(old V(u), val_from_v).
-      This is computed as: `V(u) = -log(exp(-V_old(u)) + exp(-val_from_v))`.
+      This is computed as: `V(u) = -γ * log(exp(-V_old(u)/γ) + exp(-val_from_v/γ))`.
     - Final result: The function returns the computed V_val tensor.
     """
 
@@ -233,8 +238,8 @@ def backward_soft_value_iteration(
         # e) Merge into V_val[u] using softmin:
         #    V(u) references phase_u (trans[4]) and rho_u (trans[2])
         old_V_u = V_val[u_idx, k_u, rho_u, phase_u]
-        # softmin(a,b) = -log(exp(-a) + exp(-b))
-        new_V_u = -torch.logaddexp(-old_V_u, -torch.tensor(val_from_v, device=device, dtype=torch.float64))
+        # softmin_gamma(a,b) = -gamma * log(exp(-a/gamma) + exp(-b/gamma))
+        new_V_u = -gamma * torch.logaddexp(-old_V_u / gamma, -val_from_v / gamma)
         V_val[u_idx, k_u, rho_u, phase_u] = new_V_u
 
         if verbose and (i % (len(sorted_indexed_transitions)//100 + 1) == 0 or i == len(sorted_indexed_transitions)-1):

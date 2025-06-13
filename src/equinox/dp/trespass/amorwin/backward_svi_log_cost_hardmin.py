@@ -3,7 +3,7 @@ import math
 
 import networkx as nx
 
-def backward_soft_value_iteration(
+def backward_hard_value_iteration(
     state_transitions: list[tuple[int, int, int, float, int, int, int, float, int, int]], # Note: types for alt and phase might be swapped in usage
     avg_tailwind_knots_per_transition: torch.Tensor,
     # The tuple, based on apparent usage in forward_svi (unpacking on L262 fwd_svi):
@@ -27,23 +27,26 @@ def backward_soft_value_iteration(
     verbose: bool = False
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Computes the soft backward value function (cost-to-go) V(s) via soft value iteration.
+    Computes the hard value function (cost-to-go) V(s) via value iteration.
     It also returns a tensor containing the costs of all processed edges.
 
-    This function implements backward soft value iteration to calculate the soft-optimal
-    cost-to-go from each state to a designated goal state.
+    This function implements backward value iteration to calculate the optimal cost-to-go
+    from each state to a designated goal state.
 
-    The algorithm computes V(s), the soft-minimum cost to go from state s to the goal.
-    The soft-Bellman equation for backward value iteration is:
-    V(s) = softmin_{s→v} (cost(s→v) + V(v))
-    where softmin is the log-sum-exp operator: softmin(x_i) = -log(sum_i(exp(-x_i))).
+    The algorithm computes V(s), the minimum cost to go from state s to the goal.
+    The Bellman equation for backward value iteration is:
+    V(s) = min_{s→v} (cost(s→v) + V(v))
+
+    For numerical reasons, the implementation works with L(s) = -V(s).
+    The update rule becomes:
+    L(u) = max(L_old(u), L(v) - cost(u→v))
 
     ## Parameters
 
     - **state_transitions** (`list[tuple[int, int, int, float, int, int, int, float, int, int]]`):
       List of state transitions. Based on usage in the forward pass, we assume the tuple elements are:
       `(u_idx, k_u, rho_u, u_alt_ft, phase_u, v_idx, k_v, rho_v, v_alt_ft, phase_v)`.
-      `u_alt_ft` is altitude at u (used for wind), `phase_u` is phase at u (used for V_val indexing).
+      `u_alt_ft` is altitude at u (used for wind), `phase_u` is phase at u (used for L_val indexing).
       Similarly for `v_alt_ft` and `phase_v`.
       The types in the signature `(..., float, int, ..., float, int)` reflect this `alt, phase` order.
 
@@ -65,8 +68,8 @@ def backward_soft_value_iteration(
     ## Returns
 
     **tuple[torch.Tensor, torch.Tensor]**:
-    - **V_soft_cost_to_go** (`torch.Tensor`): Soft value function V (cost-to-go) with shape `(num_nodes,
-      num_time_bins_wall_clock, num_rho_bins, num_phases)`. Values represent soft cost-to-go,
+    - **V_cost_to_go** (`torch.Tensor`): Value function V (cost-to-go) with shape `(num_nodes,
+      num_time_bins_wall_clock, num_rho_bins, num_phases)`. Values represent min cost-to-go,
       with +inf for states from which the goal is unreachable.
     - **edge_costs_uv** (`torch.Tensor`): Sparse COO tensor storing the computed cost for each processed transition (u,v).
       Shape: `(num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases,  # u state
@@ -80,20 +83,19 @@ def backward_soft_value_iteration(
     ## Algorithm Details
 
     - Computations are in float64.
-    - The value function `V_val` is initialized to +∞. For actual goal states (g_node, k, rho, phase)
-      that are destinations of transitions, V(g_state) = 0.
-    - Transitions `u→v` are processed in an order ensuring V(v) is finalized before updating V(u).
+    - L_val (representing -V) is initialized to -∞. This corresponds to V = +∞.
+    - For goal states g, V(g) = 0, so L(g) = 0.
+    - Transitions `u→v` are processed in an order ensuring L(v) is finalized before updating L(u).
       This typically means iterating nodes in reverse topological order.
-    - For each transition u→v: compute `val_from_v := V(v) + cost(u→v)`.
-    - Update: V(u) ← softmin(old V(u), val_from_v).
-      This is computed as: `V(u) = -log(exp(-V_old(u)) + exp(-val_from_v))`.
-    - Final result: The function returns the computed V_val tensor.
+    - For each transition u→v: compute a_v := L(v) - cost(u→v).
+    - Update: L(u) ← max(old L(u), a_v).
+    - Final result: V(s) = -L(s).
     """
 
-    # 1. Create V_val and fill with +∞
-    V_val = torch.full(
+    # 1. Create L_val and fill with -∞
+    L_val = torch.full(
         (num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases),
-        fill_value=float('inf'),
+        fill_value=float('-inf'),
         dtype=torch.float64,
         device=device
     )
@@ -115,12 +117,12 @@ def backward_soft_value_iteration(
         if st[5] == goal_node_idx: # v_idx == goal_node_idx
             actual_goal_states.add((st[6], st[7], st[9])) # (k_v, rho_v, phase_v)
 
-    # 3. Initialize V_val for actual_goal_states to 0.0
+    # 3. Initialize L_val for actual_goal_states to 0.0 (log(1))
     if not actual_goal_states:
         if verbose:
             print(
                 f"Warning: No transitions found ending at goal_node_idx {goal_node_idx}. "
-                "All V_val entries will remain +inf."
+                "All L_val entries will remain -inf."
             )
     else:
         for (k_g, rho_g, phase_g) in actual_goal_states:
@@ -128,20 +130,20 @@ def backward_soft_value_iteration(
             if (0 <= k_g < num_time_bins_wall_clock and
                 0 <= rho_g < num_rho_bins and
                 0 <= phase_g < num_phases):
-                V_val[goal_node_idx, k_g, rho_g, phase_g] = 0.0
+                L_val[goal_node_idx, k_g, rho_g, phase_g] = 0.0
                 if verbose:
                     print(
                         f"Initialized goal state: "
-                        f"V[{goal_node_idx},{k_g},{rho_g},{phase_g}] = 0.0"
+                        f"L[{goal_node_idx},{k_g},{rho_g},{phase_g}] = 0.0"
                     )
-            elif verbose: # Print warning if an identified goal state is out of bounds for V_val
+            elif verbose: # Print warning if an identified goal state is out of bounds for L_val
                  print(
                     f"Warning: Identified goal state ({goal_node_idx},{k_g},{rho_g},{phase_g}) "
-                    f"is out of bounds for V_val dimensions "
+                    f"is out of bounds for L_val dimensions "
                     f"({num_time_bins_wall_clock},{num_rho_bins},{num_phases}). Skipping initialization."
                 )
 
-    # 4. Sort transitions so that when we visit (u→v) to update V(u), V(v) is already finalized.
+    # 4. Sort transitions so that when we visit (u→v) to update L(u), L(v) is already finalized.
     #    Primary key: topological sort order of v_idx (destination), descending.
     #    Then k_v, phase_v, rho_v (ascending as tie-breakers).
     #    Indices for v: trans[5]=v_idx, trans[6]=k_v, trans[7]=rho_v, trans[9]=phase_v
@@ -175,8 +177,8 @@ def backward_soft_value_iteration(
     # so that when sorted ascending, these appear first, and their predecessors later.
     # For backward pass, we process states v in reverse topological order.
     # This means states "closer" to the goal (higher topological rank) are processed first.
-    # Their V(v) values are used to update V(u) for u -> v.
-    # So, we need transitions sorted such that V(v) is known.
+    # Their L(v) values are used to update L(u) for u -> v.
+    # So, we need transitions sorted such that L(v) is known.
     # Iterating transitions sorted by v_idx (reverse topo), k_v, phase_v, rho_v.
 
     sorted_indexed_transitions = sorted(
@@ -191,9 +193,9 @@ def backward_soft_value_iteration(
     )
 
     if verbose:
-        print(f"Processing {len(sorted_indexed_transitions)} state transitions in soft-min backward pass...")
+        print(f"Processing {len(sorted_indexed_transitions)} state transitions in backward pass...")
 
-    # 5. Main loop: for each transition u→v, update V(u) = softmin( V(u), V(v) + cost(u→v) ).
+    # 5. Main loop: for each transition u→v, update L(u) = max( L(u), L(v) - cost(u→v) ).
     for i, (original_index, trans) in enumerate(sorted_indexed_transitions):
         # Unpack based on assumed structure from forward_svi's usage:
         # trans[0]=u_idx, trans[1]=k_u, trans[2]=rho_u, trans[3]=u_alt_ft, trans[4]=phase_u
@@ -201,9 +203,9 @@ def backward_soft_value_iteration(
         u_idx, k_u, rho_u, u_alt_ft, phase_u, \
         v_idx, k_v, rho_v, v_alt_ft, phase_v = trans
 
-        # a) Pull the current value at v (the "successor" state in backward pass)
-        V_s_v = V_val[v_idx, k_v, rho_v, phase_v]
-        if torch.isinf(V_s_v):
+        # a) Pull the current log‐mass at v (the "successor" state in backward pass)
+        L_s_v = L_val[v_idx, k_v, rho_v, phase_v]
+        if torch.isneginf(L_s_v):
             # If state v has an infinite cost-to-go (i.e., goal is unreachable from v), skip
             continue
 
@@ -222,27 +224,26 @@ def backward_soft_value_iteration(
         )
         cost_uv = float(cost_uv_tensor.item())
 
-        # d) Form the value flowing backward from v to u:  V(v) + cost(u→v)
-        val_from_v = V_s_v + cost_uv # V_s_v is float64 tensor element, cost_uv is float
+        # d) Form the "log‐mass flowing backward" from v to u:  a_v = L(v) - cost(u→v)
+        a_v = L_s_v - cost_uv # L_s_v is float64, cost_uv is float
 
         # Store the computed cost by appending indices and value
         indices_key = (u_idx, k_u, rho_u, phase_u, v_idx, k_v, rho_v, phase_v)
         processed_cost_indices_list.append(indices_key)
         processed_cost_values_list.append(cost_uv)
 
-        # e) Merge into V_val[u] using softmin:
-        #    V(u) references phase_u (trans[4]) and rho_u (trans[2])
-        old_V_u = V_val[u_idx, k_u, rho_u, phase_u]
-        # softmin(a,b) = -log(exp(-a) + exp(-b))
-        new_V_u = -torch.logaddexp(-old_V_u, -torch.tensor(val_from_v, device=device, dtype=torch.float64))
-        V_val[u_idx, k_u, rho_u, phase_u] = new_V_u
+        # e) Merge into L_val[u] using max (hard-min):
+        #    L(u) references phase_u (trans[4]) and rho_u (trans[2])
+        old_L_u = L_val[u_idx, k_u, rho_u, phase_u]
+        new_L_u = torch.max(old_L_u, torch.tensor(a_v, device=device, dtype=torch.float64))
+        L_val[u_idx, k_u, rho_u, phase_u] = new_L_u
 
         if verbose and (i % (len(sorted_indexed_transitions)//100 + 1) == 0 or i == len(sorted_indexed_transitions)-1):
             print(
                 f"\r  Bwd Transition {i+1}/{len(sorted_indexed_transitions)}: "
-                f"u=({u_idx},{k_u},{rho_u},{phase_u}), V(v={v_idx},{k_v},{rho_v},{phase_v})={V_s_v:.3f}, "
-                f"cost(u→v)={cost_uv:.3f}, V(v)+cost={val_from_v:.3f}  ->  "
-                f"new V(u)={new_V_u:.3f}",
+                f"u=({u_idx},{k_u},{rho_u},{phase_u}), L(v={v_idx},{k_v},{rho_v},{phase_v})={L_s_v:.3f}, "
+                f"cost(u→v)={cost_uv:.3f}, a_v={a_v:.3f}  ->  "
+                f"new L(u)={new_L_u:.3f}",
                 end="", flush=True
             )
 
@@ -271,15 +272,15 @@ def backward_soft_value_iteration(
             device=device
         )
 
-    # 6. Convert back: V_soft(s) = -L_val(s). Represents soft cost-to-go.
-    V_soft_cost_to_go = V_val
+    # 6. Convert back: V(s) = -L_val(s). Represents cost-to-go.
+    V_cost_to_go = -L_val
 
     if verbose:
-        num_finite = torch.isfinite(V_soft_cost_to_go).sum().item()
-        total_states = V_soft_cost_to_go.numel()
-        print(f"\nBackward SVI (soft-min) complete. {num_finite}/{total_states} states have finite V(s) (cost-to-go).")
+        num_finite = torch.isfinite(V_cost_to_go).sum().item()
+        total_states = V_cost_to_go.numel()
+        print(f"\nBackward Value Iteration complete. {num_finite}/{total_states} states have finite V(s) (cost-to-go).")
 
-    return V_soft_cost_to_go, edge_costs_uv
+    return V_cost_to_go, edge_costs_uv
 
 # Example usage structure (for testing, adapt from forward_svi if needed)
 if __name__ == '__main__':
@@ -290,7 +291,8 @@ if __name__ == '__main__':
     # device = torch.device("cpu")
 
     # Example:
-    # If goal_node_idx = 2, k=2, rho=1, phase=0 is a goal state (V=0).
+    # If goal_node_idx = 2, k=2, rho=1, phase=0 is a goal state (L=0).
     # If trans (1,1,1,0) -> (2,2,1,0) with cost 1.
-    # V(1,1,1,0) = softmin(inf, V(2,2,1,0) + 1) = softmin(inf, 0 + 1) = 1.
+    # L(1,1,1,0) = max(-inf, L(2,2,1,0) - 1) = max(-inf, 0 - 1) = -1.
+    # V(1,1,1,0) = 1.
     pass

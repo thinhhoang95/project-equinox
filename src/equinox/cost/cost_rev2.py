@@ -8,6 +8,10 @@ from typing import Union, Tuple
 DEFAULT_KNOTS_AC_DIST = [100.0, 500.0, 2000.0, 5000.0, 10000.0] # euros
 DEFAULT_KNOTS_WIND = [-80.0, -40.0, -10.0, 0.0, 10.0, 40.0, 80.0] # knots
 
+class IdentityPLM(nn.Module):
+    def forward(self, x):
+        return x
+
 class CostRev2(nn.Module):
     r"""
     Cost function c(e, t_e, beta) for an edge 'e'.
@@ -51,22 +55,13 @@ class CostRev2(nn.Module):
         self.preference_matrix_p = nn.Parameter(torch.zeros((num_waypoints, num_waypoints), dtype=torch.float32), requires_grad=True)
 
         # Make the LEMD-RBO edge highly preferred
-        with torch.no_grad():
-            self.preference_matrix_p[185, 546] = -200.0 # LEMD-RBO is highly preferred!
+        # with torch.no_grad():
+        #     self.preference_matrix_p[185, 546] = -200.0 # LEMD-RBO is highly preferred!
 
         _knots_ac_dist = knots_ac_dist if knots_ac_dist is not None else DEFAULT_KNOTS_AC_DIST
         _knots_wind = knots_wind if knots_wind is not None else DEFAULT_KNOTS_WIND
 
-        # self.plm_ac_dist = PiecewiseLinearMonoModel(
-        #     knot_points=_knots_ac_dist,
-        #     monotonic_type="non_decreasing"  # Higher AC*dist -> higher cost contribution
-        # )
-
         # For debugging: use identity function for both components
-        class IdentityPLM(nn.Module):
-            def forward(self, x):
-                return x
-
         self.plm_ac_dist = IdentityPLM()
         self.plm_wind = IdentityPLM()
 
@@ -162,6 +157,9 @@ class CostRev2(nn.Module):
         cost_component_ac_dist = self.plm_ac_dist(ac_dist_product_batch) 
         cost_component_wind = self.plm_wind(tailwind_tensor_batch)
 
+        # For shortest time, enable the following line
+        cost_component_ac_dist = ac_dist_product_batch / (450.0 + cost_component_wind)
+
         total_cost_batch = self.beta0 + \
                            self.beta1 * cost_component_ac_dist + \
                            self.beta2 * cost_component_wind + \
@@ -182,107 +180,107 @@ except ImportError:
 from typing import Union # For type hints in forward
 
 
-def run_sanity_tests():
-    print("Running Sanity Tests for CostRev1...")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# def run_sanity_tests():
+#     print("Running Sanity Tests for CostRev1...")
+#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    beta0, beta1, beta2, beta3 = 0.1, 1.0, 0.5, 0.2 # Example coefficients, added beta3
+#     beta0, beta1, beta2, beta3 = 0.1, 1.0, 0.5, 0.2 # Example coefficients, added beta3
 
-    cost_model = CostRev2(beta0, beta1, beta2, beta3, num_waypoints=4, device=device) # Added beta3
-    print(f"Model initialized on device: {cost_model.device}")
-    # print(f"Default knots for AC*Dist: {cost_model.plm_ac_dist.knot_points.tolist()}") # Removed, IdentityPLM has no knot_points
-    # print(f"Default knots for Wind: {cost_model.plm_wind.knot_points.tolist()}") # Removed, IdentityPLM has no knot_points
+#     cost_model = CostRev2(beta0, beta1, beta2, beta3, num_waypoints=4, device=device) # Added beta3
+#     print(f"Model initialized on device: {cost_model.device}")
+#     # print(f"Default knots for AC*Dist: {cost_model.plm_ac_dist.knot_points.tolist()}") # Removed, IdentityPLM has no knot_points
+#     # print(f"Default knots for Wind: {cost_model.plm_wind.knot_points.tolist()}") # Removed, IdentityPLM has no knot_points
 
 
-    # Example matrices (Torch Tensors)
-    distance_matrix_torch = torch.tensor([
-        [0.0, 150.0, float('inf'), 300.0],
-        [150.0, 0.0, 200.0, 250.0],
-        [float('inf'), 200.0, 0.0, 100.0],
-        [300.0, 250.0, 100.0, 0.0]
-    ], dtype=torch.float32, device=device)
+#     # Example matrices (Torch Tensors)
+#     distance_matrix_torch = torch.tensor([
+#         [0.0, 150.0, float('inf'), 300.0],
+#         [150.0, 0.0, 200.0, 250.0],
+#         [float('inf'), 200.0, 0.0, 100.0],
+#         [300.0, 250.0, 100.0, 0.0]
+#     ], dtype=torch.float32, device=device)
 
-    airspace_charge_matrix_torch = torch.tensor([
-        [0.0, 10.0, 0.0, 5.0],
-        [10.0, 0.0, 12.0, 8.0],
-        [0.0, 12.0, 0.0, 15.0],
-        [5.0, 8.0, 15.0, 0.0]
-    ], dtype=torch.float32, device=device)
+#     airspace_charge_matrix_torch = torch.tensor([
+#         [0.0, 10.0, 0.0, 5.0],
+#         [10.0, 0.0, 12.0, 8.0],
+#         [0.0, 12.0, 0.0, 15.0],
+#         [5.0, 8.0, 15.0, 0.0]
+#     ], dtype=torch.float32, device=device)
 
-    # Test Case 1: Batch of edges with Torch tensor inputs
-    print(f"\n--- Test Case: Batch of Edges with Torch Tensors ---")
-    u_indices_batch = torch.tensor([0, 0, 1, 2], device=device, dtype=torch.long)
-    v_indices_batch = torch.tensor([1, 3, 2, 3], device=device, dtype=torch.long)
-    # Edges: (0,1), (0,3), (1,2), (2,3)
-    # Dists: 150, 300, 200, 100
-    # ACs:   10,  5,   12,  15
-    # AC*Dist: 1500, 1500, 2400, 1500
+#     # Test Case 1: Batch of edges with Torch tensor inputs
+#     print(f"\n--- Test Case: Batch of Edges with Torch Tensors ---")
+#     u_indices_batch = torch.tensor([0, 0, 1, 2], device=device, dtype=torch.long)
+#     v_indices_batch = torch.tensor([1, 3, 2, 3], device=device, dtype=torch.long)
+#     # Edges: (0,1), (0,3), (1,2), (2,3)
+#     # Dists: 150, 300, 200, 100
+#     # ACs:   10,  5,   12,  15
+#     # AC*Dist: 1500, 1500, 2400, 1500
 
-    tailwind_batch_pos = torch.tensor([30.0, 10.0, 20.0, 40.0], dtype=torch.float32, device=device)
-    tailwind_batch_neg = torch.tensor([-20.0, -5.0, -15.0, -25.0], dtype=torch.float32, device=device)
+#     tailwind_batch_pos = torch.tensor([30.0, 10.0, 20.0, 40.0], dtype=torch.float32, device=device)
+#     tailwind_batch_neg = torch.tensor([-20.0, -5.0, -15.0, -25.0], dtype=torch.float32, device=device)
 
-    costs_batch_pos = cost_model((u_indices_batch, v_indices_batch), distance_matrix_torch, airspace_charge_matrix_torch, tailwind_batch_pos)
-    print(f"Edges: {[(u.item(),v.item()) for u,v in zip(u_indices_batch, v_indices_batch)]}")
-    print(f"Tailwinds (pos): {tailwind_batch_pos.tolist()}")
-    print(f"Preference Scores: {cost_model.preference_matrix_p[u_indices_batch, v_indices_batch].tolist()}")
-    print(f"Costs (pos): {costs_batch_pos.tolist()}")
+#     costs_batch_pos = cost_model((u_indices_batch, v_indices_batch), distance_matrix_torch, airspace_charge_matrix_torch, tailwind_batch_pos)
+#     print(f"Edges: {[(u.item(),v.item()) for u,v in zip(u_indices_batch, v_indices_batch)]}")
+#     print(f"Tailwinds (pos): {tailwind_batch_pos.tolist()}")
+#     print(f"Preference Scores: {cost_model.preference_matrix_p[u_indices_batch, v_indices_batch].tolist()}")
+#     print(f"Costs (pos): {costs_batch_pos.tolist()}")
     
-    costs_batch_neg = cost_model((u_indices_batch, v_indices_batch), distance_matrix_torch, airspace_charge_matrix_torch, tailwind_batch_neg)
-    print(f"Tailwinds (neg): {tailwind_batch_neg.tolist()}")
-    print(f"Preference Scores: {cost_model.preference_matrix_p[u_indices_batch, v_indices_batch].tolist()}")
-    print(f"Costs (neg): {costs_batch_neg.tolist()}")
+#     costs_batch_neg = cost_model((u_indices_batch, v_indices_batch), distance_matrix_torch, airspace_charge_matrix_torch, tailwind_batch_neg)
+#     print(f"Tailwinds (neg): {tailwind_batch_neg.tolist()}")
+#     print(f"Preference Scores: {cost_model.preference_matrix_p[u_indices_batch, v_indices_batch].tolist()}")
+#     print(f"Costs (neg): {costs_batch_neg.tolist()}")
 
-    if torch.all(costs_batch_pos < costs_batch_neg):
-        print("OK: Positive tailwinds result in lower costs for the batch.")
-    else:
-        print("WARNING: Positive tailwind did NOT consistently result in lower cost. Check PLM_wind and beta2.")
-        for i in range(len(costs_batch_pos)):
-            if costs_batch_pos[i] >= costs_batch_neg[i]:
-                print(f"  Problem at edge index {i}: cost_pos={costs_batch_pos[i]}, cost_neg={costs_batch_neg[i]}")
+#     if torch.all(costs_batch_pos < costs_batch_neg):
+#         print("OK: Positive tailwinds result in lower costs for the batch.")
+#     else:
+#         print("WARNING: Positive tailwind did NOT consistently result in lower cost. Check PLM_wind and beta2.")
+#         for i in range(len(costs_batch_pos)):
+#             if costs_batch_pos[i] >= costs_batch_neg[i]:
+#                 print(f"  Problem at edge index {i}: cost_pos={costs_batch_pos[i]}, cost_neg={costs_batch_neg[i]}")
 
 
-    # Test Case 2: Batch including a non-existent edge
-    print(f"\n--- Test Case: Batch with Non-existent Edge (0,2) ---")
-    u_indices_nonexist = torch.tensor([0, 0], device=device, dtype=torch.long) # Edge (0,2) is inf distance
-    v_indices_nonexist = torch.tensor([1, 2], device=device, dtype=torch.long)
-    tailwind_nonexist = torch.tensor([10.0, 10.0], dtype=torch.float32, device=device)
+#     # Test Case 2: Batch including a non-existent edge
+#     print(f"\n--- Test Case: Batch with Non-existent Edge (0,2) ---")
+#     u_indices_nonexist = torch.tensor([0, 0], device=device, dtype=torch.long) # Edge (0,2) is inf distance
+#     v_indices_nonexist = torch.tensor([1, 2], device=device, dtype=torch.long)
+#     tailwind_nonexist = torch.tensor([10.0, 10.0], dtype=torch.float32, device=device)
     
-    costs_nonexist = cost_model((u_indices_nonexist, v_indices_nonexist), distance_matrix_torch, airspace_charge_matrix_torch, tailwind_nonexist)
-    print(f"Edges: {[(u.item(),v.item()) for u,v in zip(u_indices_nonexist, v_indices_nonexist)]}")
-    print(f"Costs: {costs_nonexist.tolist()}")
-    if torch.isinf(costs_nonexist[1]):
-        print("OK: Cost for non-existent edge (0,2) in batch is infinite.")
-    else:
-        print("WARNING: Cost for non-existent edge (0,2) in batch is NOT infinite.")
-    if not torch.isinf(costs_nonexist[0]):
-        print("OK: Cost for existent edge (0,1) in batch is finite.")
-    else:
-        print("WARNING: Cost for existent edge (0,1) in batch is infinite.")
+#     costs_nonexist = cost_model((u_indices_nonexist, v_indices_nonexist), distance_matrix_torch, airspace_charge_matrix_torch, tailwind_nonexist)
+#     print(f"Edges: {[(u.item(),v.item()) for u,v in zip(u_indices_nonexist, v_indices_nonexist)]}")
+#     print(f"Costs: {costs_nonexist.tolist()}")
+#     if torch.isinf(costs_nonexist[1]):
+#         print("OK: Cost for non-existent edge (0,2) in batch is infinite.")
+#     else:
+#         print("WARNING: Cost for non-existent edge (0,2) in batch is NOT infinite.")
+#     if not torch.isinf(costs_nonexist[0]):
+#         print("OK: Cost for existent edge (0,1) in batch is finite.")
+#     else:
+#         print("WARNING: Cost for existent edge (0,1) in batch is infinite.")
 
 
-    if NUMPY_AVAILABLE:
-        print(f"\n--- Test Case: Batch with NumPy array inputs for matrices ---")
-        distance_matrix_np = distance_matrix_torch.cpu().numpy()
-        airspace_charge_matrix_np = airspace_charge_matrix_torch.cpu().numpy()
+#     if NUMPY_AVAILABLE:
+#         print(f"\n--- Test Case: Batch with NumPy array inputs for matrices ---")
+#         distance_matrix_np = distance_matrix_torch.cpu().numpy()
+#         airspace_charge_matrix_np = airspace_charge_matrix_torch.cpu().numpy()
         
-        # Using same u_indices_batch, v_indices_batch, tailwind_batch_pos from Test Case 1
-        costs_batch_np_inputs = cost_model((u_indices_batch, v_indices_batch), distance_matrix_np, airspace_charge_matrix_np, tailwind_batch_pos)
-        print(f"Edges: {[(u.item(),v.item()) for u,v in zip(u_indices_batch, v_indices_batch)]}")
-        print(f"Tailwinds: {tailwind_batch_pos.tolist()}")
-        print(f"Preference Scores: {cost_model.preference_matrix_p[u_indices_batch, v_indices_batch].tolist()}")
-        print(f"Costs (NumPy matrix inputs): {costs_batch_np_inputs.tolist()}")
+#         # Using same u_indices_batch, v_indices_batch, tailwind_batch_pos from Test Case 1
+#         costs_batch_np_inputs = cost_model((u_indices_batch, v_indices_batch), distance_matrix_np, airspace_charge_matrix_np, tailwind_batch_pos)
+#         print(f"Edges: {[(u.item(),v.item()) for u,v in zip(u_indices_batch, v_indices_batch)]}")
+#         print(f"Tailwinds: {tailwind_batch_pos.tolist()}")
+#         print(f"Preference Scores: {cost_model.preference_matrix_p[u_indices_batch, v_indices_batch].tolist()}")
+#         print(f"Costs (NumPy matrix inputs): {costs_batch_np_inputs.tolist()}")
         
-        if isinstance(costs_batch_np_inputs, torch.Tensor) and \
-           not torch.any(torch.isnan(costs_batch_np_inputs)) and \
-           not torch.all(torch.isinf(costs_batch_np_inputs[~torch.isinf(distance_matrix_torch[u_indices_batch, v_indices_batch])])) : # Check non-inf distances didn't become inf costs
-             print("OK: NumPy matrix inputs processed for batch.")
-        else:
-             print("WARNING: Problem with NumPy matrix input processing for batch.")
-    else:
-        print("\nSkipping NumPy input test as NumPy is not available.")
+#         if isinstance(costs_batch_np_inputs, torch.Tensor) and \
+#            not torch.any(torch.isnan(costs_batch_np_inputs)) and \
+#            not torch.all(torch.isinf(costs_batch_np_inputs[~torch.isinf(distance_matrix_torch[u_indices_batch, v_indices_batch])])) : # Check non-inf distances didn't become inf costs
+#              print("OK: NumPy matrix inputs processed for batch.")
+#         else:
+#              print("WARNING: Problem with NumPy matrix input processing for batch.")
+#     else:
+#         print("\nSkipping NumPy input test as NumPy is not available.")
 
-    print("\nReminder: Altitude-related edge cases for tailwind generation are external to this module.")
-    print("\nSanity Tests Complete.")
+#     print("\nReminder: Altitude-related edge cases for tailwind generation are external to this module.")
+#     print("\nSanity Tests Complete.")
 
-if __name__ == '__main__':
-    run_sanity_tests()
+# if __name__ == '__main__':
+#     run_sanity_tests()
