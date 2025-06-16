@@ -67,6 +67,9 @@ class RunConfiguration:
 
     # Regularization parameters
     alpha_pref_reg: float = 1.0
+
+    # Wind model configuration
+    disable_config_wind_model: bool = False
     
     def get_device(self) -> torch.device:
         """Get the appropriate torch device based on availability and preference."""
@@ -163,7 +166,10 @@ class RunConfiguration:
         
         # Initialize models
         cost_model = self.initialize_cost_model(len(G.nodes()))
-        wind_model = self.initialize_wind_model()
+        if not self.disable_config_wind_model:
+            wind_model = self.initialize_wind_model()
+        else:
+            wind_model = None
         performance_model = self.initialize_performance_model()
         
         # Load matrices

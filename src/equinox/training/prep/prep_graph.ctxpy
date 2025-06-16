@@ -1,0 +1,1107 @@
+# %% [markdown]
+# # Preambles
+
+# %%
+%load_ext autoreload
+%autoreload 2
+
+import os 
+import dotenv 
+import sys
+
+# Load the environment variables
+dotenv.load_dotenv()
+
+# Add the environment variable PROJECT_ROOT to the Python path
+project_root = os.getenv('PROJECT_ROOT')
+if project_root:
+    sys.path.append(project_root)
+    print(f"Added {project_root} to the Python path")
+else:
+    print("PROJECT_ROOT environment variable not found")
+
+import importlib 
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
+import networkx as nx
+
+# %% [markdown]
+# # I/O and Verifications
+# ## Load Data
+
+# %%
+# Load the routes from one file
+route_df = pd.read_csv(os.path.join(project_root, 'data', 'routes_wps', 'cs_2023-04-01.routes.csv'))
+# Only keep the columns without the word 'full' in it 
+route_df = route_df.loc[:, ~route_df.columns.str.contains('full')]
+route_df.head(5)
+
+# %%
+# Load the NAV data
+G = nx.read_gml(os.path.join(project_root, 'data', 'graphs', 'ats_fra_nodes_only.gml'))
+print(f'The graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges')
+# Convert G into a directed graph
+G = nx.DiGraph(G)
+print(f'The directed graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges')
+
+
+# %% [markdown]
+# ## Check the segments: distance and speed
+
+# %%
+from utils.haversine import haversine_distance 
+
+def print_segment_stats(route_waypoints: str, pass_times_str: str, G) -> None:
+    """
+    Given:
+      - route_waypoints: e.g. "INKIM LJLJ LMML MALTI"
+      - pass_times_str:  e.g. "1680349300 1680364679 1680382679 1680382679"
+      - G: a networkx.Graph whose nodes have 'lat' and 'lon' attributes
+    
+    Prints for each consecutive pair:
+      "{FROM}-{TO}: XX.X km, YY minutes, ZZ km/h"
+    """
+    waypoints = route_waypoints.split()
+    pass_times = [int(ts) for ts in pass_times_str.split()]
+
+    if len(waypoints) != len(pass_times):
+        raise ValueError("Number of waypoints and pass times must match")
+
+    # loop over each segment
+    for start, end, t0, t1 in zip(waypoints, waypoints[1:], pass_times, pass_times[1:]):
+        # fetch coordinates
+        lat1, lon1 = G.nodes[start]['lat'], G.nodes[start]['lon']
+        lat2, lon2 = G.nodes[end]['lat'],   G.nodes[end]['lon']
+
+        # distance in nautical miles → convert to km
+        dist_nm = haversine_distance(lat1, lon1, lat2, lon2)
+        dist_km = dist_nm * 1.852
+
+        # time difference
+        dt_sec = t1 - t0
+        dt_min = dt_sec / 60.0
+
+        # avg. speed in km/h
+        if dt_sec > 0:
+            speed_kmh = dist_km / (dt_sec / 3600.0)
+        else:
+            speed_kmh = float('inf')
+
+        print(f"{start}-{end}: {dist_km:.1f} km, "
+              f"{int(round(dt_min))} minutes, "
+              f"{speed_kmh:.1f} km/h")
+
+
+# %%
+for i in range(10, 30):
+    route = route_df.iloc[i]
+    print_segment_stats(route['real_waypoints'], route['pass_times'], G)
+    print('-'*10)
+
+# %% [markdown]
+# # Departure and Arrival Airports
+
+# %%
+def extract_departure_arrival(route_df, waypoints_col='real_waypoints'):
+    """
+    Given a DataFrame with a column of space‑separated waypoint strings,
+    return two lists: departures (first waypoint) and arrivals (last waypoint).
+    """
+    # split each route into a list of waypoints
+    routes = route_df[waypoints_col].str.split()
+    
+    from collections import Counter, defaultdict
+
+    # if the first waypoint contains 4 letters, it is a departure airport
+    departures = [route[0] for route in routes if len(route[0]) == 4]
+    # if the last waypoint contains 4 letters, it is an arrival airport
+    arrivals = [route[-1] for route in routes if len(route[-1]) == 4]
+
+    # Count occurrences
+    dep_counts = Counter(departures)
+    arr_counts = Counter(arrivals)
+
+    # Build airport dictionary with departure and arrival counts
+    airport_counts = defaultdict(lambda: {'departures': 0, 'arrivals': 0})
+    for airport, count in dep_counts.items():
+        airport_counts[airport]['departures'] = count
+    for airport, count in arr_counts.items():
+        airport_counts[airport]['arrivals'] = count
+
+    return set(departures), set(arrivals), dict(airport_counts)
+
+departures, arrivals, airport_counts = extract_departure_arrival(route_df)
+print(f"Detected {len(departures)} departure airports and {len(arrivals)} arrival airports")
+print(f"There are {len(departures | arrivals)} total airports")
+
+# %%
+# Calculate total movements (departures + arrivals) for each airport
+top_airports = sorted(
+    airport_counts.items(),
+    key=lambda x: x[1]['departures'] + x[1]['arrivals'],
+    reverse=True
+)[:10]
+
+print("Top 10 airports by total movements (departures + arrivals):")
+for airport, counts in top_airports:
+    total = counts['departures'] + counts['arrivals']
+    print(f"{airport}: {total} (Departures: {counts['departures']}, Arrivals: {counts['arrivals']})")
+
+
+# %% [markdown]
+# <font color='red'>LFPG and EDDF seem to be off. Coverage problem?</font>
+
+# %% [markdown]
+# # Graph Slicing and Simplification
+
+# %% [markdown]
+# We will choose the route **LEMD (Madrid Barajas) - EGLL(London Heathrow)** for demonstration. First we narrow down the graph `G` to a smaller graph (without edges yet) `Gm` that contains the waypoints with minimum route distance between LEMD and EGLL does not exceed `1+threshold` from the great circle distance. This threshold should be much smaller than the rule of thumb when designing routes. Here it is just used to narrow it down.
+
+# %%
+def filter_graph_by_detour(G: nx.Graph, origin, destination, threshold: float) -> nx.Graph:
+    """
+    Return the induced subgraph of G containing exactly those nodes 'n'
+    for which:
+        dist(origin → n) + dist(n → destination)
+        ≤ (1 + threshold) x dist(origin → destination)
+
+    Parameters
+    ----------
+    G : nx.Graph
+        A graph whose nodes have 'lat' and 'lon' attributes (in degrees).
+    origin : node
+        The node ID in G of the origin waypoint.
+    destination : node
+        The node ID in G of the destination waypoint.
+    threshold : float
+        Allowed fractional detour (e.g. 0.1 for up to a 10% longer path).
+
+    Returns
+    -------
+    nx.Graph
+        The subgraph induced by the set of waypoints satisfying the detour criterion.
+    """
+    # 1. Precompute the direct (shortest possible) distance
+    lat_o, lon_o = G.nodes[origin]['lat'], G.nodes[origin]['lon']
+    lat_d, lon_d = G.nodes[destination]['lat'], G.nodes[destination]['lon']
+    direct_dist = haversine_distance(lat_o, lon_o, lat_d, lon_d)
+    max_allowed = (1.0 + threshold) * direct_dist
+
+    # 2. Scan all nodes once, pruning early if origin→node alone already exceeds max_allowed
+    keepers = []
+    for n, data in G.nodes(data=True):
+        lat_n, lon_n = data['lat'], data['lon']
+
+        d_on = haversine_distance(lat_o, lon_o, lat_n, lon_n)
+        if d_on > max_allowed:
+            # even reaching n already is too far
+            continue
+
+        d_nd = haversine_distance(lat_n, lon_n, lat_d, lon_d)
+        if d_on + d_nd <= max_allowed:
+            keepers.append(n)
+
+    # 3. Return the induced subgraph (make a copy if you need it disconnected from G)
+    return G.subgraph(keepers).copy()
+
+# %%
+Gm = filter_graph_by_detour(G, 'LEMD', 'EGLL', 0.075) # Only 7.5% of *minimum* detour is allowed, real path could be much longer
+print(f'The filtered graph has {Gm.number_of_nodes()} nodes and {Gm.number_of_edges()} edges')
+
+# %%
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature
+
+# Assuming Gm is your NetworkX graph
+# Each node in Gm has 'lat' and 'lon' attributes
+
+# Extract latitudes and longitudes
+lats = []
+lons = []
+for node, data in Gm.nodes(data=True):
+    lats.append(data['lat'])
+    lons.append(data['lon'])
+
+# Calculate the bounds with some padding
+min_lon, max_lon = min(lons) - 2, max(lons) + 2
+min_lat, max_lat = min(lats) - 2, max(lats) + 2
+
+# Set up the map
+fig = plt.figure(figsize=(5, 4))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.coastlines()
+ax.add_feature(cartopy.feature.LAND)
+ax.set_extent([min_lon, max_lon, min_lat, max_lat], crs=ccrs.PlateCarree())
+
+# Plot the waypoints
+ax.scatter(lons, lats, color='blue', s=1, transform=ccrs.PlateCarree(), label='Waypoints')
+# Add the LEMD and EGLL nodes as stars with text labels
+lemd_lon, lemd_lat = Gm.nodes['LEMD']['lon'], Gm.nodes['LEMD']['lat']
+egll_lon, egll_lat = Gm.nodes['EGLL']['lon'], Gm.nodes['EGLL']['lat']
+
+# Plot stars for origin and destination
+ax.scatter(lemd_lon, lemd_lat, color='red', s=100, marker='*', transform=ccrs.PlateCarree())
+ax.scatter(egll_lon, egll_lat, color='red', s=100, marker='*', transform=ccrs.PlateCarree())
+
+# Add gridlines
+gl = ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+gl.top_labels = False
+gl.right_labels = False
+
+plt.title('Waypoints between LEMD and EGLL')
+plt.show()
+
+# %% [markdown]
+# Then we add the edges to `Gm` from all the segments traversed by `route_df`.
+
+# %%
+def add_edges_to_Gm(route_df, Gm, haversine_distance):
+    """
+    For each row in route_df, add edges to Gm for each consecutive pair in real_waypoints.
+    
+    Parameters
+    ----------
+    route_df : pandas.DataFrame
+        Must contain a column 'real_waypoints' with space‑separated waypoint IDs.
+    Gm : networkx.Graph (or DiGraph)
+        Graph whose nodes are waypoint IDs, each with 'lat' and 'lon' attributes.
+    haversine_distance : callable
+        Function lat1, lon1, lat2, lon2 -> distance in nautical miles.
+    """
+    for idx, row in route_df.iterrows():
+        # split into waypoint sequence
+        wpts = row['real_waypoints'].split()
+        # iterate over each segment
+        for u, v in zip(wpts, wpts[1:]):
+            if Gm.has_node(u) and Gm.has_node(v):
+                lat1, lon1 = Gm.nodes[u]['lat'], Gm.nodes[u]['lon']
+                lat2, lon2 = Gm.nodes[v]['lat'], Gm.nodes[v]['lon']
+                # compute distance in nautical miles
+                dist_nm = haversine_distance(lat1, lon1, lat2, lon2)
+                # add edge with dist, tail‑wind, and preference
+                Gm.add_edge(u, v,
+                           dist=dist_nm,
+                           t_wind=0.0,   # default tail‑wind (m/s)
+                           pref=0)       # default preference
+
+# %%
+add_edges_to_Gm(route_df, Gm, haversine_distance)
+
+# %%
+# Bearing between source and goal 
+def compute_bearing(lat1, lon1, lat2, lon2):
+    """
+    Compute the initial bearing (forward azimuth) from (lat1, lon1) to (lat2, lon2).
+    All args in degrees. Returns bearing in degrees from North (0-360).
+    """
+    import math
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    dlon_rad = math.radians(lon2 - lon1)
+    x = math.sin(dlon_rad) * math.cos(lat2_rad)
+    y = math.cos(lat1_rad) * math.sin(lat2_rad) - \
+        math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(dlon_rad)
+    bearing_rad = math.atan2(x, y)
+    bearing_deg = (math.degrees(bearing_rad) + 360) % 360
+    return bearing_deg
+
+src = 'LEMD'
+dst = 'EGLL'
+if src in Gm.nodes and dst in Gm.nodes:
+    lat1, lon1 = Gm.nodes[src]['lat'], Gm.nodes[src]['lon']
+    lat2, lon2 = Gm.nodes[dst]['lat'], Gm.nodes[dst]['lon']
+    bearing = compute_bearing(lat1, lon1, lat2, lon2)
+    print(f"Bearing from {src} to {dst}: {bearing:.2f}°")
+else:
+    print(f"Source ({src}) or destination ({dst}) not found in graph.")
+
+
+# %%
+def remove_backtracking_edges(G, main_bearing, max_backtrack_angle=120):
+    """
+    Remove all edges from G that represent a 'backtrack' relative to the main bearing.
+    Only allow the direction in the bearing of the main bearing (not the reverse direction).
+    """
+    import math
+
+    def bearing_between(lat1, lon1, lat2, lon2):
+        lat1_rad = math.radians(lat1)
+        lat2_rad = math.radians(lat2)
+        dlon_rad = math.radians(lon2 - lon1)
+        x = math.sin(dlon_rad) * math.cos(lat2_rad)
+        y = math.cos(lat1_rad) * math.sin(lat2_rad) - \
+            math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(dlon_rad)
+        bearing_rad = math.atan2(x, y)
+        bearing_deg = (math.degrees(bearing_rad) + 360) % 360
+        return bearing_deg
+
+    def angle_diff(a, b):
+        d = abs(a - b) % 360
+        return min(d, 360 - d)
+
+    edges_to_remove = []
+    for u, v in G.edges():
+        lat1 = G.nodes[u].get('lat')
+        lon1 = G.nodes[u].get('lon')
+        lat2 = G.nodes[v].get('lat')
+        lon2 = G.nodes[v].get('lon')
+        if None in (lat1, lon1, lat2, lon2):
+            continue  # skip if missing coordinates
+        edge_bearing = bearing_between(lat1, lon1, lat2, lon2)
+        diff = angle_diff(main_bearing, edge_bearing)
+        if diff > max_backtrack_angle:
+            edges_to_remove.append((u, v))
+    # Remove the edges
+    G.remove_edges_from(edges_to_remove)
+    if edges_to_remove:
+        print(f"Removed {len(edges_to_remove)} backtracking edges (angle > {max_backtrack_angle}° from main bearing).")
+
+# %%
+print(f'The filtered graph has {Gm.number_of_nodes()} nodes and {Gm.number_of_edges()} edges')
+
+# %% [markdown]
+# ### Airport Connections
+
+# %%
+from quasar_r12.geometry.airportconn import create_airport_connections
+create_airport_connections('LEMD', Gm.nodes['LEMD']['lat'], Gm.nodes['LEMD']['lon'], Gm, distance_threshold_km=90)
+create_airport_connections('EGLL', Gm.nodes['EGLL']['lat'], Gm.nodes['EGLL']['lon'], Gm, distance_threshold_km=90)
+
+# %% [markdown]
+# ### Graph Plotting Fn
+
+# %%
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature
+import numpy as np
+
+def plot_graph(Gm, show_label=False, highlighted_labels = []):
+    # Assuming Gm is your NetworkX graph
+    # Each node in Gm has 'lat' and 'lon' attributes
+
+    # Extract latitudes and longitudes
+    lats = []
+    lons = []
+    ids = []
+    for node, data in Gm.nodes(data=True):
+        lats.append(data['lat'])
+        lons.append(data['lon'])
+        ids.append(node)
+
+    # Calculate the bounds with some padding
+    min_lon, max_lon = min(lons) - 2, max(lons) + 2
+    min_lat, max_lat = min(lats) - 2, max(lats) + 2
+
+    # Set up the map
+    if show_label:
+        fig = plt.figure(figsize=(40, 56))
+    else:
+        fig = plt.figure(figsize=(10, 14))
+    ax = plt.axes(projection=ccrs.PlateCarree())
+    ax.coastlines()
+    ax.add_feature(cartopy.feature.LAND)
+    ax.set_extent([min_lon, max_lon, min_lat, max_lat], crs=ccrs.PlateCarree())
+
+    # Plot the waypoints
+    ax.scatter(lons, lats, color='blue', s=1, transform=ccrs.PlateCarree(), label='Waypoints')
+    # Add text labels for each waypoint
+    if show_label:
+        for lon, lat, id_text in zip(lons, lats, ids):
+            if id_text in highlighted_labels:
+                ax.text(lon, lat, id_text, transform=ccrs.PlateCarree(), fontsize=10, color='blue')
+            else:
+                ax.text(lon, lat, id_text, transform=ccrs.PlateCarree(), fontsize=10)
+    # Plot the edges
+    for u, v in Gm.edges():
+        lon1, lat1 = Gm.nodes[u]['lon'], Gm.nodes[u]['lat']
+        lon2, lat2 = Gm.nodes[v]['lon'], Gm.nodes[v]['lat']
+        ax.plot([lon1, lon2], [lat1, lat2], color='gray', linewidth=0.5, 
+                alpha=0.3, transform=ccrs.PlateCarree())
+
+    # Add the LEMD and EGLL nodes as stars with text labels
+    lemd_lon, lemd_lat = Gm.nodes['LEMD']['lon'], Gm.nodes['LEMD']['lat']
+    egll_lon, egll_lat = Gm.nodes['EGLL']['lon'], Gm.nodes['EGLL']['lat']
+
+    # Plot stars for origin and destination
+    ax.scatter(lemd_lon, lemd_lat, color='red', s=100, marker='*', transform=ccrs.PlateCarree())
+    ax.scatter(egll_lon, egll_lat, color='red', s=100, marker='*', transform=ccrs.PlateCarree())
+
+    # Add text labels for the airports
+    ax.text(lemd_lon+0.2, lemd_lat+0.2, 'LEMD', transform=ccrs.PlateCarree(), fontsize=8)
+    ax.text(egll_lon+0.2, egll_lat+0.2, 'EGLL', transform=ccrs.PlateCarree(), fontsize=8)
+
+    # Add gridlines
+    gl = ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+    gl.top_labels = False
+    gl.right_labels = False
+
+    plt.title('Plausible Connections between LEMD and EGLL')
+    plt.savefig("route_graph_plot.pdf", format="pdf", bbox_inches="tight")
+    plt.show()
+
+# %% [markdown]
+# ### Gap Filling (not used for now)
+
+# %%
+from quasar_r12.geometry.filler import fill_graph_gaps
+# Enable to fill the gaps between segments, applied for sparse graph data case
+# Use smaller tube/min_len for potentially sparser test data
+# LEMD_COORD = Gm.nodes['LEMD']['lat'], Gm.nodes['LEMD']['lon']
+# EGLL_COORD = Gm.nodes['EGLL']['lat'], Gm.nodes['EGLL']['lon']
+# Gm, added_edges = fill_graph_gaps(Gm, LEMD_COORD, EGLL_COORD, max_neighbor_dist_km=120, k_neighbors=5,
+#                        max_edges_to_process=10)
+
+# %%
+# Remove backtracking edges
+remove_backtracking_edges(Gm, bearing, 120)
+
+# Remove nodes with no connections from Gm
+isolated_nodes = list(nx.isolates(Gm))
+Gm.remove_nodes_from(isolated_nodes)
+print(f"Removed {len(isolated_nodes)} isolated nodes from the graph.")
+print(f"The graph now has {Gm.number_of_nodes()} nodes and {Gm.number_of_edges()} edges.")
+
+
+# %%
+plot_graph(Gm, show_label=True)
+
+# %% [markdown]
+# ### Create connectivity and ensure acyclicity
+
+# %%
+def nodes_that_cannot_reach_goal(G, goal):
+    """
+    Given a directed or undirected graph G and a goal node,
+    return a list of nodes from which the goal node is NOT reachable.
+
+    Parameters
+    ----------
+    G : networkx.Graph or networkx.DiGraph
+        The route graph.
+    goal : node
+        The goal node.
+
+    Returns
+    -------
+    list
+        List of nodes from which goal is NOT reachable.
+    """
+    if not G.has_node(goal):
+        raise KeyError(f"Goal node {goal} not in graph")
+
+    all_nodes = set(G.nodes())
+    if G.is_directed():
+        # In a DiGraph, nodes that can reach goal are its ancestors plus itself
+        reachable_nodes = set(nx.ancestors(G, goal))
+        reachable_nodes.add(goal)
+    else:
+        # In undirected, all nodes in the same connected component as goal
+        reachable_nodes = set(nx.node_connected_component(G, goal))
+    unreachable_nodes = all_nodes - reachable_nodes
+    return list(unreachable_nodes)
+    
+def nodes_that_source_cannot_reach(G, source):
+    """
+    Given a directed or undirected graph G and a source node,
+    return a list of nodes that cannot be reached from the source node.
+
+    Parameters
+    ----------
+    G : networkx.Graph or networkx.DiGraph
+        The route graph.
+    source : node
+        The source node.
+
+    Returns
+    -------
+    list
+        List of nodes that cannot be reached from the source node.
+    """
+    if not G.has_node(source):
+        raise KeyError(f"Source node {source} not in graph")
+
+    all_nodes = set(G.nodes())
+    if G.is_directed():
+        # In a DiGraph, nodes reachable from source are its descendants plus itself
+        reachable_nodes = set(nx.descendants(G, source))
+        reachable_nodes.add(source)
+    else:
+        # In undirected, all nodes in the same connected component as source
+        reachable_nodes = set(nx.node_connected_component(G, source))
+    unreachable_nodes = all_nodes - reachable_nodes
+    return list(unreachable_nodes)
+    
+
+
+
+# %%
+def is_acyclic(G):
+    """
+    Checks whether the given graph is acyclic.
+
+    Parameters
+    ----------
+    G : networkx.Graph or networkx.DiGraph
+        The graph to check.
+
+    Returns
+    -------
+    bool
+        True if the graph is acyclic, False otherwise.
+    """
+    if G.is_directed():
+        # For directed graphs, use networkx's is_directed_acyclic_graph
+        return nx.is_directed_acyclic_graph(G)
+    else:
+        # For undirected graphs, acyclic means no cycles (i.e., a forest)
+        # A connected undirected acyclic graph is a tree; in general, a forest
+        try:
+            cycles = nx.find_cycle(G)
+            return False
+        except nx.exception.NetworkXNoCycle:
+            return True
+
+
+# %%
+from quasar_r12.geometry.cycle_prune import make_acyclic_by_bearing_and_degree
+from quasar_r12.geometry.improve_connectivity import improve_graph_connectivity
+from quasar_r12.geometry.collinear import refine_graph
+n_iter = 10
+Gx = Gm.copy()
+
+
+for i in range(n_iter):
+    
+    orphan_goal_nodes = nodes_that_cannot_reach_goal(Gx, 'EGLL')
+    orphan_source_nodes = nodes_that_source_cannot_reach(Gx, 'LEMD')
+
+    print(f'Iteration {i}, there are {len(nodes_that_cannot_reach_goal(Gx, "EGLL"))} nodes that can not reach EGLL, {len(nodes_that_source_cannot_reach(Gx, "LEMD"))} nodes that can not be reached from LEMD')
+    edge_before = Gx.number_of_edges()
+
+    Gx = improve_graph_connectivity(Gx, orphan_goal_nodes, orphan_source_nodes,
+                                    main_bearing=bearing,
+                                    radius_nm=400,
+                                    bearing_tolerance_deg=85,
+                                    n_degree_connections=6,
+                                    n_nearest_connections=2)
+    
+    
+    if Gx.has_edge('LERJ', 'LPA'):
+        print("1 Edge (LERJ, LPA) exists in Gx")
+
+    has_path = nx.has_path(Gx, 'ULTIB', 'EGLL')
+    print(f"1 >> Path from ULTIB to EGLL exists: {has_path}")
+
+    # Refine the graph to satisfy collinearity condition
+    for i in range(5):
+        refine_graph(Gx, 1e-4, 1e-4)
+
+    if Gx.has_edge('LERJ', 'LPA'):
+        print("2 Edge (LERJ, LPA) exists in Gx")
+
+    has_path = nx.has_path(Gx, 'ULTIB', 'EGLL')
+    print(f"2 >> Path from ULTIB to EGLL exists: {has_path}")
+    
+    edge_after = Gx.number_of_edges()
+    print(f'Number of edge changes: {edge_after - edge_before}')
+
+    Gx = make_acyclic_by_bearing_and_degree(Gx, bearing)
+    
+    if Gx.has_edge('LERJ', 'LPA'):
+        print("3 Edge (LERJ, LPA) exists in Gx")
+
+    has_path = nx.has_path(Gx, 'ULTIB', 'EGLL')
+    print(f"3 >> Path from ULTIB to EGLL exists: {has_path}")
+    
+    # Check if the graph is acyclic
+    if is_acyclic(Gx):
+        print(f'Graph is acyclic after iteration {i}')
+    else:
+        print(f'Graph is not acyclic after iteration {i}')
+
+
+
+# %%
+orphan_goal_nodes = nodes_that_cannot_reach_goal(Gx, 'EGLL')
+orphan_source_nodes = nodes_that_source_cannot_reach(Gx, 'LEMD')
+
+# %%
+def remove_orphan_nodes(G, orphan_goal_nodes, orphan_source_nodes):
+    """
+    Remove all nodes in orphan_goal_nodes and orphan_source_nodes from the graph G.
+    """
+    to_remove = set(orphan_goal_nodes) | set(orphan_source_nodes)
+    G.remove_nodes_from(to_remove)
+
+remove_orphan_nodes(Gx, orphan_goal_nodes, orphan_source_nodes)
+
+
+# %%
+plot_graph(Gx, True)
+
+# %%
+print(f'Final graph has {Gx.number_of_nodes()} nodes and {Gx.number_of_edges()} edges.')
+
+# %%
+def is_acyclic(G):
+    """
+    Checks whether the given graph is acyclic.
+
+    Parameters
+    ----------
+    G : networkx.Graph or networkx.DiGraph
+        The graph to check.
+
+    Returns
+    -------
+    bool
+        True if the graph is acyclic, False otherwise.
+    """
+    if G.is_directed():
+        # For directed graphs, use networkx's is_directed_acyclic_graph
+        return nx.is_directed_acyclic_graph(G)
+    else:
+        # For undirected graphs, acyclic means no cycles (i.e., a forest)
+        # A connected undirected acyclic graph is a tree; in general, a forest
+        try:
+            cycles = nx.find_cycle(G)
+            return False
+        except nx.exception.NetworkXNoCycle:
+            return True
+
+print(f'Gx is acyclic? ', is_acyclic(Gx))
+
+# %%
+# Export this graph as a gml file
+nx.write_gml(Gx, 'LEMD_EGLL.gml')
+
+# %%
+
+
+# %%
+
+
+# %%
+
+
+# %%
+
+
+# %% [markdown]
+# 
+
+# %% [markdown]
+# 
+
+# %% [markdown]
+# 
+
+# %% [markdown]
+# 
+
+# %% [markdown]
+# 
+
+# %% [markdown]
+# 
+
+# %% [markdown]
+# 
+
+# %% [markdown]
+# ### Pruning dead-ends
+
+# %%
+from quasar_r12.geometry.prunedeadends import prune_dead_ends_and_sharp_turns
+try:
+    Gmxx_copy = Gm.copy() # Work on a copy
+    print(f'Before: {Gmxx_copy.number_of_nodes()} nodes, {Gmxx_copy.number_of_edges()} edges.')
+    prune_dead_ends_and_sharp_turns(Gmxx_copy, 'LEMD', 'EGLL', min_turn_angle=85)
+    print(f'After: {Gmxx_copy.number_of_nodes()} nodes, {Gmxx_copy.number_of_edges()} edges.')
+except (ValueError, KeyError, NameError, Exception) as e:
+     print(f"An error occurred: {e}")
+
+# %%
+plot_graph(Gmxx_copy)
+
+# %% [markdown]
+# ### Reduce collinear routing options
+
+# %%
+from quasar_r12.geometry.collinear import refine_graph
+for i in range(10):
+    refine_graph(Gmxx_copy, 1e-4, 1e-4)
+    print(f"Iteration {i+1}: The graph now has {Gm.number_of_nodes()} nodes and {Gm.number_of_edges()} edges.")
+
+# %% [markdown]
+# ### Cycle Removal
+
+# %%
+from quasar_r12.geometry.cycle_prune import make_acyclic_by_bearing_and_degree
+
+# %%
+Gx = Gmxx_copy.copy()
+print(f'Before acycling pruning: {Gx.number_of_nodes()} nodes, {Gx.number_of_edges()} edges.')
+
+
+Gx = make_acyclic_by_bearing_and_degree(Gx, bearing)
+print(f'After acycling pruning: {Gx.number_of_nodes()} nodes, {Gx.number_of_edges()} edges.')
+
+
+# %%
+plot_graph(Gx)
+
+# %% [markdown]
+# ### Reachability Improvements
+
+# %%
+def nodes_that_cannot_reach_goal(G, goal):
+    """
+    Given a directed or undirected graph G and a goal node,
+    return a list of nodes from which the goal node is NOT reachable.
+
+    Parameters
+    ----------
+    G : networkx.Graph or networkx.DiGraph
+        The route graph.
+    goal : node
+        The goal node.
+
+    Returns
+    -------
+    list
+        List of nodes from which goal is NOT reachable.
+    """
+    if not G.has_node(goal):
+        raise KeyError(f"Goal node {goal} not in graph")
+
+    all_nodes = set(G.nodes())
+    if G.is_directed():
+        # In a DiGraph, nodes that can reach goal are its ancestors plus itself
+        reachable_nodes = set(nx.ancestors(G, goal))
+        reachable_nodes.add(goal)
+    else:
+        # In undirected, all nodes in the same connected component as goal
+        reachable_nodes = set(nx.node_connected_component(G, goal))
+    unreachable_nodes = all_nodes - reachable_nodes
+    return list(unreachable_nodes)
+    
+def nodes_that_source_cannot_reach(G, source):
+    """
+    Given a directed or undirected graph G and a source node,
+    return a list of nodes that cannot be reached from the source node.
+
+    Parameters
+    ----------
+    G : networkx.Graph or networkx.DiGraph
+        The route graph.
+    source : node
+        The source node.
+
+    Returns
+    -------
+    list
+        List of nodes that cannot be reached from the source node.
+    """
+    if not G.has_node(source):
+        raise KeyError(f"Source node {source} not in graph")
+
+    all_nodes = set(G.nodes())
+    if G.is_directed():
+        # In a DiGraph, nodes reachable from source are its descendants plus itself
+        reachable_nodes = set(nx.descendants(G, source))
+        reachable_nodes.add(source)
+    else:
+        # In undirected, all nodes in the same connected component as source
+        reachable_nodes = set(nx.node_connected_component(G, source))
+    unreachable_nodes = all_nodes - reachable_nodes
+    return list(unreachable_nodes)
+    
+# Nodes that can not reach EGLL
+orphan_goal_nodes = nodes_that_cannot_reach_goal(Gx, 'EGLL')
+print(f'{len(orphan_goal_nodes)} nodes that can not reach EGLL')
+
+# Nodes that can not be reached from LEMD
+orphan_source_nodes = nodes_that_source_cannot_reach(Gx, 'LEMD')
+print(f'{len(orphan_source_nodes)} nodes that can not be reached from LEMD')
+
+
+# %%
+from quasar_r12.geometry.improve_connectivity import improve_graph_connectivity
+Gx2 = Gx.copy()
+print(f'Before improving connectivity: {Gx2.number_of_nodes()} nodes, {Gx2.number_of_edges()} edges.')
+Gx2 = improve_graph_connectivity(Gx2, orphan_goal_nodes, orphan_source_nodes,
+                                 main_bearing=bearing,
+                                 radius_nm=100,
+                                 bearing_tolerance_deg=60,
+                                 num_connections_to_make=5)
+print(f'After improving connectivity: {Gx2.number_of_nodes()} nodes, {Gx2.number_of_edges()} edges.')
+print(f'After improvements, there are {len(nodes_that_cannot_reach_goal(Gx2, "EGLL"))} nodes that can not reach EGLL')
+print(f'After improvements, there are {len(nodes_that_source_cannot_reach(Gx2, "LEMD"))} nodes that can not be reached from LEMD')
+
+
+# %%
+def is_acyclic(G):
+    """
+    Checks whether the given graph is acyclic.
+
+    Parameters
+    ----------
+    G : networkx.Graph or networkx.DiGraph
+        The graph to check.
+
+    Returns
+    -------
+    bool
+        True if the graph is acyclic, False otherwise.
+    """
+    if G.is_directed():
+        # For directed graphs, use networkx's is_directed_acyclic_graph
+        return nx.is_directed_acyclic_graph(G)
+    else:
+        # For undirected graphs, acyclic means no cycles (i.e., a forest)
+        # A connected undirected acyclic graph is a tree; in general, a forest
+        try:
+            cycles = nx.find_cycle(G)
+            return False
+        except nx.exception.NetworkXNoCycle:
+            return True
+
+
+# %%
+print(f'Graph Gx2 is acyclic? ', is_acyclic(Gx2))
+
+# %%
+Gx3 = Gx2.copy()
+Gx3 = make_acyclic_by_bearing_and_degree(Gx3, bearing)
+print(f'After acycling pruning: {Gx3.number_of_nodes()} nodes, {Gx3.number_of_edges()} edges.')
+
+# %% [markdown]
+# # Loopy Cycle Removal + Improve Connectivity
+
+# %%
+from quasar_r12.geometry.cycle_prune import make_acyclic_by_bearing_and_degree
+n_iter = 10
+Gx = Gmxx_copy.copy()
+
+
+for i in range(n_iter):
+    Gx = make_acyclic_by_bearing_and_degree(Gx, bearing)
+    orphan_goal_nodes = nodes_that_cannot_reach_goal(Gx, 'EGLL')
+    orphan_source_nodes = nodes_that_source_cannot_reach(Gx, 'LEMD')
+
+    Gx = improve_graph_connectivity(Gx, orphan_goal_nodes, orphan_source_nodes,
+                                    main_bearing=bearing,
+                                    radius_nm=100,
+                                    bearing_tolerance_deg=60,
+                                    num_connections_to_make=8)
+    
+    print(f'Iteration {i}, there are {len(nodes_that_cannot_reach_goal(Gx, "EGLL"))} nodes that can not reach EGLL, {len(nodes_that_source_cannot_reach(Gx, "LEMD"))} nodes that can not be reached from LEMD')
+    # Check if the graph is acyclic
+    if is_acyclic(Gx):
+        print(f'Graph is acyclic after iteration {i}')
+    else:
+        print(f'Graph is not acyclic after iteration {i}')
+
+
+
+# %%
+plot_graph(Gx, show_label=True)
+
+# %%
+Gx.pred['EGLD']
+
+# %%
+# Find any path from WOD to EGLL in Gx
+import networkx as nx
+
+try:
+    path_wod_egll = nx.shortest_path(Gx, source='WOD', target='EGLL')
+    print("A path from WOD to EGLL in Gx:")
+    print(path_wod_egll)
+except nx.NetworkXNoPath:
+    print("No path found from WOD to EGLL in Gx.")
+except nx.NodeNotFound as e:
+    print(f"Node not found: {e}")
+
+
+# %% [markdown]
+# # Find shortest paths
+
+# %%
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature
+import numpy as np
+import networkx as nx
+import math
+
+# Set up the map
+fig = plt.figure(figsize=(10, 14))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.coastlines()
+ax.add_feature(cartopy.feature.LAND)
+
+# Plot the waypoints
+lats = [data['lat'] for _, data in Gmxx_copy.nodes(data=True)]
+lons = [data['lon'] for _, data in Gmxx_copy.nodes(data=True)]
+ax.scatter(lons, lats, color='blue', s=1, transform=ccrs.PlateCarree())
+
+# Plot the base graph edges
+for u, v in Gmxx_copy.edges():
+    lon1, lat1 = Gmxx_copy.nodes[u]['lon'], Gmxx_copy.nodes[u]['lat']
+    lon2, lat2 = Gmxx_copy.nodes[v]['lon'], Gmxx_copy.nodes[v]['lat']
+    ax.plot([lon1, lon2], [lat1, lat2], color='gray', linewidth=0.5, 
+            alpha=0.3, transform=ccrs.PlateCarree())
+
+# Find k-shortest paths instead of all paths
+try:
+    # Find k shortest paths (change k as needed)
+    k = 20  # Number of paths to find
+    # Use generator to avoid computing all paths at once (faster, less memory)
+    path_gen = nx.shortest_simple_paths(Gmxx_copy, 'LEMD', 'EGLL')
+    paths = [next(path_gen) for _ in range(k)]
+    
+    print(f"Found {len(paths)} shortest paths between LEMD and EGLL")
+    
+    # Plot each path with a different color
+    colors = ['green', 'red', 'purple', 'orange', 'cyan']
+    for i, path in enumerate(paths):
+        color = colors[i % len(colors)]
+        for j in range(len(path)-1):
+            u, v = path[j], path[j+1]
+            lon1, lat1 = Gmxx_copy.nodes[u]['lon'], Gmxx_copy.nodes[u]['lat']
+            lon2, lat2 = Gmxx_copy.nodes[v]['lon'], Gmxx_copy.nodes[v]['lat']
+            ax.plot([lon1, lon2], [lat1, lat2], color=color, linewidth=1.5, 
+                   alpha=0.8, transform=ccrs.PlateCarree())
+except Exception as e:
+    print(f"Error finding paths: {e}")
+
+# Plot LEMD and EGLL as stars
+lemd_lon, lemd_lat = Gm.nodes['LEMD']['lon'], Gm.nodes['LEMD']['lat']
+egll_lon, egll_lat = Gm.nodes['EGLL']['lon'], Gm.nodes['EGLL']['lat']
+ax.scatter([lemd_lon, egll_lon], [lemd_lat, egll_lat], color='red', 
+           s=100, marker='*', transform=ccrs.PlateCarree())
+ax.text(lemd_lon+0.2, lemd_lat+0.2, 'LEMD', transform=ccrs.PlateCarree(), fontsize=8)
+ax.text(egll_lon+0.2, egll_lat+0.2, 'EGLL', transform=ccrs.PlateCarree(), fontsize=8)
+
+# Set extent based on node coordinates with padding
+min_lon, max_lon = min(lons) - 2, max(lons) + 2
+min_lat, max_lat = min(lats) - 2, max(lats) + 2
+ax.set_extent([min_lon, max_lon, min_lat, max_lat], crs=ccrs.PlateCarree())
+
+# Add gridlines
+gl = ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+gl.top_labels = False
+gl.right_labels = False
+
+plt.title('K-Shortest Paths between LEMD and EGLL')
+plt.show()
+
+# Calculate and print the shortest paths with their total distances
+print("\nShortest paths between LEMD and EGLL with distances:")
+for i, path in enumerate(paths):
+    # Calculate the total distance of the path
+    total_distance = 0
+    for j in range(len(path)-1):
+        u, v = path[j], path[j+1]
+        # Get the weight of the edge (distance)
+        if 'weight' in Gmxx_copy[u][v]:
+            edge_distance = Gmxx_copy[u][v]['weight']
+        else:
+            # If weight is not available, calculate Haversine distance
+            lon1, lat1 = Gmxx_copy.nodes[u]['lon'], Gmxx_copy.nodes[u]['lat']
+            lon2, lat2 = Gmxx_copy.nodes[v]['lon'], Gmxx_copy.nodes[v]['lat']
+            
+            # Convert to radians
+            lon1, lat1, lon2, lat2 = map(math.radians, [lon1, lat1, lon2, lat2])
+            
+            # Haversine formula
+            dlon = lon2 - lon1
+            dlat = lat2 - lat1
+            a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+            c = 2 * math.asin(math.sqrt(a))
+            r = 6371  # Radius of earth in kilometers
+            edge_distance = c * r
+            
+        total_distance += edge_distance
+    
+    # Print the path and its total distance
+    path_str = " -> ".join(path)
+    print(f"Path {i+1}: {path_str}")
+    print(f"Total distance: {total_distance:.2f} km")
+    print("-" * 50)
+
+
+# %%
+# Find the degree of each node
+degrees = dict(Gmxx_copy.degree())
+
+# Sort nodes by degree in descending order
+sorted_nodes_by_degree = sorted(degrees.items(), key=lambda item: item[1], reverse=True)
+
+# Get the top 20 nodes
+top_20_nodes = sorted_nodes_by_degree[:20]
+
+# Print the top 20 nodes and their degrees
+print("Top 20 most connected nodes:")
+for node, degree in top_20_nodes:
+    print(f"Node: {node}, Degree: {degree}")
+    
+# Plot the top 20 nodes on the map
+try:
+    fig = plt.figure(figsize=(5, 8))
+    ax = plt.axes(projection=ccrs.PlateCarree())
+    ax.coastlines()
+    ax.add_feature(cartopy.feature.LAND)
+    # Extract coordinates for the top 20 nodes
+    top_20_node_ids = [node for node, degree in top_20_nodes]
+    top_20_lats = [Gmxx_copy.nodes[node]['lat'] for node in top_20_node_ids]
+    top_20_lons = [Gmxx_copy.nodes[node]['lon'] for node in top_20_node_ids]
+
+    # Plot the nodes
+    ax.scatter(top_20_lons, top_20_lats, color='blue', s=10, marker='o', 
+               transform=ccrs.PlateCarree())
+
+    # Add labels for the nodes
+    for node, degree in top_20_nodes:
+        lon = Gmxx_copy.nodes[node]['lon']
+        lat = Gmxx_copy.nodes[node]['lat']
+        ax.text(lon + 0.025, lat + 0.025, node, transform=ccrs.PlateCarree(), fontsize=7)
+
+    # Add a legend to distinguish the top nodes
+    ax.legend()
+
+    # Re-show the plot with the new nodes added
+    plt.show()
+
+except NameError:
+    print("Error: Gmxx, ax, or plt not found. Ensure previous cells were run.")
+except Exception as e:
+    print(f"Error plotting top 20 nodes: {e}")
+
+
+
+# %%
+nx.write_gml(Gmxx_copy, 'LEMD_EGLL_2023_04_01.gml')
+
+# %% [markdown]
+# We should also prepare the `RouteContextObject`, containing the tail wind and cross wind information, as well as CAPE, CIN and perhaps *perceived* sector load as well.
+
+# %% [markdown]
+# # QUASAR 1.2 Training
+
+# %%
+# Load the context object
+from quasar_r12.context import GraphRouteContext 
+
+# Load the context object
+context = GraphRouteContext.load(os.path.join(project_root, 'quasar_r12', 'ctx', 'LEMD_EGLL_2023_04_01.context'))
+
+# %%
+
+
+
