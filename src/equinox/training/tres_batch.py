@@ -157,6 +157,15 @@ def run_tres_batch_processing(routes_csv_path, case_name, batch_size, config_pat
         batch_name = f"batch{i}"
         logging.info(f"--- Processing {batch_name} ({len(batch_df)} flights) ---")
 
+        # Create batch output directory and save batch metadata
+        batch_output_dir = os.path.join(output_dir_base, batch_name)
+        os.makedirs(batch_output_dir, exist_ok=True)
+        
+        # Save the batch DataFrame as flights.csv
+        flights_csv_path = os.path.join(batch_output_dir, "flights.csv")
+        batch_df.to_csv(flights_csv_path, index=False)
+        logging.info(f"Saved batch flights metadata to {flights_csv_path}")
+
         # Prepare a partial function with fixed arguments for the process pool
         worker_func = partial(
             process_flight,

@@ -10,8 +10,8 @@ import torch
 
 def get_flight_batches(routes_csv_path: str, batch_size: int) -> list[pd.DataFrame]:
     """
-    Reads flight routes from a CSV, sorts them deterministically, 
-    and divides them into batches.
+    Reads flight routes from a CSV and divides them into batches,
+    preserving the original order from the file.
 
     Args:
         routes_csv_path (str): Path to the CSV file with flight routes.
@@ -21,13 +21,11 @@ def get_flight_batches(routes_csv_path: str, batch_size: int) -> list[pd.DataFra
         list[pd.DataFrame]: A list of DataFrames, where each DataFrame is a batch.
     """
     df = pd.read_csv(routes_csv_path)
-    # Sort by a unique and consistent key to ensure deterministic batches
-    df_sorted = df.sort_values(by='flight_id').reset_index(drop=True)
     
     batches = []
-    num_flights = len(df_sorted)
+    num_flights = len(df)
     for i in range(0, num_flights, batch_size):
-        batches.append(df_sorted.iloc[i:i+batch_size])
+        batches.append(df.iloc[i:i+batch_size])
     return batches
 
 def get_typical_flight_duration(routes_csv_path: str, percentile: float = 0.95) -> float:
