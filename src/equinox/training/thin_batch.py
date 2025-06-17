@@ -1,3 +1,9 @@
+# ********************************************************
+# This script will aggregate all transitions inside a batch folder
+# to thin flight by flight, use `thin_batch_indv.py`.
+# ********************************************************
+
+
 import os
 import pickle
 import argparse
