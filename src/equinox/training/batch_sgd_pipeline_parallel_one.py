@@ -579,9 +579,10 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             logger.info(f"\n--- Iteration {iteration}/{batch_config.max_iterations} ---")
             
             # Get the next batch of flights sequentially, cycling through the batches
-            batch_idx = (iteration - 1) % num_batches
+            # For debugging, we train on the same batch over and over
+            batch_idx = 0 #(iteration - 1) % num_batches
             batch_flights = flight_batches[batch_idx]
-            logger.info(f"Processing batch {batch_idx + 1}/{num_batches} with {len(batch_flights)} flights")
+            logger.info(f"Processing batch {batch_idx + 1}/{num_batches} with {len(batch_flights)} flights (repeatedly)")
             
             # Get current model state to be used by all flights in this batch
             cost_model_state = components['cost_model'].state_dict()

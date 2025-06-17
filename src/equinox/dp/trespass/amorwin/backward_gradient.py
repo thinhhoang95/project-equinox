@@ -4,18 +4,6 @@ import os
 import numpy as np
 from collections import defaultdict
 
-# Make sure the imports for cost_rev2 and load_value_function are correct
-# This might require adjusting sys.path or the project structure
-try:
-    from equinox.dp.trespass.amorwin.utils import load_value_function
-    from equinox.cost.cost_rev2 import CostRev2
-except ImportError:
-    # This is a fallback for running the script directly
-    # import sys
-    # sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../..')))
-    from src.equinox.dp.trespass.amorwin.utils import load_value_function
-    from src.equinox.cost.cost_rev2 import CostRev2
-
 
 def backward_gradient_pass(
     state_transitions: list[tuple[int, int, int, float, int, int, int, float, int, int]],
@@ -196,8 +184,11 @@ def backward_gradient_pass(
                     
                     grad_vector = []
                     for param in cost_model.parameters():
-                        if param.requires_grad and param.grad is not None:
-                            grad_vector.append(param.grad.detach().flatten())
+                        if param.requires_grad:
+                            if param.grad is None:
+                                grad_vector.append(torch.zeros_like(param.detach()).flatten())
+                            else:
+                                grad_vector.append(param.grad.detach().flatten())
                     
                     if grad_vector:
                         single_transition_grad = torch.cat(grad_vector)
