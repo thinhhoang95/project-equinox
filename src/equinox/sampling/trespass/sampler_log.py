@@ -1,3 +1,4 @@
+from venv import logger
 import torch
 import numpy as np
 import networkx as nx
@@ -9,7 +10,7 @@ def sample_tres_trajectory(
     idx_to_node: dict,
     origin_node_id: str,
     goal_node_id: str,
-    initial_rho: int,
+    initial_rho: int, # should be equal to the max number of climb time bins 
     initial_phase: int,
     soft_cost_to_go: torch.Tensor, # V_bwd (num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases)
     edge_costs_uv: torch.Tensor, # edge_costs from backward_svi (sparse COO)
@@ -73,9 +74,18 @@ def sample_tres_trajectory(
     # FOR DEBUGGING
     print("WARNING: DEBUGGING MODE, setting current_k, current_rho, current_phase to 39, 36, 0")
     print("*" * 100)
-    current_k = 39
-    current_rho = 36
-    current_phase = 0
+    # Find the last non-inf value of soft_cost_to_go[current_node_idx, :, current_rho, current_phase]
+    cost_slice = soft_cost_to_go[current_node_idx, :, current_rho, current_phase]
+    finite_mask = torch.isfinite(cost_slice)
+    if finite_mask.any():
+        # Find the last (highest index) finite value
+        finite_indices = torch.where(finite_mask)[0]
+        current_k = finite_indices[-1].item()
+        logger.warning(f"Setting current_k to {current_k} because it is the last non-inf value of soft_cost_to_go[current_node_idx, :, current_rho, current_phase]")
+    else:
+        # Fallback if no finite values found
+        raise ValueError(f"No finite values found for state {idx_to_node[current_node_idx], current_rho, current_phase}. All values are non-finite.")
+    
 
     goal_node_idx = node_to_idx[goal_node_id]
     

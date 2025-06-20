@@ -7,12 +7,15 @@ from tqdm import tqdm
 import argparse
 import multiprocessing
 from functools import partial
+import torch
 
 from equinox.wind.batch_wind_model import get_flight_batches
 from equinox.wind.wind_date import WindDate
 from equinox.config import RunConfiguration
 from equinox.dp.trespass.tres_forward import tres_forward, save_transitions
 from equinox.dp.trespass.tres_backward import tres_backward
+from equinox.dp.trespass.thinning import thin_closures
+from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -33,6 +36,17 @@ def process_flight(flight_series, config, components, case_name, batch_idx, outp
     """
     flight_id = flight_series['flight_id']
     takeoff_ts = flight_series['takeoff']
+
+    # Prepare output directory and check for existing files
+    output_dir = os.path.join(output_dir_base, f"batch{batch_idx}")
+    fw_filename_pkl = os.path.join(output_dir, f"FW_{flight_id}_{takeoff_ts}.pkl")
+    bw_filename_pkl = os.path.join(output_dir, f"BW_{flight_id}_{takeoff_ts}.pkl")
+    clsr_filename_pkl = os.path.join(output_dir, f"CLSR_{flight_id}_{takeoff_ts}.pkl")
+    wind_filename_pt = os.path.join(output_dir, f"WIND_{flight_id}_{takeoff_ts}.pt")
+
+    if all(os.path.exists(f) for f in [fw_filename_pkl, bw_filename_pkl, clsr_filename_pkl, wind_filename_pt]):
+        logging.info(f"Skipping already processed flight {flight_id}.")
+        return
 
     # This log might be helpful for debugging in a multiprocessing context
     # logging.info(f"Processing flight {flight_id} with takeoff {takeoff_ts}")
@@ -62,6 +76,8 @@ def process_flight(flight_series, config, components, case_name, batch_idx, outp
         flight_components['wind_model'] = flight_wind_model
     except Exception as e:
         logging.error(f"Failed to create WindDate for flight {flight_id} on date {date_str}: {e}", exc_info=True)
+        import sys
+        sys.exit(1)
         return  # Skip this flight if wind model initialization fails
 
     # Prepare output directory and filenames
@@ -125,6 +141,63 @@ def process_flight(flight_series, config, components, case_name, batch_idx, outp
         # logging.info(f"Backward TRES for {flight_id} completed.")
     except Exception as e:
         logging.error(f"Error during backward TRES for flight {flight_id}: {e}", exc_info=True)
+        return
+
+    if state_closure_list is None or not state_closure_list:
+        logging.warning(f"Backward TRES for {flight_id} produced no closures. Skipping thinning and wind amortization.")
+        return
+
+    # 4. Thinning
+    logging.info(f"Performing thinning for flight {flight_id}.")
+    try:
+        node_to_idx = flight_components['node_to_idx']
+        source_node_idx = node_to_idx[flight_config.origin_node]
+        goal_node_idx = node_to_idx[flight_config.goal_node]
+        # Using a fixed max_rho as seen in test files.
+        # This parameter is related to the maximum number of climb time bins.
+        max_rho = 36 
+        
+        thinned_transitions = thin_closures(
+            source_node_idx, goal_node_idx, max_rho,
+            flight_components['graph'], state_closure_list
+        )
+        
+        thinned_filename = f"CLSR_{flight_id}_{takeoff_ts}"
+        save_transitions(thinned_transitions, output_dir, thinned_filename)
+        logging.info(f"Thinned transitions for {flight_id} saved.")
+
+    except Exception as e:
+        logging.error(f"Error during thinning for flight {flight_id}: {e}", exc_info=True)
+        return
+
+    if not thinned_transitions:
+        logging.warning(f"Thinning for {flight_id} produced no transitions. Skipping wind amortization.")
+        return
+        
+    # 5. Wind Amortization
+    logging.info(f"Amortizing wind for flight {flight_id}.")
+    try:
+        node_coords_deg = flight_components['node_coords_deg']
+        # The 'k' time bins in transitions are relative to a min_wall_clock_time_sec,
+        # which in the forward pass is the takeoff time in seconds since midnight.
+        takeoff_ssm = datestr_to_seconds_since_midnight(flight_config.takeoff_time_str)
+        min_wall_clock_time_sec = float(takeoff_ssm)
+        
+        avg_tailwind_knots = flight_components['wind_model'].get_average_tailwind_on_edges_knots(
+            transitions=thinned_transitions,
+            node_coords_deg=node_coords_deg,
+            min_wall_clock_time_sec=min_wall_clock_time_sec,
+            delta_t_wall_clock_sec=flight_config.delta_t_seconds, # This is the wall-clock delta
+            num_integration_steps=3
+        )
+        
+        wind_filename = f"WIND_{flight_id}_{takeoff_ts}.pt"
+        wind_filepath = os.path.join(output_dir, wind_filename)
+        torch.save(avg_tailwind_knots, wind_filepath)
+        logging.info(f"Amortized wind for {flight_id} saved to {wind_filepath}")
+
+    except Exception as e:
+        logging.error(f"Error during wind amortization for flight {flight_id}: {e}", exc_info=True)
 
 
 def run_tres_batch_processing(routes_csv_path, case_name, batch_size, config_path, output_dir_base, num_workers):

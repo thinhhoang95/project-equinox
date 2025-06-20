@@ -22,9 +22,9 @@ class RunConfiguration:
     wind_data_dir: str = "data/era5"
     
     # Cost model parameters
-    cost_model_beta0: float = 0.0
-    cost_model_beta1: float = 1e-2
-    cost_model_beta2: float = 0.0
+    cost_model_beta0: float = 1.0
+    cost_model_beta1: float = 1.0
+    cost_model_beta2: float = 1.0
     cost_model_beta3: float = 1.0
     
     # Performance model parameters
@@ -70,6 +70,9 @@ class RunConfiguration:
 
     # Wind model configuration
     disable_config_wind_model: bool = False
+
+    # Checkpoint path
+    checkpoint_path: str = None
     
     def get_device(self) -> torch.device:
         """Get the appropriate torch device based on availability and preference."""
@@ -171,13 +174,16 @@ class RunConfiguration:
         """Load the airspace charges matrix."""
         return np.load(self.charges_file_path)
     
-    def initialize_all_components(self, cost_model_version: str = "2reg") -> Dict[str, Any]:
+    def initialize_all_components(self, cost_model_version: str = "2reg", manual_cost_model_init: bool = False) -> Dict[str, Any]:
         """Initialize all components and return them in a dictionary."""
         # Load graph and create mappings
         G, node_to_idx, idx_to_node, node_coords_deg = self.load_graph()
         
         # Initialize models
-        cost_model = self.initialize_cost_model(len(G.nodes()), cost_model_version)
+        if manual_cost_model_init:
+            cost_model = None
+        else:
+            cost_model = self.initialize_cost_model(len(G.nodes()), cost_model_version)
         if not self.disable_config_wind_model:
             wind_model = self.initialize_wind_model()
         else:

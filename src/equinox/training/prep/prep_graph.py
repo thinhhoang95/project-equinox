@@ -500,6 +500,10 @@ def process_graph(
     minimum_detour_allowed: float = 0.025,
     n_iter: int = 10,
     max_allowed_deviation_angle: float = 90,
+    remove_collinear_edges: bool = True,
+    remove_backtracking_edges: bool = True,
+    remove_unreachable_nodes: bool = True,
+    make_acyclic: bool = True,
 ):
     Gno = prepare_base_graph(
         nodes_only_graph_path,
@@ -511,16 +515,21 @@ def process_graph(
     )
     improve_connectivity(Gno, source_id, destination_id, n_iter=n_iter)
     # Remove collinear edges
-    Gno = remove_collinear_edges(Gno)
-    Gno = remove_backtracking_edges(
-        Gno,
-        source_id,
-        destination_id,
-        max_allowed_deviation_angle=max_allowed_deviation_angle,
-    )
-    Gno = remove_isolated_nodes(Gno)
-    Gno = remove_unreachable_nodes(Gno, source_id, destination_id)
-    Gno = make_graph_acyclic(Gno, source_id, destination_id)
+    if remove_collinear_edges:
+        Gno = remove_collinear_edges(Gno)
+    if remove_backtracking_edges:
+        Gno = remove_backtracking_edges(
+            Gno,
+            source_id,  
+            destination_id,
+            max_allowed_deviation_angle=max_allowed_deviation_angle,
+        )
+    if delete_isolated_nodes:
+        Gno = remove_isolated_nodes(Gno)
+    if remove_unreachable_nodes:
+        Gno = remove_unreachable_nodes(Gno, source_id, destination_id)
+    if make_acyclic:
+        Gno = make_graph_acyclic(Gno, source_id, destination_id)
     return Gno
 
 

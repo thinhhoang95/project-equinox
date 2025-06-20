@@ -13,6 +13,7 @@ Key Features:
 - Supports multiprocessing for parallel SVI computation
 - Includes convergence checking and checkpointing
 - Handles empirical count computation from actual flight routes
+- Comprehensive TensorBoard logging for training monitoring and visualization
 
 The pipeline follows these steps for each flight:
 1. Load TRES forward/backward results
@@ -22,7 +23,13 @@ The pipeline follows these steps for each flight:
 5. Queue gradients and apply batch updates to the cost model
 
 Usage:
-    python batch_sgd_pipeline.py --case-dir data/cases/LEMD_EGLL --batch-size 5 --learning-rate 1e-6
+    python batch_sgd_pipeline_parallel_w_tensorboard.py --case-dir data/cases/LEMD_EGLL --batch-size 5 --learning-rate 1e-6
+    
+    To monitor training with TensorBoard:
+    tensorboard --logdir data/cases/LEMD_EGLL/batch_sgd_results/tensorboard_logs
+    
+    To start fresh training without resuming from checkpoint:
+    python batch_sgd_pipeline_parallel_w_tensorboard.py --case-dir data/cases/LEMD_EGLL --no-resume
 """
 
 import os
@@ -41,6 +48,11 @@ from pathlib import Path
 import multiprocessing
 from tqdm import tqdm
 import yaml
+try:
+    from torch.utils.tensorboard import SummaryWriter
+    TENSORBOARD_AVAILABLE = True
+except ImportError:
+    TENSORBOARD_AVAILABLE = False
 
 # Add the project root to the path for imports
 project_root = Path(__file__).parent.parent.parent.parent
@@ -90,6 +102,9 @@ class BatchLearningConfig:
     device: str = "cuda"
     gamma: float = 1.0
     debug_single_process: bool = False
+    tensorboard_log_dir: str = None
+    log_interval: int = 1  # Log every iteration by default
+    resume_from_checkpoint: bool = True  # Resume from last checkpoint by default
     
     def __post_init__(self):
         if self.num_workers is None:
@@ -97,7 +112,7 @@ class BatchLearningConfig:
 
 
 def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: int, 
-                            components: Dict[str, Any]) -> Tuple[List, List, List]:
+                            components: Dict[str, Any]) -> Tuple[List, List, List, torch.Tensor]:
     """
     Load pre-computed TRES results for a specific flight.
     
@@ -108,7 +123,7 @@ def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: i
         components: Shared components containing graph and node mappings
         
     Returns:
-        Tuple of (forward_transitions, backward_transitions, thinned_transitions)
+        Tuple of (forward_transitions, backward_transitions, thinned_transitions, avg_tailwind_knots)
     """
     tres_dir = Path(case_dir) / "tres_runs"
     
@@ -116,6 +131,7 @@ def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: i
     forward_transitions = None
     backward_transitions = None
     thinned_transitions = None
+    avg_tailwind_knots = None
     
     for batch_dir in tres_dir.glob("batch*"):
         fw_file = batch_dir / f"FW_{flight_id}_{takeoff_timestamp}.pkl"
@@ -128,51 +144,69 @@ def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: i
                 with open(bw_file, 'rb') as f:
                     backward_transitions = pickle.load(f)
                 
-                # Check for pre-computed thinned transitions
+                # Check for pre-computed thinned transitions and wind data
                 thinned_file = batch_dir / f"CLSR_{flight_id}_{takeoff_timestamp}.pkl"
-                if thinned_file.exists():
+                wind_file = batch_dir / f"WIND_{flight_id}_{takeoff_timestamp}.pt"
+                
+                if thinned_file.exists() and wind_file.exists():
                     with open(thinned_file, 'rb') as f:
                         thinned_transitions = pickle.load(f)
+                    avg_tailwind_knots = torch.load(wind_file)
+                    # Found all required files, break the loop
+                    break
                 else:
-                    # Compute thinning on the fly using the correct function
-                    logger.info(f"Computing thinning for flight {flight_id}")
-                    
-                    # Get flight-specific origin and destination from CSV data
-                    flights_csv = os.path.join(case_dir, "all_routes.csv")
-                    flights_df = pd.read_csv(flights_csv)
-                    flight_row = flights_df[flights_df['flight_id'] == flight_id]
-                    
-                    if flight_row.empty:
-                        raise ValueError(f"Flight {flight_id} not found in all_routes.csv")
-                    
-                    origin_node = flight_row.iloc[0]['origin']
-                    destination_node = flight_row.iloc[0]['destination']
-                    
-                    source_node_idx = components['node_to_idx'][origin_node]
-                    goal_node_idx = components['node_to_idx'][destination_node]
-                    max_rho = 36  # Standard value from examples
-                    
-                    # Use thin_closures with correct parameters
-                    from src.equinox.dp.trespass.thinning import thin_closures
-                    thinned_transitions = thin_closures(
-                        source_node_idx, goal_node_idx, max_rho, 
-                        components['graph'], backward_transitions
-                    )
-                    
-                    # Save for future use
-                    with open(thinned_file, 'wb') as f:
-                        pickle.dump(thinned_transitions, f)
-                
-                break
-                
+                    # If any of the derived files are missing, this batch is incomplete.
+                    # Continue to check other batch directories.
+                    missing_files = []
+                    if not thinned_file.exists():
+                        missing_files.append(str(thinned_file))
+                    if not wind_file.exists():
+                        missing_files.append(str(wind_file))
+                    logger.debug(f"Missing derived files in {batch_dir} for flight {flight_id}: {', '.join(missing_files)}. Checking other batch directories.")
+                    forward_transitions = None
+                    backward_transitions = None
+                    continue
+
             except Exception as e:
-                logger.error(f"Error loading TRES results for flight {flight_id}: {e}")
+                logger.error(f"Error loading TRES results for flight {flight_id} from {batch_dir}. Expected files: {fw_file}, {bw_file}, {thinned_file}, {wind_file}. Error: {e}")
+                # Reset and check next directory
+                forward_transitions = None
+                backward_transitions = None
+                thinned_transitions = None
+                avg_tailwind_knots = None
                 continue
     
-    if forward_transitions is None or backward_transitions is None:
-        raise FileNotFoundError(f"TRES results not found for flight {flight_id}_{takeoff_timestamp}")
+    if forward_transitions is None or backward_transitions is None or thinned_transitions is None or avg_tailwind_knots is None:
+        # Provide detailed information about what files were expected
+        expected_files = []
+        for batch_dir in tres_dir.glob("batch*"):
+            fw_file = batch_dir / f"FW_{flight_id}_{takeoff_timestamp}.pkl"
+            bw_file = batch_dir / f"BW_{flight_id}_{takeoff_timestamp}.pkl"
+            thinned_file = batch_dir / f"CLSR_{flight_id}_{takeoff_timestamp}.pkl"
+            wind_file = batch_dir / f"WIND_{flight_id}_{takeoff_timestamp}.pt"
+            
+            missing_in_batch = []
+            if not fw_file.exists():
+                missing_in_batch.append(f"FW file: {fw_file}")
+            if not bw_file.exists():
+                missing_in_batch.append(f"BW file: {bw_file}")
+            if not thinned_file.exists():
+                missing_in_batch.append(f"CLSR file: {thinned_file}")
+            if not wind_file.exists():
+                missing_in_batch.append(f"WIND file: {wind_file}")
+            
+            if missing_in_batch:
+                expected_files.append(f"In {batch_dir}: Missing {', '.join(missing_in_batch)}")
+        
+        error_msg = f"Complete TRES, Thinned (CLSR), and Wind (WIND) results not found for flight {flight_id}_{takeoff_timestamp}."
+        if expected_files:
+            error_msg += f"\nDetailed missing files:\n" + "\n".join(expected_files)
+        else:
+            error_msg += f" No batch directories found in {tres_dir}."
+        
+        raise FileNotFoundError(error_msg)
     
-    return forward_transitions, backward_transitions, thinned_transitions
+    return forward_transitions, backward_transitions, thinned_transitions, avg_tailwind_knots
 
 
 def compute_empirical_counts_for_flight(flight_data: pd.Series, node_to_idx: Dict[str, int], 
@@ -211,21 +245,17 @@ def _run_forward_svi_wrapper(args):
     """Wrapper function for multiprocessing forward SVI."""
     (state_transitions, avg_tailwind_knots, G, idx_to_node, origin_node_idx, 
      cost_model_state, num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases, 
-     distance_matrix_d, airspace_charge_matrix_ac, device_str, gamma) = args
+     distance_matrix_d, airspace_charge_matrix_ac, device_str, gamma,
+     beta0, beta1, beta2, beta3, alpha_pref_reg) = args
     
     device = torch.device(device_str)
     
     # Reconstruct cost model from state dict
     from src.equinox.cost.cost_rev3 import CostRev3
     cost_model = CostRev3(
-        beta0=cost_model_state['beta0'],
-        beta1=cost_model_state['beta1'],
-        beta2=cost_model_state['beta2'],
-        beta3=cost_model_state['beta3'],
-        num_waypoints=num_nodes,
-        alpha_pref_reg=1.0,
-        device=device
-    )
+        beta0=beta0, beta1=beta1, beta2=beta2, beta3=beta3,
+        num_waypoints=num_nodes, alpha_pref_reg=alpha_pref_reg, device=device
+    ) # CostRev3 does not involve preference scores!
     cost_model.load_state_dict(cost_model_state)
     cost_model.to(device)
 
@@ -267,20 +297,16 @@ def _run_backward_svi_wrapper(args):
     """Wrapper function for multiprocessing backward SVI."""
     (state_transitions, avg_tailwind_knots, G, idx_to_node, goal_node_idx, 
      cost_model_state, num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases, 
-     distance_matrix_d, airspace_charge_matrix_ac, device_str, gamma) = args
+     distance_matrix_d, airspace_charge_matrix_ac, device_str, gamma,
+     beta0, beta1, beta2, beta3, alpha_pref_reg) = args
     
     device = torch.device(device_str)
     
     # Reconstruct cost model from state dict
     from src.equinox.cost.cost_rev3 import CostRev3
     cost_model = CostRev3(
-        beta0=cost_model_state['beta0'],
-        beta1=cost_model_state['beta1'],
-        beta2=cost_model_state['beta2'],
-        beta3=cost_model_state['beta3'],
-        num_waypoints=num_nodes,
-        alpha_pref_reg=1.0,
-        device=device
+        beta0=beta0, beta1=beta1, beta2=beta2, beta3=beta3,
+        num_waypoints=num_nodes, alpha_pref_reg=alpha_pref_reg, device=device
     )
     cost_model.load_state_dict(cost_model_state)
     cost_model.to(device)
@@ -323,7 +349,8 @@ def process_single_flight(flight_data: pd.Series,
                          components: Dict[str, Any], 
                          batch_config: BatchLearningConfig,
                          case_dir: str,
-                         cost_model_state: Dict[str, torch.Tensor] = None) -> FlightGradientResult:
+                         cost_model_state: Dict[str, torch.Tensor] = None,
+                         cost_model_params: Dict[str, float] = None) -> FlightGradientResult:
     """
     Process a single flight through the complete pipeline.
     
@@ -334,6 +361,7 @@ def process_single_flight(flight_data: pd.Series,
         batch_config: Batch learning configuration
         case_dir: Case directory path
         cost_model_state: Serialized state of the cost model for multiprocessing
+        cost_model_params: Parameters of the cost model for multiprocessing
         
     Returns:
         FlightGradientResult containing gradients and metadata
@@ -345,15 +373,16 @@ def process_single_flight(flight_data: pd.Series,
     device = components['device']
 
     # If running in a worker process, reconstruct the cost model
-    if cost_model_state:
+    if cost_model_state and cost_model_params:
         from src.equinox.cost.cost_rev3 import CostRev3
         cost_model = CostRev3(
-            beta0=cost_model_state['beta0'],
-            beta1=cost_model_state['beta1'],
-            beta2=cost_model_state['beta2'],
-            beta3=cost_model_state['beta3'],
+            beta0=cost_model_params['beta0'],
+            beta1=cost_model_params['beta1'],
+            beta2=cost_model_params['beta2'],
+            beta3=0.0,
+            # beta3=cost_model_params['beta3'],
             num_waypoints=components['num_nodes'],
-            alpha_pref_reg=1.0, # This might need to be configured
+            alpha_pref_reg=cost_model_params['alpha_pref_reg'],
             device=device
         )
         cost_model.load_state_dict(cost_model_state)
@@ -367,7 +396,7 @@ def process_single_flight(flight_data: pd.Series,
     try:
         # 1. Load TRES results
         logger.info(f"Processing flight {flight_id}")
-        forward_transitions, backward_transitions, thinned_transitions = load_flight_tres_results(
+        forward_transitions, backward_transitions, thinned_transitions, avg_tailwind_knots = load_flight_tres_results(
             case_dir, flight_id, takeoff_timestamp, components
         )
         
@@ -394,9 +423,8 @@ def process_single_flight(flight_data: pd.Series,
         num_phases = max_phase_val + 1
         num_nodes = components['num_nodes']
         
-        # 3. Prepare wind data (simplified - using average wind)
-        avg_tailwind_knots = torch.zeros(len(thinned_transitions), dtype=torch.float32)
-        logger.debug(f"Flight {flight_id}: Using {len(thinned_transitions)} thinned transitions")
+        # 3. Wind data is now pre-loaded, so this section is simplified.
+        logger.debug(f"Flight {flight_id}: Using pre-computed wind for {len(thinned_transitions)} thinned transitions")
         
         # 4. Get origin and goal indices for this flight
         origin_node_idx = components['node_to_idx'][flight_data['origin']]
@@ -410,14 +438,18 @@ def process_single_flight(flight_data: pd.Series,
             thinned_transitions, avg_tailwind_knots, components['graph'], 
             components['idx_to_node'], origin_node_idx, current_cost_model_state,
             num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases,
-            components['dist_matrix'], components['ac_matrix'], device_str, batch_config.gamma
+            components['dist_matrix'], components['ac_matrix'], device_str, batch_config.gamma,
+            0.0, 1.0, 1.0, # beta0, beta1, beta2
+            0.0, cost_model.alpha_pref_reg
         )
         
         backward_args = (
             thinned_transitions, avg_tailwind_knots, components['graph'], 
             components['idx_to_node'], goal_node_idx, current_cost_model_state,
             num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases,
-            components['dist_matrix'], components['ac_matrix'], device_str, batch_config.gamma
+            components['dist_matrix'], components['ac_matrix'], device_str, batch_config.gamma,
+            0.0, 1.0, 1.0, # beta0, beta1, beta2
+            0.0, cost_model.alpha_pref_reg # replace with cost_model.beta3.item() when necessary
         )
         
         # 6. Run forward and backward SVI
@@ -513,6 +545,109 @@ def _process_flight_wrapper(args):
     return process_single_flight(*args)
 
 
+def find_latest_checkpoint(output_dir: str) -> Optional[str]:
+    """
+    Find the latest checkpoint file in the output directory.
+    
+    Args:
+        output_dir: Directory to search for checkpoints
+        
+    Returns:
+        Path to the latest checkpoint file, or None if no checkpoints found
+    """
+    if not os.path.exists(output_dir):
+        logger.debug(f"Output directory does not exist: {output_dir}")
+        return None
+    
+    logger.debug(f"Searching for checkpoints in directory: {output_dir}")
+    
+    # Get all files in the directory for debugging
+    try:
+        all_files = os.listdir(output_dir)
+        logger.debug(f"All files in {output_dir}: {all_files}")
+    except Exception as e:
+        logger.error(f"Error listing directory {output_dir}: {e}")
+        return None
+    
+    checkpoint_files = []
+    for filename in all_files:
+        if filename.startswith("checkpoint_iter_") and filename.endswith(".pt"):
+            logger.debug(f"Found potential checkpoint file: {filename}")
+            # Extract iteration number from filename
+            try:
+                # More robust parsing: extract the number between "checkpoint_iter_" and ".pt"
+                prefix = "checkpoint_iter_"
+                suffix = ".pt"
+                if filename.startswith(prefix) and filename.endswith(suffix):
+                    iter_str = filename[len(prefix):-len(suffix)]
+                    iter_num = int(iter_str)
+                    full_path = os.path.join(output_dir, filename)
+                    checkpoint_files.append((iter_num, full_path))
+                    logger.debug(f"Valid checkpoint found: iteration {iter_num}, path: {full_path}")
+            except ValueError as e:
+                logger.warning(f"Could not parse iteration number from filename {filename}: {e}")
+                continue
+    
+    if not checkpoint_files:
+        logger.debug("No valid checkpoint files found")
+        return None
+    
+    # Sort by iteration number and get the latest
+    checkpoint_files.sort(key=lambda x: x[0])
+    latest_checkpoint = checkpoint_files[-1]
+    
+    logger.info(f"Found {len(checkpoint_files)} checkpoint(s). Latest: iteration {latest_checkpoint[0]}, path: {latest_checkpoint[1]}")
+    
+    # Verify the file actually exists and is readable
+    if os.path.exists(latest_checkpoint[1]) and os.path.isfile(latest_checkpoint[1]):
+        return latest_checkpoint[1]
+    else:
+        logger.error(f"Latest checkpoint file does not exist or is not readable: {latest_checkpoint[1]}")
+        return None
+
+
+def load_checkpoint(checkpoint_path: str, cost_model, optimizer, device: torch.device) -> Tuple[int, Dict]:
+    """
+    Load a checkpoint and restore model, optimizer, and training state.
+    
+    Args:
+        checkpoint_path: Path to the checkpoint file
+        cost_model: Cost model to load state into
+        optimizer: Optimizer to load state into
+        device: Device to load tensors to
+        
+    Returns:
+        Tuple of (start_iteration, training_history)
+    """
+    logger.info(f"Loading checkpoint from {checkpoint_path}")
+    
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    # Load model state
+    cost_model.load_state_dict(checkpoint['model_state_dict'])
+    
+    # Load optimizer state
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    
+    # Get starting iteration (add 1 to continue from next iteration)
+    start_iteration = checkpoint['iteration'] + 1
+    
+    # Load training history
+    training_history = checkpoint.get('training_history', {
+        'iterations': [],
+        'avg_log_likelihood': [],
+        'gradient_norms': [],
+        'processing_times': [],
+        'successful_flights': [],
+        'failed_flights': []
+    })
+    
+    logger.info(f"Checkpoint loaded successfully. Resuming from iteration {start_iteration}")
+    logger.info(f"Previous training history contains {len(training_history['iterations'])} iterations")
+    
+    return start_iteration, training_history
+
+
 def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchLearningConfig,
                           output_dir: str = None) -> Dict[str, Any]:
     """
@@ -534,10 +669,26 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         output_dir = os.path.join(case_dir, "batch_sgd_results")
     os.makedirs(output_dir, exist_ok=True)
     
+    # Setup TensorBoard logging
+    tensorboard_writer = None
+    if TENSORBOARD_AVAILABLE:
+        if batch_config.tensorboard_log_dir is not None:
+            tb_log_dir = batch_config.tensorboard_log_dir
+        else:
+            tb_log_dir = os.path.join(output_dir, "tensorboard_logs")
+        
+        os.makedirs(tb_log_dir, exist_ok=True)
+        tensorboard_writer = SummaryWriter(log_dir=tb_log_dir)
+        logger.info(f"TensorBoard logging enabled. Log directory: {tb_log_dir}")
+        logger.info(f"To view logs, run: tensorboard --logdir {tb_log_dir}")
+    else:
+        logger.warning("TensorBoard not available. Training will proceed without TensorBoard logging.")
+    
     # 1. Load configuration and initialize components
     logger.info(f"Loading configuration from {config_path}")
     config = RunConfiguration.load_from_yaml(config_path)
     components = config.initialize_all_components(cost_model_version="3") # use costRev3 !
+    components['etto_delta_t_seconds'] = config.etto_delta_t_seconds
     
     device = torch.device(batch_config.device if torch.cuda.is_available() else "cpu")
     components['device'] = device
@@ -567,7 +718,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         return
     logger.info(f"Created {num_batches} batches of flights.")
     
-    # 3. Initialize tracking variables
+    # 3. Initialize tracking variables and handle checkpoint resumption
     gradient_queue = []
     iteration = 0
     converged = False
@@ -580,13 +731,37 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         'failed_flights': []
     }
     
+    # Check for existing checkpoint and resume if requested
+    if batch_config.resume_from_checkpoint:
+        logger.info("Checkpoint resumption is enabled. Searching for existing checkpoints...")
+        logger.info(f"Checkpoint search directory: {output_dir}")
+        logger.info(f"Expected checkpoint pattern: checkpoint_iter_<number>.pt")
+        
+        latest_checkpoint = find_latest_checkpoint(output_dir)
+        if latest_checkpoint:
+            try:
+                iteration, training_history = load_checkpoint(
+                    latest_checkpoint, components['cost_model'], optimizer, device
+                )
+                logger.info(f"✓ Successfully resumed training from checkpoint. Starting at iteration {iteration}")
+            except Exception as e:
+                logger.warning(f"✗ Failed to load checkpoint {latest_checkpoint}: {e}")
+                logger.info("Starting training from scratch")
+                iteration = 1  # Start from iteration 1 for fresh training
+        else:
+            logger.info("No existing checkpoints found. Starting training from scratch")
+            logger.info(f"Note: Checkpoints will be saved to {output_dir}")
+            iteration = 1  # Start from iteration 1 for fresh training
+    else:
+        logger.info("Checkpoint resumption disabled. Starting training from scratch")
+        iteration = 1  # Start from iteration 1 for fresh training
+    
     # 4. Main training loop
     logger.info("Starting main training loop")
     
     # Create a single pool of workers for parallel flight processing
     with ProcessPoolExecutor(max_workers=batch_config.num_workers) as executor:
-        while iteration < batch_config.max_iterations and not converged:
-            iteration += 1
+        while iteration <= batch_config.max_iterations and not converged:
             iteration_start_time = time.time()
             
             logger.info(f"\n--- Iteration {iteration}/{batch_config.max_iterations} ---")
@@ -598,6 +773,14 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             
             # Get current model state to be used by all flights in this batch
             cost_model_state = components['cost_model'].state_dict()
+            cost_model_params = {
+                'beta0': 0.0,
+                # 'beta0': components['cost_model'].beta0.item(),
+                'beta1': 1.0,
+                'beta2': 1.0,
+                # 'beta3': components['cost_model'].beta3.item(),
+                'alpha_pref_reg': components['cost_model'].alpha_pref_reg,
+            }
 
             # Process flights in the batch in parallel
             batch_results = []
@@ -608,7 +791,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 # Note: 'components' is passed, but the cost_model inside it will be stale.
                 # The correct, up-to-date model is passed via cost_model_state.
                 tasks.append(
-                    (flight_data, components, batch_config, case_dir, cost_model_state)
+                    (flight_data, components, batch_config, case_dir, cost_model_state, cost_model_params)
                 )
 
             # Use the executor to run flight processing in parallel
@@ -638,7 +821,8 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                          .mean(dim=0)
                          .to(device=device, dtype=torch.float32)
                 )
-                gradient_norm = torch.max(torch.abs(avg_gradient)).item()
+                # gradient_norm = torch.max(torch.abs(avg_gradient)).item()
+                gradient_norm = torch.norm(avg_gradient, p=2).item()
                 
                 # Apply gradient update
                 optimizer.zero_grad()
@@ -657,11 +841,11 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 
                 optimizer.step()
                 
-                logger.info(f"Applied gradient update with norm L_inf: {gradient_norm:.6f}")
+                logger.info(f"Applied gradient update with norm L2: {gradient_norm:.6f}")
                 
                 # Check convergence
                 if gradient_norm < batch_config.convergence_threshold:
-                    logger.info(f"Convergence achieved! Gradient norm L_inf: {gradient_norm:.6f} < {batch_config.convergence_threshold}")
+                    logger.info(f"Convergence achieved! Gradient norm L2: {gradient_norm:.6f} < {batch_config.convergence_threshold}")
                     converged = True
             
             # Compute iteration statistics
@@ -682,19 +866,97 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             logger.info(f"  - Gradient norm: {gradient_norm:.6f}")
             logger.info(f"  - Processing time: {iteration_time:.2f}s")
             
-            # Save checkpoint
+            # Log to TensorBoard
+            if tensorboard_writer is not None and iteration % batch_config.log_interval == 0:
+                # Training metrics
+                tensorboard_writer.add_scalar('Training/Average_Log_Likelihood', avg_log_likelihood, iteration)
+                tensorboard_writer.add_scalar('Training/Gradient_Norm_Linf', gradient_norm, iteration)
+                tensorboard_writer.add_scalar('Training/Learning_Rate', batch_config.learning_rate, iteration)
+                
+                # Flight processing metrics
+                tensorboard_writer.add_scalar('Flights/Successful_Count', successful_flights, iteration)
+                tensorboard_writer.add_scalar('Flights/Failed_Count', failed_flights, iteration)
+                tensorboard_writer.add_scalar('Flights/Success_Rate', successful_flights / len(batch_flights), iteration)
+                
+                # Performance metrics
+                tensorboard_writer.add_scalar('Performance/Iteration_Time_Seconds', iteration_time, iteration)
+                tensorboard_writer.add_scalar('Performance/Flights_Per_Second', len(batch_flights) / iteration_time, iteration)
+                
+                # Model parameters statistics
+                for name, param in components['cost_model'].named_parameters():
+                    if param.requires_grad:
+                        tensorboard_writer.add_scalar(f'Parameters/{name}_mean', param.data.mean().item(), iteration)
+                        tensorboard_writer.add_scalar(f'Parameters/{name}_std', param.data.std().item(), iteration)
+                        tensorboard_writer.add_scalar(f'Parameters/{name}_max', param.data.max().item(), iteration)
+                        tensorboard_writer.add_scalar(f'Parameters/{name}_min', param.data.min().item(), iteration)
+                        
+                        # Log gradient statistics if available
+                        if param.grad is not None:
+                            tensorboard_writer.add_scalar(f'Gradients/{name}_mean', param.grad.data.mean().item(), iteration)
+                            tensorboard_writer.add_scalar(f'Gradients/{name}_std', param.grad.data.std().item(), iteration)
+                            tensorboard_writer.add_scalar(f'Gradients/{name}_norm', param.grad.data.norm().item(), iteration)
+                
+                # Log histograms less frequently to avoid cluttering
+                if iteration % (batch_config.log_interval * 5) == 0:
+                    for name, param in components['cost_model'].named_parameters():
+                        if param.requires_grad:
+                            tensorboard_writer.add_histogram(f'Parameters_Hist/{name}', param.data, iteration)
+                            if param.grad is not None:
+                                tensorboard_writer.add_histogram(f'Gradients_Hist/{name}', param.grad.data, iteration)
+                
+                # Log batch-specific metrics if available
+                flight_processing_times = [r.processing_time for r in batch_results if r.success]
+                if flight_processing_times:
+                    tensorboard_writer.add_scalar('Performance/Avg_Flight_Processing_Time', 
+                                                 np.mean(flight_processing_times), iteration)
+                    tensorboard_writer.add_scalar('Performance/Max_Flight_Processing_Time', 
+                                                 np.max(flight_processing_times), iteration)
+                
+                # Log individual flight log likelihoods distribution
+                flight_log_likelihoods = [r.log_likelihood for r in batch_results if r.success]
+                if flight_log_likelihoods:
+                    tensorboard_writer.add_histogram('Training/Flight_Log_Likelihoods', 
+                                                    np.array(flight_log_likelihoods), iteration)
+                
+                # Flush to ensure data is written
+                tensorboard_writer.flush()
+            
+            # Save checkpoint before incrementing iteration
             if iteration % batch_config.checkpoint_interval == 0:
                 checkpoint_path = os.path.join(output_dir, f"checkpoint_iter_{iteration}.pt")
-                torch.save({
-                    'iteration': iteration,
-                    'model_state_dict': components['cost_model'].state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'training_history': training_history,
-                    'batch_config': asdict(batch_config)
-                }, checkpoint_path)
-                logger.info(f"Checkpoint saved to {checkpoint_path}")
+                
+                # Ensure output directory exists
+                os.makedirs(output_dir, exist_ok=True)
+                
+                try:
+                    torch.save({
+                        'iteration': iteration,
+                        'model_state_dict': components['cost_model'].state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'training_history': training_history,
+                        'batch_config': asdict(batch_config)
+                    }, checkpoint_path)
+                    
+                    # Verify the checkpoint was saved successfully
+                    if os.path.exists(checkpoint_path):
+                        file_size = os.path.getsize(checkpoint_path)
+                        logger.info(f"✓ Checkpoint saved successfully to {checkpoint_path} (size: {file_size:,} bytes)")
+                    else:
+                        logger.error(f"✗ Checkpoint save failed - file does not exist: {checkpoint_path}")
+                        
+                except Exception as e:
+                    logger.error(f"✗ Error saving checkpoint to {checkpoint_path}: {e}")
+                
+                # Log checkpoint save to TensorBoard
+                if tensorboard_writer is not None:
+                    tensorboard_writer.add_text('Training/Checkpoint', 
+                                               f"Checkpoint saved at iteration {iteration}: {checkpoint_path}", 
+                                               iteration)
+            
+            # Increment iteration for next loop
+            iteration += 1
 
-    # 5. Save final results
+    # 5. Save final results and checkpoint
     final_results = {
         'converged': converged,
         'final_iteration': iteration,
@@ -706,9 +968,58 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     results_path = os.path.join(output_dir, "final_results.pt")
     torch.save(final_results, results_path)
     
+    # Save a final checkpoint
+    final_checkpoint_path = os.path.join(output_dir, f"checkpoint_iter_{iteration}.pt")
+    try:
+        torch.save({
+            'iteration': iteration,
+            'model_state_dict': components['cost_model'].state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'training_history': training_history,
+            'batch_config': asdict(batch_config)
+        }, final_checkpoint_path)
+        
+        if os.path.exists(final_checkpoint_path):
+            file_size = os.path.getsize(final_checkpoint_path)
+            logger.info(f"✓ Final checkpoint saved to {final_checkpoint_path} (size: {file_size:,} bytes)")
+        else:
+            logger.error(f"✗ Final checkpoint save failed - file does not exist: {final_checkpoint_path}")
+            
+    except Exception as e:
+        logger.error(f"✗ Error saving final checkpoint to {final_checkpoint_path}: {e}")
+    
     # Save training history as CSV for analysis
     history_df = pd.DataFrame(training_history)
     history_df.to_csv(os.path.join(output_dir, "training_history.csv"), index=False)
+    
+    # Log final training summary to TensorBoard
+    if tensorboard_writer is not None:
+        # Add final summary statistics
+        tensorboard_writer.add_text('Training/Summary', 
+                                   f"Training completed after {iteration} iterations. "
+                                   f"Converged: {converged}. "
+                                   f"Final gradient norm: {gradient_norm:.6f}. "
+                                   f"Final avg log likelihood: {avg_log_likelihood:.6f}")
+        
+        # Log hyperparameters and final metrics
+        hparams = {
+            'batch_size': batch_config.batch_size,
+            'learning_rate': batch_config.learning_rate,
+            'gamma': batch_config.gamma,
+            'max_iterations': batch_config.max_iterations,
+            'convergence_threshold': batch_config.convergence_threshold
+        }
+        
+        metrics = {
+            'final_gradient_norm': gradient_norm,
+            'final_avg_log_likelihood': avg_log_likelihood,
+            'converged': int(converged),
+            'total_iterations': iteration
+        }
+        
+        tensorboard_writer.add_hparams(hparams, metrics)
+        tensorboard_writer.close()
+        logger.info(f"TensorBoard logs saved to {tb_log_dir}")
     
     logger.info(f"Training completed after {iteration} iterations")
     logger.info(f"Final results saved to {results_path}")
@@ -755,7 +1066,7 @@ def validate_implementation():
 def main():
     """Command-line interface for the batch SGD pipeline."""
     parser = argparse.ArgumentParser(
-        description="Batch SGD Pipeline for Maximum Entropy Inverse Learning"
+        description="Batch SGD Pipeline for Maximum Entropy Inverse Learning with automatic checkpoint resumption"
     )
     
     parser.add_argument(
@@ -822,6 +1133,21 @@ def main():
         action="store_true",
         help="Run in a single process for debugging purposes."
     )
+    parser.add_argument(
+        "--tensorboard-log-dir",
+        help="Directory for TensorBoard logs (default: output-dir/tensorboard_logs)"
+    )
+    parser.add_argument(
+        "--log-interval",
+        type=int,
+        default=1,
+        help="Interval for logging to TensorBoard (default: 1, log every iteration)"
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Disable automatic resume from checkpoint (default: resume is enabled)"
+    )
     
     args = parser.parse_args()
     
@@ -839,13 +1165,30 @@ def main():
         num_workers=args.num_workers,
         device=args.device,
         gamma=args.gamma,
-        debug_single_process=args.debug_single_process
+        debug_single_process=args.debug_single_process,
+        tensorboard_log_dir=args.tensorboard_log_dir,
+        log_interval=args.log_interval,
+        resume_from_checkpoint=not args.no_resume  # Resume by default unless --no-resume is specified
     )
     
     # Validate implementation first
     if not validate_implementation():
         logger.error("Implementation validation failed. Exiting.")
         return
+    
+    # Delete tensorboard log directory if it exists
+    # Remove existing TensorBoard log directory
+    if batch_config.tensorboard_log_dir:
+        tensorboard_dir = batch_config.tensorboard_log_dir
+    elif args.output_dir:
+        tensorboard_dir = os.path.join(args.output_dir, "tensorboard_logs")
+    else:
+        tensorboard_dir = None
+    
+    import shutil
+    if tensorboard_dir and os.path.exists(tensorboard_dir):
+        logger.info(f"Removing existing TensorBoard log directory: {tensorboard_dir}")
+        shutil.rmtree(tensorboard_dir)
     
     # Run the pipeline
     try:

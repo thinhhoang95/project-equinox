@@ -1,0 +1,36 @@
+aircraft_model: NARROW_BODY_JET
+charges_file_path: data/cases/LEMD_EGLL/graphs/routes_charges.npy
+climb_phase_switch_allowance_climb_time_bins: 10
+cost_model_beta0: 0.0
+cost_model_beta1: 1.0
+cost_model_beta2: 1.0
+cost_model_beta3: 1.0
+cruise_altitude_ft: 35000.0
+cruise_speed_kts: 450.0
+delta_t_seconds: 600
+device_preference: cuda
+distances_file_path: data/cases/LEMD_EGLL/graphs/routes_distances.npy
+estimated_landing_time_str: '2023-04-01 08:23:59'
+landing_time_str: '2023-04-01 08:23:59'
+estimated_takeoff_time_str: '2023-04-01 06:26:25'
+takeoff_time_str: '2023-04-01 06:26:25'
+etto_delta_t_seconds: 30
+file_prefix: flight0
+goal_elevation_ft: 0.0
+goal_node: EGLL
+graph_file_path: data/cases/LEMD_EGLL/graphs/routes.gml
+initial_alt_ft: 0.0
+max_elapsed_time_since_takeoff_hours: 0.75
+max_flight_duration_hours: 5.0
+origin_node: LEMD
+output_dir: data/cases/LEMD_EGLL/samples
+source_elevation_ft: 0.0
+thinning_output_file_name: REACHABLE_WIND
+tres_backward_output_file_name: CLSR_WIND
+tres_forward_output_file_name: CLB_WIND
+wind_data_dir: data/era5
+wind_date: '2023-04-01'
+disable_config_wind_model: true
+gamma: 1.0
+alpha_pref_reg: 1.0
+checkpoint_path: data/cases/LEMD_EGLL/batch_sgd_results/checkpoint_iter_50.pt

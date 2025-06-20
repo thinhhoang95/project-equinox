@@ -48,12 +48,10 @@ class CostRev3(nn.Module):
             self.device = device
 
         # Coefficients (nn.Parameter for flexibility, can be fixed with requires_grad=False)
-        # The beta1 and beta2 arguments are ignored to fix the scale,
-        # but are kept in the signature for API compatibility.
         # self.beta0 = nn.Parameter(torch.tensor(beta0, dtype=torch.float32), requires_grad=True)
         self.beta0 = 0.0
-        # self.beta1 = nn.Parameter(torch.tensor(beta1, dtype=torch.float32), requires_grad=True)
-        # self.beta2 = nn.Parameter(torch.tensor(beta2, dtype=torch.float32), requires_grad=True)
+        self.beta1 = nn.Parameter(torch.tensor(beta1, dtype=torch.float32), requires_grad=True)
+        self.beta2 = nn.Parameter(torch.tensor(beta2, dtype=torch.float32), requires_grad=True)
         # self.beta3 = nn.Parameter(torch.tensor(beta3, dtype=torch.float32), requires_grad=False) # Added beta3
         if isinstance(alpha_pref_reg, torch.Tensor):
             self.alpha_pref_reg = nn.Parameter(alpha_pref_reg.detach().clone().to(dtype=torch.float32), requires_grad=False)
@@ -71,14 +69,12 @@ class CostRev3(nn.Module):
 
         self.plm_ac_dist = PiecewiseLinearMonoModel(
             knot_points=_knots_ac_dist,
-            monotonic_type="non_decreasing",  # Higher AC*dist -> higher cost contribution
-            anchor_at_first_knot=True
+            monotonic_type="non_decreasing"  # Higher AC*dist -> higher cost contribution
         )
 
         self.plm_wind = PiecewiseLinearMonoModel(
             knot_points=_knots_wind,
-            monotonic_type="non_increasing",  # Higher tailwind -> lower cost contribution
-            anchor_at_first_knot=True
+            monotonic_type="non_increasing"  # Higher tailwind -> lower cost contribution
         )
 
         # For debugging: use identity function for both components
@@ -185,8 +181,8 @@ class CostRev3(nn.Module):
         # preference_regularization = self.alpha_pref_reg * (pref_e_batch**2)
 
         total_cost_batch = self.beta0 + \
-                           cost_component_ac_dist + \
-                           cost_component_wind # - \
+                           self.beta1 * cost_component_ac_dist + \
+                           self.beta2 * cost_component_wind # - \
                         #    self.beta3 * pref_e_batch + \
                         #    preference_regularization
         

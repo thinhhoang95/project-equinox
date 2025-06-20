@@ -1,0 +1,286 @@
+import pandas as pd
+import networkx as nx
+import numpy as np
+from equinox.helpers.haversine import haversine as haversine_distance
+from simplification.cutil import simplify_coords
+import time
+from tqdm import tqdm
+
+# --- Constants for file paths ---
+# Gwp: Waypoint-only graph (all possible waypoints)
+# Assuming Gwp is the airac file, containing a comprehensive set of waypoints
+GWP_PATH = "data/graph/ats_fra_nodes_only.gml"
+
+# Gwf: Wire-frame graph (the graph we want to find a path on)
+# This is the pre-processed graph for a specific city pair
+GWF_PATH = "data/cases/LEMD_EGLL/graphs/routes.gml"
+
+# CSV with routes to be sculpted
+ROUTES_CSV_PATH = "data/cases/LEMD_EGLL/all_routes.csv"
+
+
+def get_coords_for_waypoints(waypoint_ids, G_wp):
+    """Retrieves coordinates for a list of waypoint IDs from the waypoint graph."""
+    coords = []
+    for wp_id in waypoint_ids:
+        if G_wp.has_node(wp_id):
+            node_data = G_wp.nodes[wp_id]
+            coords.append([node_data["lon"], node_data["lat"]])
+        else:
+            # This case should be handled based on desired behavior.
+            # For now, we'll print a warning and skip the waypoint.
+            print(f"Warning: Waypoint '{wp_id}' not found in waypoint graph Gwp.")
+    return np.array(coords)
+
+
+def find_nearest_node(G_wf, point):
+    """Finds the nearest node in G_wf to a given geographic point (lon, lat)."""
+    lon, lat = point
+    best_node = None
+    min_dist = float('inf')
+
+    for node, data in G_wf.nodes(data=True):
+        node_lat, node_lon = data["lat"], data["lon"]
+        dist = haversine_distance(lat, lon, node_lat, node_lon)
+        if dist < min_dist:
+            min_dist = dist
+            best_node = node
+    
+    # min_dist is in km, as per equinox.helpers.haversine
+    return best_node, min_dist
+
+
+def sculpt_route(
+    original_route_wps,
+    G_wp,
+    G_wf,
+    epsilon_initial_nm=20.0,
+    epsilon_min_nm=0.5,
+    snap_distance_km=2.0,
+    max_iterations=20,
+    verbose=True,
+):
+    """
+    Transforms an original route (list of waypoints) into a valid route on the wire-frame graph G_wf.
+
+    Args:
+        original_route_wps (list): The original route as an ordered list of waypoint IDs.
+        G_wp (nx.Graph): Waypoint-only graph with lat/lon attributes for all waypoints.
+        G_wf (nx.Graph): The wire-frame graph to map the route onto.
+        epsilon_initial_nm (float): Initial Douglas-Peucker tolerance in nautical miles.
+        epsilon_min_nm (float): Minimal DP tolerance.
+        snap_distance_km (float): Maximum distance to snap a point to a G_wf node.
+        max_iterations (int): Safety cap on refinement loops.
+        verbose (bool): Whether to print verbose output.
+
+    Returns:
+        list or None: A list of G_wf node IDs for the sculpted route, or None if it fails.
+    """
+    # 1. Build the base poly-line P from the original route waypoints
+    # Note: simplify_coords expects (x, y), so we use (lon, lat)
+    poly_line = get_coords_for_waypoints(original_route_wps, G_wp)
+    if len(poly_line) < 2:
+        if verbose:
+            print("Error: Base poly-line has fewer than 2 points. Cannot process.")
+        return None
+
+    # Douglas-Peucker tolerance is in the same units as the coordinates.
+    # Since our coordinates are in degrees, we need a rough conversion for epsilon.
+    # 1 degree of latitude is ~60 NM. We'll use this as a rough guide.
+    epsilon_initial_deg = epsilon_initial_nm / 60.0
+    epsilon_min_deg = epsilon_min_nm / 60.0
+
+    epsilon = epsilon_initial_deg
+    iteration = 0
+
+    # 3. Refinement loop
+    while iteration < max_iterations and epsilon >= epsilon_min_deg:
+        if verbose:
+            print(f"\n--- Iteration {iteration + 1}, Epsilon: {epsilon * 60.0:.2f} NM ---")
+
+        # 3.1 Simplify the poly-line
+        simplified_poly_line = simplify_coords(poly_line, epsilon)
+        if verbose:
+            print(f"Simplified poly-line from {len(poly_line)} to {len(simplified_poly_line)} points.")
+
+        # 3.2 Anchor simplified points to the wire-frame graph G_wf
+        anchors = []
+        snap_failed = False
+        for point in simplified_poly_line:
+            lon, lat = point
+            nearest_node_id, dist_km = find_nearest_node(G_wf, (lon, lat))
+            if dist_km <= snap_distance_km:
+                anchors.append(nearest_node_id)
+            else:
+                if verbose:
+                    print(f"Snap failed for point ({lon:.4f}, {lat:.4f}). Nearest node is {dist_km:.2f} km away > {snap_distance_km} km.")
+                snap_failed = True
+                break
+        
+        if snap_failed:
+            epsilon /= 2
+            iteration += 1
+            if verbose:
+                print("Snap failed. Reducing tolerance and retrying.")
+            continue
+
+        # Remove consecutive duplicate anchors, which can happen if DP points are close
+        anchors = [a for i, a in enumerate(anchors) if i == 0 or a != anchors[i-1]]
+        if verbose:
+            print(f"Anchored {len(anchors)} unique points to G_wf.")
+
+        # 3.3 Bridge consecutive anchors with shortest paths on G_wf
+        sculpted_route_nodes = [anchors[0]]
+        path_failed = False
+        for i in range(len(anchors) - 1):
+            u, v = anchors[i], anchors[i + 1]
+            try:
+                # Using 'dist' as weight for shortest path, assuming it's in consistent units (e.g., km or NM)
+                path_segment = nx.shortest_path(G_wf, source=u, target=v, weight="dist")
+                sculpted_route_nodes.extend(path_segment[1:])
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                if verbose:
+                    print(f"Path failed: No path found in G_wf between '{u}' and '{v}'.")
+                path_failed = True
+                break
+        
+        if path_failed:
+            epsilon /= 2
+            iteration += 1
+            if verbose:
+                print("Path finding failed. Reducing tolerance and retrying.")
+            continue
+
+        # 4. Success - a valid path on G_wf was found
+        if verbose:
+            print("Success! A valid route has been sculpted onto the wire-frame graph.")
+        # Post-processing: de-duplicate
+        final_route = [node for i, node in enumerate(sculpted_route_nodes) if i == 0 or node != sculpted_route_nodes[i-1]]
+        return final_route
+
+    # 5. Failure handling
+    if verbose:
+        print("\n--- Failure ---")
+        if iteration >= max_iterations:
+            print(f"Algorithm failed: Reached maximum iterations ({max_iterations}).")
+        else:
+            print(f"Algorithm failed: Epsilon dropped below minimum ({epsilon_min_nm} NM).")
+        print("Could not sculpt the route with the given parameters.")
+    return None
+
+
+def process_and_save_all_routes(
+    routes_df, G_wp, G_wf, output_csv_path, **sculpt_params
+):
+    """
+    Processes all routes from a DataFrame, sculpts them, and saves the results to a CSV file.
+
+    Args:
+        routes_df (pd.DataFrame): DataFrame containing the routes to process.
+                                  Must have 'real_waypoints' and 'alts' columns.
+        G_wp (nx.Graph): Waypoint-only graph.
+        G_wf (nx.Graph): Wire-frame graph.
+        output_csv_path (str): Path to save the output CSV file.
+        **sculpt_params: Additional keyword arguments to pass to the sculpt_route function.
+    """
+    sculpted_routes_data = []
+    failed_routes_count = 0
+
+    print(f"\nProcessing {len(routes_df)} routes...")
+    for index, row in tqdm(routes_df.iterrows(), total=routes_df.shape[0]):
+        original_waypoints = row["real_waypoints"].split()
+        
+        # Parse altitudes to find the maximum altitude
+        try:
+            altitudes = [float(alt) for alt in row["alts"].split()]
+            cruise_altitude = max(altitudes) if altitudes else 0
+        except (ValueError, AttributeError):
+            cruise_altitude = 0 # Default if 'alts' is malformed or missing
+
+        sculpted_wps = sculpt_route(
+            original_route_wps=original_waypoints,
+            G_wp=G_wp,
+            G_wf=G_wf,
+            verbose=False,  # Keep the progress bar clean
+            **sculpt_params,
+        )
+
+        if sculpted_wps:
+            sculpted_routes_data.append(
+                {
+                    "flight_id": row["flight_id"],
+                    "sculpted_route": " ".join(sculpted_wps),
+                    "takeoff": row["takeoff"],
+                    "landing": row["landing"],
+                    "cruise_altitude": cruise_altitude,
+                }
+            )
+        else:
+            failed_routes_count += 1
+    
+    print(f"\nSuccessfully sculpted {len(sculpted_routes_data)} routes.")
+    if failed_routes_count > 0:
+        print(f"Failed to sculpt {failed_routes_count} routes.")
+
+    # Save the results to a new CSV file
+    if sculpted_routes_data:
+        results_df = pd.DataFrame(sculpted_routes_data)
+        results_df.to_csv(output_csv_path, index=False)
+        print(f"Saved sculpted routes to {output_csv_path}")
+
+
+def main():
+    """
+    Main function to load data, run the sculpting algorithm, and print results.
+    """
+    print("Loading graphs...")
+    try:
+        # Load the waypoint-only graph (all waypoints)
+        G_wp = nx.read_gml(GWP_PATH)
+        print(f"Loaded G_wp: {G_wp.number_of_nodes()} nodes.")
+
+        # Load the wire-frame graph
+        G_wf = nx.read_gml(GWF_PATH)
+        print(f"Loaded G_wf: {G_wf.number_of_nodes()} nodes, {G_wf.number_of_edges()} edges.")
+    except FileNotFoundError as e:
+        print(f"Error loading graph file: {e}")
+        print("Please ensure the GML graph files are at the correct paths.")
+        return
+
+    print("\nLoading routes data...")
+    try:
+        routes_df = pd.read_csv(ROUTES_CSV_PATH)
+        print(f"Loaded {len(routes_df)} routes from CSV.")
+    except FileNotFoundError:
+        print(f"Error: The file {ROUTES_CSV_PATH} was not found.")
+        return
+
+    # --- Set up paths and parameters ---
+    output_dir = "data/cases/LEMD_EGLL"
+    output_filename = "all_routes_sculpted.csv"
+    output_path = f"{output_dir}/{output_filename}"
+
+    # Parameters for the sculpting algorithm
+    sculpt_parameters = {
+        "epsilon_initial_nm": 50.0,
+        "epsilon_min_nm": 2.0,
+        "snap_distance_km": 20.0,
+        "max_iterations": 10,
+    }
+
+    # --- Process all routes and save them ---
+    start_time = time.time()
+    process_and_save_all_routes(
+        routes_df=routes_df,
+        G_wp=G_wp,
+        G_wf=G_wf,
+        output_csv_path=output_path,
+        **sculpt_parameters,
+    )
+    end_time = time.time()
+    
+    print(f"\nTotal processing time: {end_time - start_time:.2f} seconds.")
+
+
+if __name__ == "__main__":
+    main()
