@@ -33,4 +33,5 @@ wind_date: '2023-04-01'
 disable_config_wind_model: true
 gamma: 1.0
 alpha_pref_reg: 1.0
-checkpoint_path: data/cases/LEMD_EGLL/batch_sgd_results/checkpoint_iter_50.pt
+cost_model_version: '4lite'
+checkpoint_path: data/cases/LEMD_EGLL/batch_sgd_results/checkpoint_iter_201.pt

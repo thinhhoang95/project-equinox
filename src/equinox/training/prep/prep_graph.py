@@ -500,10 +500,10 @@ def process_graph(
     minimum_detour_allowed: float = 0.025,
     n_iter: int = 10,
     max_allowed_deviation_angle: float = 90,
-    remove_collinear_edges: bool = True,
-    remove_backtracking_edges: bool = True,
-    remove_unreachable_nodes: bool = True,
-    make_acyclic: bool = True,
+    remove_collinear_edges_option: bool = True,
+    remove_backtracking_edges_option: bool = True,
+    remove_unreachable_nodes_option: bool = True,
+    make_acyclic_option: bool = True,
 ):
     Gno = prepare_base_graph(
         nodes_only_graph_path,
@@ -515,9 +515,9 @@ def process_graph(
     )
     improve_connectivity(Gno, source_id, destination_id, n_iter=n_iter)
     # Remove collinear edges
-    if remove_collinear_edges:
+    if remove_collinear_edges_option:
         Gno = remove_collinear_edges(Gno)
-    if remove_backtracking_edges:
+    if remove_backtracking_edges_option:
         Gno = remove_backtracking_edges(
             Gno,
             source_id,  
@@ -526,9 +526,9 @@ def process_graph(
         )
     if delete_isolated_nodes:
         Gno = remove_isolated_nodes(Gno)
-    if remove_unreachable_nodes:
+    if remove_unreachable_nodes_option:
         Gno = remove_unreachable_nodes(Gno, source_id, destination_id)
-    if make_acyclic:
+    if make_acyclic_option:
         Gno = make_graph_acyclic(Gno, source_id, destination_id)
     return Gno
 
@@ -543,6 +543,10 @@ def process_and_save_graph(
     n_iter: int = 10,
     max_allowed_deviation_angle: float = 90,
     output_path: str = None,
+    remove_collinear_edges_option: bool = True,
+    remove_backtracking_edges_option: bool = True,
+    remove_unreachable_nodes_option: bool = True,
+    make_acyclic_option: bool = True,
 ):
     Gno = process_graph(
         nodes_only_graph_path,
@@ -553,6 +557,10 @@ def process_and_save_graph(
         minimum_detour_allowed,
         n_iter,
         max_allowed_deviation_angle,
+        remove_collinear_edges_option,
+        remove_backtracking_edges_option,
+        remove_unreachable_nodes_option,
+        make_acyclic_option,
     )
     if output_path is not None:
         nx.write_gml(Gno, output_path)

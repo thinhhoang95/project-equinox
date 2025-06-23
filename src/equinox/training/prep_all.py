@@ -6,9 +6,12 @@ from equinox.training.prep.prep_graph import process_and_save_graph
 from equinox.feateng.airspace_charges import compute_charges_for_graph
 from equinox.feateng.laplace import enumerate_nodes, node_names_to_ids
 from equinox.feateng.distance import haversine_distance_matrix
+from equinox.training.prep.resculpt_viterbi import viterbi_match, haversine_nm
 
-path_prefix = "D:\\project-akrav\\"
-path_output = "D:\\project-equinox\\"
+# path_prefix = "D:\\project-akrav\\"
+path_prefix = '/Volumes/CrucialX/project-akrav/'
+# path_output = "D:\\project-equinox\\"
+path_output = '/Volumes/CrucialX/project-equinox/'
 source_id = "LEMD"
 destination_id = "EGLL"
 routes_dir = os.path.join(path_prefix, "matched_filtered_data")
@@ -35,9 +38,10 @@ def prep_graph():
         destination_id,
         routes_dir,
         output_path=output_path,
-        minimum_detour_allowed=0.025,
-        n_iter=10,
+        minimum_detour_allowed=0.04,
+        n_iter=15,
         max_allowed_deviation_angle=60,
+        remove_collinear_edges_option=False
     )
     print(f"Graph processing completed in {time.time() - start_time} seconds")
     print(
@@ -146,6 +150,112 @@ def prep_distance_matrix():
     print(f"Saved distance matrix to {output_file}")
 
 
+def prep_sculpting_existing_routes_to_new_graph():
+    """
+    Sculpts existing routes to the new graph using Viterbi matching.
+    This function is adapted from the example script in resculpt_viterbi.py.
+    """
+    case_name = f"{source_id}_{destination_id}"
+    case_dir = os.path.join(path_output, "data", "cases", case_name)
+    graph_path = os.path.join(case_dir, "graphs", "routes.gml")
+    routes_csv_path = os.path.join(case_dir, "all_routes.csv")
+    output_csv_path = os.path.join(case_dir, "all_routes_sculpted.csv")
+
+    print(f"Sculpting routes for case {case_name}")
+
+    print(f"Loading the wireframe graph from {graph_path}...")
+    Gwf = nx.read_gml(graph_path)
+
+    nodes_only_graph_path = os.path.join(
+        path_prefix, "data", "graphs", "ats_fra_nodes_only.gml"
+    )
+
+    Gwp = nx.read_gml(nodes_only_graph_path)
+
+    print("Adding the length_nm attribute to the graph...")
+    # This is needed for the viterbi_match function's transition scoring
+    for u, v in Gwf.edges():
+        lat1, lon1 = Gwf.nodes[u]["lat"], Gwf.nodes[u]["lon"]
+        lat2, lon2 = Gwf.nodes[v]["lat"], Gwf.nodes[v]["lon"]
+        Gwf.edges[u, v]["length_nm"] = haversine_nm(lat1, lon1, lat2, lon2)
+
+    print(f"Loading routes from {routes_csv_path}...")
+    if not os.path.exists(routes_csv_path):
+        print(f"File not found: {routes_csv_path}. Skipping route sculpting.")
+        return
+
+    df = pd.read_csv(routes_csv_path)
+
+    sculpted_routes = []
+
+    for index, row in df.iterrows():
+        flight_id = row.get("flight_id", f"flight_{index}")
+        print(f"Processing flight {flight_id} ({index+1}/{len(df)})...")
+
+        real_waypoints = row.get("real_waypoints", "")
+        if not real_waypoints or not isinstance(real_waypoints, str):
+            print(f"  ... skipping, 'real_waypoints' is missing or not a string.")
+            continue
+
+        orig_wp_names = real_waypoints.split()
+
+        obs_pts = []
+        for n in orig_wp_names:
+            if n in Gwp.nodes:
+                obs_pts.append((Gwp.nodes[n]["lat"], Gwp.nodes[n]["lon"]))
+            else:
+                print(
+                    f"  ... warning: waypoint '{n}' not found in the Gwp (ats/fra nodes only) graph, will be skipped."
+                )
+
+        if len(obs_pts) < 2:
+            print(
+                f"  ... skipping, not enough waypoints found in graph ({len(obs_pts)})."
+            )
+            continue
+
+        try:
+            best_nodes, best_edges = viterbi_match(Gwf, obs_pts, k=10, beta=0.5)
+            if not best_edges:
+                print(f"  ... skipping, no edges found in sculpted route.")
+                continue
+            full_nodes = [best_edges[0][0]] + [edge[1] for edge in best_edges]
+            sculpted_route_str = " ".join(full_nodes)
+            print(f"  -> Sculpted route ({len(full_nodes)} nodes).")
+
+            sculpted_routes.append(
+                {
+                    "flight_id": flight_id,
+                    "route": sculpted_route_str,
+                    "takeoff_time": row.get("takeoff"),
+                    "landing_time": row.get("landing"),
+                    "cruise_altitude": max(
+                        map(float, row.get("alts", "0").split())
+                    )
+                    if row.get("alts")
+                    and isinstance(row.get("alts"), str)
+                    and row.get("alts").strip()
+                    else None,
+                    "origin": row.get("origin"),
+                    "destination": row.get("destination"),
+                    "flight_time_s": row.get("flight_time_s")
+                }
+            )
+
+        except RuntimeError as e:
+            print(f"  ... skipping, Viterbi matching failed: {e}")
+        except Exception as e:
+            print(f"  ... skipping due to an unexpected error: {e}")
+
+    if sculpted_routes:
+        output_df = pd.DataFrame(sculpted_routes)
+        os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
+        output_df.to_csv(output_csv_path, index=False)
+        print(f"\nSaved {len(output_df)} sculpted routes to {output_csv_path}")
+    else:
+        print("\nNo routes were processed successfully.")
+
+
 def prep_default_yaml():
     """
     Writes a default.yaml configuration file for the case.
@@ -184,8 +294,8 @@ def prep_default_yaml():
 charges_file_path: {relative_charges_path}
 climb_phase_switch_allowance_climb_time_bins: 10
 cost_model_beta0: 0.0
-cost_model_beta1: 2.0
-cost_model_beta2: 0.0
+cost_model_beta1: 1.0
+cost_model_beta2: 1.0
 cost_model_beta3: 1.0
 cruise_altitude_ft: 35000.0
 cruise_speed_kts: 450.0
@@ -205,8 +315,9 @@ output_dir: {relative_output_dir}
 source_elevation_ft: 0.0
 wind_data_dir: {wind_data_dir_path.replace('\\', '\\\\')}
 disable_config_wind_model: true
-gamma: 0.001
+gamma: 1.0
 alpha_pref_reg: 1.0
+cost_model_version: "4"
 """
 
     output_yaml_path = os.path.join(case_dir, "default.yaml")
@@ -216,7 +327,6 @@ alpha_pref_reg: 1.0
         f.write(yaml_content)
 
     print(f"Saved default config to {output_yaml_path}")
-
 
 if __name__ == "__main__":
     print("Starting preparation...")
@@ -228,6 +338,13 @@ if __name__ == "__main__":
     print("Airspace charges preparation completed")
     prep_distance_matrix()
     print("Distance matrix preparation completed")
+    prep_sculpting_existing_routes_to_new_graph()
     prep_default_yaml()
     print("Default yaml preparation completed")
+    print("Plotting route graph...")
+    from equinox.helpers.plotters import plot_route_graph_pdf
+    route_graph_path = os.path.join(path_output, "data", "cases", f"{source_id}_{destination_id}", "graphs", "routes.gml")
+    Gm = nx.read_gml(route_graph_path)
+    plot_route_graph_pdf(Gm, show_label=True, highlighted_labels = [], output_path=os.path.join(path_output, "data", "cases", f"{source_id}_{destination_id}", "graphs", "routes.pdf"))
+    print("Route graph plot saved to ", os.path.join(path_output, "data", "cases", f"{source_id}_{destination_id}", "graphs", "routes.pdf"))
     print("Preparation completed")

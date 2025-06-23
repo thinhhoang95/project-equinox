@@ -25,6 +25,7 @@ import heapq
 import networkx as nx
 import pandas as pd
 from sklearn.neighbors import KDTree
+from tqdm import tqdm
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +105,7 @@ def log_transition(G: nx.Graph,
 # ---------------------------------------------------------------------------
 def viterbi_match(G: nx.Graph,
                   obs_pts: List[Tuple[float, float]],
-                  k: int = 5,
+                  k: int = 15,
                   sigma: float = 0.3,
                   beta: float = 1.5):
     cand_nodes, cand_dists = candidate_sets(obs_pts, G, k)
@@ -168,13 +169,19 @@ def viterbi_match(G: nx.Graph,
     best_path_nodes.reverse()
 
     # Expand to concrete edge sequence
-    best_path_edges: List[Tuple[str, str]] = []
+    if not best_path_nodes:
+        return [], []
+
+    # Start with the first node from the Viterbi result.
+    full_path_nodes = [best_path_nodes[0]]
     for u, v in zip(best_path_nodes, best_path_nodes[1:]):
-        best_path_edges.extend(nx.shortest_path(G, u, v, weight="length_nm",
-                                                method="dijkstra",))  # nodes
-    # Collapse intermediate node lists into edge tuples
-    edges_flat = [(best_path_edges[i], best_path_edges[i + 1])
-                  for i in range(len(best_path_edges) - 1)]
+        # Find path between consecutive Viterbi nodes and append all but the first node.
+        path_segment = nx.shortest_path(G, u, v, weight="length_nm", method="dijkstra")
+        full_path_nodes.extend(path_segment[1:])
+
+    # Collapse the full node path into edge tuples.
+    edges_flat = [(full_path_nodes[i], full_path_nodes[i + 1])
+                  for i in range(len(full_path_nodes) - 1)]
 
     return best_path_nodes, edges_flat
 
@@ -204,14 +211,13 @@ if __name__ == "__main__":
     
     sculpted_routes = []
 
-    for index, row in df.iterrows():
+    for index, row in tqdm(df.iterrows(), total=len(df), desc="Processing flights"):
         # Assuming flight_id exists in the dataframe, if not, generate one.
         flight_id = row.get("flight_id", f"flight_{index}")
-        print(f"Processing flight {flight_id} ({index+1}/{len(df)})...")
         
         real_waypoints = row.get("real_waypoints", "")
         if not real_waypoints or not isinstance(real_waypoints, str):
-            print(f"  ... skipping, 'real_waypoints' is missing or not a string.")
+            print(f"WARNING: Flight {flight_id} - skipping, 'real_waypoints' is missing or not a string.")
             continue
             
         orig_wp_names = real_waypoints.split()
@@ -222,7 +228,7 @@ if __name__ == "__main__":
                    if n in Gwf.nodes]
 
         if len(obs_pts) < 2:
-            print(f"  ... skipping, not enough waypoints found in graph ({len(obs_pts)}).")
+            print(f"WARNING: Flight {flight_id} - skipping, not enough waypoints found in graph ({len(obs_pts)}).")
             continue
 
         try:
@@ -230,8 +236,12 @@ if __name__ == "__main__":
             best_nodes, best_edges = viterbi_match(Gwf, obs_pts, k=6)
 
             # -- 2. store the result ---------------------------------------
-            sculpted_route_str = " ".join(best_nodes)
-            print(f"  ⇢  Sculpted route ({len(best_nodes)} nodes).")
+            if not best_edges:
+                print(f"WARNING: Flight {flight_id} - no edges found in sculpted route, skipping.")
+                continue
+                
+            full_nodes = [best_edges[0][0]] + [edge[1] for edge in best_edges]
+            sculpted_route_str = " ".join(full_nodes)
 
             sculpted_routes.append({
                 "flight_id": flight_id,
@@ -242,9 +252,9 @@ if __name__ == "__main__":
             })
 
         except RuntimeError as e:
-            print(f"  ... skipping, Viterbi matching failed: {e}")
+            print(f"ERROR: Flight {flight_id} - Viterbi matching failed: {e}")
         except Exception as e:
-            print(f"  ... skipping due to an unexpected error: {e}")
+            print(f"ERROR: Flight {flight_id} - unexpected error: {e}")
 
     # -- 3. save to new CSV ---------------------------------------
     if sculpted_routes:

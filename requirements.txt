@@ -63,3 +63,4 @@ tensorboard>=2.10.0
 seaborn
 simplification
 scikit-learn
+geopy

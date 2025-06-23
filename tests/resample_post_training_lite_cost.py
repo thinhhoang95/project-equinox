@@ -5,8 +5,9 @@
 # The tres passes are the same, and only needs to be run once
 # See test_trespass.py to obtain the tres passes results first
 # ------
-# This script uses CostRev4Lite as specified in the configuration file
+# This script uses CostRev4 as specified in the configuration file
 # ********************************************************
+
 
 flight_takeoff_str = '2023-04-01 06:26:25'
 flight_landing_str = '2023-04-01 08:23:59'
@@ -974,19 +975,18 @@ if __name__ == '__main__':
     components = config.initialize_all_components(manual_cost_model_init = True)
     # Because we are using disable_config_wind_model in the settings yaml file, we need to manually initialize the wind model
     components['wind_model'] = WindDate(date_str=config.wind_date, data_dir=config.wind_data_dir)
-    # Initialize the cost model using CostRev4Lite as specified in the configuration
+    # Initialize the cost model using CostRev4 as specified in the configuration
     cost_model = config.initialize_cost_model(num_waypoints=components['num_nodes'])
 
-    # ATTENTION: For CostRev4Lite, we do not need to load the checkpoint because the weights are fixed in the model.
     # Load the checkpoint
-    # checkpoint_path = config.checkpoint_path
-    # if checkpoint_path and os.path.exists(checkpoint_path):
-    #     print(f"Loading checkpoint from {checkpoint_path}")
-    #     checkpoint = torch.load(checkpoint_path, map_location=components['device'], weights_only=False)
-    #     cost_model.load_state_dict(checkpoint['model_state_dict'])
-    #     print("Cost model state loaded from checkpoint.")
-    # else:
-    #     raise ValueError(f"Checkpoint file not found at {checkpoint_path}")
+    checkpoint_path = config.checkpoint_path
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        print(f"Loading checkpoint from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=components['device'], weights_only=False)
+        cost_model.load_state_dict(checkpoint['model_state_dict'])
+        print("Cost model state loaded from checkpoint.")
+    else:
+        raise ValueError(f"Checkpoint file not found at {checkpoint_path}")
     
     components['cost_model'] = cost_model
 

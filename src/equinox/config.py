@@ -3,8 +3,28 @@ import torch
 import numpy as np
 import networkx as nx
 from dataclasses import dataclass, asdict
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, Type
 from pathlib import Path
+
+
+def get_cost_model_class(cost_model_version: str) -> Type[torch.nn.Module]:
+    """Returns the cost model class based on the version string."""
+    # Local imports to avoid circular dependencies if cost models import config
+    from equinox.cost.cost_rev2_reg import CostRev2
+    from equinox.cost.cost_rev3 import CostRev3
+    from equinox.cost.cost_rev4 import CostRev4
+    from equinox.cost.cost_rev4_lite import CostRev4Lite
+
+    if cost_model_version == "2reg":
+        return CostRev2
+    elif cost_model_version == "3":
+        return CostRev3
+    elif cost_model_version == "4":
+        return CostRev4
+    elif cost_model_version == "4lite":
+        return CostRev4Lite
+    else:
+        raise ValueError(f"Unsupported cost model version: {cost_model_version}")
 
 
 @dataclass
@@ -62,6 +82,9 @@ class RunConfiguration:
     # Device configuration
     device_preference: str = "cuda"  # "cuda" or "cpu"
 
+    # Cost model version
+    cost_model_version: str = "3"
+
     # Temperature
     gamma: float = 0.01
 
@@ -97,32 +120,22 @@ class RunConfiguration:
         
         return G, node_to_idx, idx_to_node, node_coords_deg
     
-    def initialize_cost_model(self, num_waypoints: int, cost_model_version: str = "2reg") -> torch.nn.Module:
+    def initialize_cost_model(self, num_waypoints: int, cost_model_version: str = None) -> torch.nn.Module:
         """Initialize the cost model with configuration parameters."""
-        from equinox.cost.cost_rev2_reg import CostRev2
-        from equinox.cost.cost_rev3 import CostRev3
+        _cost_model_version = cost_model_version if cost_model_version is not None else self.cost_model_version
+        cost_model_class = get_cost_model_class(_cost_model_version)
 
-        if cost_model_version == "2reg":
-            cost_model_instance = CostRev2(
-                beta0=self.cost_model_beta0,
-                beta1=self.cost_model_beta1,
-                beta2=self.cost_model_beta2,
-                beta3=self.cost_model_beta3,
-                num_waypoints=num_waypoints,
-                alpha_pref_reg=self.alpha_pref_reg,
-                device=self.get_device()
-            )
-        elif cost_model_version == "3":
-            cost_model_instance = CostRev3(
-                beta0=self.cost_model_beta0,
-                beta1=self.cost_model_beta1,
-                beta2=self.cost_model_beta2,
-                beta3=self.cost_model_beta3,
-                num_waypoints=num_waypoints,
-                alpha_pref_reg=self.alpha_pref_reg,
-                device=self.get_device()
-            )
-        print(f"Cost model initialized with {num_waypoints} waypoints")
+        cost_model_instance = cost_model_class(
+            beta0=self.cost_model_beta0,
+            beta1=self.cost_model_beta1,
+            beta2=self.cost_model_beta2,
+            beta3=self.cost_model_beta3,
+            num_waypoints=num_waypoints,
+            alpha_pref_reg=self.alpha_pref_reg,
+            device=self.get_device()
+        )
+        
+        print(f"Cost model version {_cost_model_version} initialized with {num_waypoints} waypoints")
         return cost_model_instance
     
     def initialize_wind_model(self) -> Any:
@@ -174,7 +187,7 @@ class RunConfiguration:
         """Load the airspace charges matrix."""
         return np.load(self.charges_file_path)
     
-    def initialize_all_components(self, cost_model_version: str = "2reg", manual_cost_model_init: bool = False) -> Dict[str, Any]:
+    def initialize_all_components(self, cost_model_version: str = None, manual_cost_model_init: bool = False) -> Dict[str, Any]:
         """Initialize all components and return them in a dictionary."""
         # Load graph and create mappings
         G, node_to_idx, idx_to_node, node_coords_deg = self.load_graph()

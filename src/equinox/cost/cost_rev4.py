@@ -5,14 +5,14 @@ import numpy as np
 from typing import Union, Tuple
 
 # Default knot points
-DEFAULT_KNOTS_AC_DIST = [0.0, 25.0, 50.0, 100.0, 200.0] # hundred-euros * nm
-DEFAULT_KNOTS_WIND = [-80.0, -40.0, -10.0, 0.0, 10.0, 40.0, 80.0] # knots
+DEFAULT_KNOTS_AC_DIST = [0.0, 25.0, 50.0, 100.0, 200.0] # hundred-euros * nm, range is similar to link distance
+DEFAULT_KNOTS_WIND = [-60.0, -40.0, -20.0, -10.0, 0.0, 10.0, 20.0, 40.0, 60.0] # nautical miles, range is similar to distance * 80/480 (max tailwind / cruise speed)
 
 class IdentityPLM(nn.Module):
     def forward(self, x):
         return x
 
-class CostRev3(nn.Module):
+class CostRev4(nn.Module):
     r"""
     Cost function c(e, t_e, beta) for an edge 'e'.
     The cost implicitly depends on time 't_e' through the 'tailwind_value_w' input,
@@ -174,8 +174,10 @@ class CostRev3(nn.Module):
         # Ensure tailwind_values_w is on the correct device and dtype for PLM input
         tailwind_tensor_batch = tailwind_values_w.to(device=self.device, dtype=torch.float32)
 
-        cost_component_ac_dist = self.plm_ac_dist(ac_dist_product_batch) 
-        cost_component_wind = self.plm_wind(tailwind_tensor_batch)
+        cost_component_ac_dist = self.plm_ac_dist(ac_dist_product_batch) # PLM (distance x airspace charge / 100.0)
+        component_dist = dist_e_batch # distance only, in nm
+        distance_due_to_tailwind = component_dist / (450.0) * tailwind_tensor_batch # >0 if tailwind, <0 if headwind; nautical miles
+        cost_component_wind = self.plm_wind(distance_due_to_tailwind) # PLM (distance due to tailwind)
 
         # For shortest time, enable the following line
         # cost_component_ac_dist = ac_dist_product_batch / (450.0 + cost_component_wind)

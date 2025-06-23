@@ -15,4 +15,4 @@ class WindDate(WindModel):
         avg_time = pd.to_datetime(avg_time_ns)
         avg_date = avg_time.date()
         self._time_min = datetime.combine(avg_date, datetime.min.time())
-        self._time_max = self._time_min + timedelta(days=1)
+        self._time_max = self._time_min + timedelta(days=1) - timedelta(hours=1) # because ERA starts at midnight till 11pm (the next 12am belongs to the next day!)

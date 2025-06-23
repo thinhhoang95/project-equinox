@@ -109,6 +109,9 @@ def backward_gradient_pass(
     # --- Pass 2: Compute Final Gradient using a running sum ---
     if verbose:
         print("Pass 2: Computing final gradient with a running sum...")
+        print("Debug output for empirically traversed links:")
+        print("   u    v     wind     distance     gradient_vector")
+        print("--------------------------------------------------------")
 
     total_log_likelihood_grad = torch.zeros(num_cost_params, dtype=torch.float64, device=device)
 
@@ -123,6 +126,57 @@ def backward_gradient_pass(
 
     if verbose:
         print(f"Processing {len(all_unique_links)} unique links for gradient calculation.")
+
+    param_names_expanded = []
+    for name, param in cost_model.named_parameters():
+        if not param.requires_grad:
+            continue
+
+        clean_name = name.replace('.unconstrained_slope_increments', '').replace('.raw_first_slope', '')
+        
+        if 'unconstrained_slope_increments' in name:
+            if 'plm_ac_dist' in name:
+                knots = cost_model.plm_ac_dist.knot_points
+            elif 'plm_wind' in name:
+                knots = cost_model.plm_wind.knot_points
+            else:
+                knots = None
+
+            if knots is not None and knots.numel() > 0 and knots.numel() == param.numel():
+                for i in range(param.numel()):
+                    knot_val = knots[i].item()
+                    if i < param.numel() - 1:
+                        next_knot_val = knots[i+1].item()
+                        range_str = f"({knot_val:6.1f}, {next_knot_val:6.1f}]"
+                    else:
+                        range_str = f"({knot_val:6.1f},   inf)"
+                    param_names_expanded.append(f"{clean_name}.slope_inc[{i}] {range_str}")
+            else: # Fallback
+                for i in range(param.numel()):
+                    param_names_expanded.append(f"{name}_{i}")
+        
+        elif 'raw_first_slope' in name:
+            if 'plm_ac_dist' in name:
+                knots = cost_model.plm_ac_dist.knot_points
+            elif 'plm_wind' in name:
+                knots = cost_model.plm_wind.knot_points
+            else:
+                knots = None
+
+            if knots is not None and knots.numel() > 0:
+                knot_val = knots[0].item()
+                range_str = f"(-inf, {knot_val:6.1f}]"
+                param_names_expanded.append(f"{clean_name}.first_slope {range_str}")
+            else:
+                param_names_expanded.append(name)
+        
+        elif param.numel() == 1:
+            param_names_expanded.append(name)
+        
+        else:
+            # For other multi-element parameters
+            for i in range(param.numel()):
+                param_names_expanded.append(f"{name}_{i}")
 
     for link_idx, (u_idx, v_idx) in enumerate(all_unique_links):
         link_grad = torch.zeros(num_cost_params, dtype=torch.float64, device=device)
@@ -168,7 +222,6 @@ def backward_gradient_pass(
                 if total_p_for_link > 1e-9:
                     weights = p_transitions_in_link / total_p_for_link
                 else:
-                    # weights = torch.zeros_like(p_transitions_in_link)
                     # If total probability is negligible, attribute all of it to the
                     # single most likely state transition to provide a gradient signal.
                     weights = torch.zeros_like(p_transitions_in_link)
@@ -205,6 +258,34 @@ def backward_gradient_pass(
         # Update the total gradient using the gradient of the link's cost
         n_empirical = empirical_counts[u_idx, v_idx]
         n_expected = link_traversal_likelihoods[u_idx, v_idx]
+        
+        # Debug output for empirically traversed links
+        if n_empirical == 1:
+            # Get distance for this link
+            link_distance = distance_matrix_d[u_idx, v_idx].item()
+            
+            # Get average wind for this link (if transitions exist)
+            if (u_idx, v_idx) in transitions_by_link:
+                transition_indices_for_link = transitions_by_link[(u_idx, v_idx)]
+                tailwind_batch = avg_tailwind_knots_per_transition[transition_indices_for_link].to(device)
+                avg_wind = tailwind_batch.mean().item()
+            else:
+                avg_wind = 0.0  # No transitions available
+            
+            # Get full gradient vector
+            gradient_values = link_grad.detach().cpu().numpy()
+            
+            # Print link header and details
+            print(f"--- Link {u_idx:4d} -> {v_idx:4d} (Distance: {link_distance:8.2f} nm, Avg Wind: {avg_wind:8.2f} kts) ---")
+            
+            # Print gradient for each parameter on a new line
+            for name, val in zip(param_names_expanded, gradient_values):
+                # Only print parameters with non-zero gradients to reduce clutter
+                if abs(val) > 1e-9:
+                    print(f"  {name:<55}: {val:12.8f}")
+
+            # Print separator for the next link
+            print("-" * 70)
         
         # Gradient of negative log-likelihood is E_empirical - E_model
         total_log_likelihood_grad += (link_grad / gamma) * (n_empirical - n_expected)

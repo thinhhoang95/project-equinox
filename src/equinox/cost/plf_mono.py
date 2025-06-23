@@ -48,10 +48,13 @@ class PiecewiseLinearMonoModel(nn.Module):
             non-learnable and calculating it within the `forward` method to
             ensure the function passes through zero at the first knot.
             Defaults to False.
+        anchor_knot_value (Union[float, None], optional): If provided, the function
+            will be anchored at this specific knot point. This value must be in the
+            list of knot points.
 
     Learnable Parameters:
         initial_intercept (torch.nn.Parameter): Scalar intercept.
-        first_slope (torch.nn.Parameter): Scalar slope of the first segment.
+        raw_first_slope (torch.nn.Parameter): Scalar slope of the first segment.
         unconstrained_slope_increments (torch.nn.Parameter): 1D tensor of size `M`
             (number of knots). These are transformed by `softplus` (or `-softplus`)
             to get the actual slope increments `d_i`.
@@ -67,7 +70,8 @@ class PiecewiseLinearMonoModel(nn.Module):
     def __init__(self,
                  knot_points: Union[List[float], torch.Tensor],
                  monotonic_type: Literal["non_decreasing", "non_increasing"] = "non_decreasing",
-                 anchor_at_first_knot: bool = False):
+                 anchor_at_first_knot: bool = False,
+                 anchor_knot_value: Union[float, None] = None):
         super().__init__()
 
         if isinstance(knot_points, list):
@@ -101,6 +105,7 @@ class PiecewiseLinearMonoModel(nn.Module):
             raise ValueError("monotonic_type must be 'non_decreasing' or 'non_increasing'.")
         self.monotonic_type = monotonic_type
         self.anchor_at_first_knot = anchor_at_first_knot
+        self.anchor_knot_value = anchor_knot_value
 
         num_knots = self.knot_points.numel()
         
@@ -111,18 +116,36 @@ class PiecewiseLinearMonoModel(nn.Module):
         # # If num_knots is 0, this creates a Parameter of shape (0,), which is fine.
         # self.unconstrained_slope_increments = nn.Parameter(torch.randn(num_knots))
 
-        if self.anchor_at_first_knot:
+        is_anchored = self.anchor_at_first_knot or (self.anchor_knot_value is not None)
+
+        if is_anchored:
             if num_knots == 0:
                 raise ValueError("Cannot anchor at first knot if no knot points are provided.")
+            if self.anchor_knot_value is not None:
+                if not torch.any(torch.isclose(self.knot_points, torch.tensor(self.anchor_knot_value, dtype=torch.float32))):
+                    raise ValueError(f"Anchor value {self.anchor_knot_value} not found in knot points {self.knot_points.tolist()}.")
+
             self.initial_intercept = None # Not a learnable parameter
         else:
             self.initial_intercept = nn.Parameter(torch.zeros(1))
 
-        self.first_slope = nn.Parameter(torch.ones(1)) # This is s_0
+        self.raw_first_slope = nn.Parameter(torch.zeros(1)) # New parameter for unconstrained slope
 
         # These are the 'alpha_i' parameters before softplus
         # If num_knots is 0, this creates a Parameter of shape (0,), which is fine.
         self.unconstrained_slope_increments = nn.Parameter(torch.zeros(num_knots))
+
+    @property
+    def first_slope(self):
+        """
+        Computes the initial slope `s_0` based on the monotonic type.
+        - For non_decreasing, `s_0 = softplus(raw_first_slope)` which is >= 0.
+        - For non_increasing, `s_0 = -softplus(raw_first_slope)` which is <= 0.
+        """
+        if self.monotonic_type == "non_decreasing":
+            return F.softplus(self.raw_first_slope)
+        else: # non_increasing
+            return -F.softplus(self.raw_first_slope)
 
     def forward(self, x: Union[torch.Tensor, List[float], float]) -> torch.Tensor:
         """
@@ -131,8 +154,8 @@ class PiecewiseLinearMonoModel(nn.Module):
         if not isinstance(x, torch.Tensor):
             try:
                 # Infer dtype and device from a parameter to ensure consistency
-                target_dtype = self.first_slope.dtype
-                target_device = self.first_slope.device
+                target_dtype = self.raw_first_slope.dtype
+                target_device = self.raw_first_slope.device
                 x_tensor = torch.tensor(x, dtype=target_dtype, device=target_device)
             except Exception as e:
                 raise TypeError(
@@ -142,10 +165,33 @@ class PiecewiseLinearMonoModel(nn.Module):
         else:
             x_tensor = x
             
-        if self.anchor_at_first_knot:
-            # Enforce f(k_0) = 0 by setting intercept = -s_0 * k_0
-            # f(x) = (-s_0 * k_0) + s_0 * x + ... = s_0 * (x - k_0) + ...
-            intercept = -self.first_slope * self.knot_points[0]
+        is_anchored = self.anchor_at_first_knot or (self.anchor_knot_value is not None)
+
+        if is_anchored:
+            # We will calculate the intercept such that f(anchor_knot) = 0
+            # This makes the initial_intercept parameter non-learnable.
+            # We calculate f(anchor_knot) with a zero intercept first, then subtract the result.
+            
+            # anchor_val is the value at which the function should be zero.
+            anchor_val = self.knot_points[0] if self.anchor_knot_value is None else self.anchor_knot_value
+            if isinstance(anchor_val, torch.Tensor):
+                anchor_val_tensor = anchor_val.detach().clone().to(dtype=x_tensor.dtype, device=x_tensor.device)
+            else:
+                anchor_val_tensor = torch.tensor(anchor_val, dtype=x_tensor.dtype, device=x_tensor.device)
+            
+            # Calculate f(anchor_val) assuming intercept is 0
+            f_at_anchor = self.first_slope * anchor_val_tensor
+            
+            num_knots = self.knot_points.numel()
+            if num_knots > 0:
+                for i in range(num_knots):
+                    slope_increment = F.softplus(self.unconstrained_slope_increments[i])
+                    if self.monotonic_type == "non_increasing":
+                        slope_increment = -slope_increment
+                    f_at_anchor = f_at_anchor + slope_increment * torch.relu(anchor_val_tensor - self.knot_points[i])
+            
+            # The effective intercept is -f(anchor_val)
+            intercept = -f_at_anchor
         else:
             intercept = self.initial_intercept
             
@@ -182,7 +228,7 @@ class PiecewiseLinearMonoModel(nn.Module):
             torch.Tensor: A 1D tensor containing the M+1 slopes.
         """
         num_knots = self.knot_points.numel()
-        slopes = torch.empty(num_knots + 1, dtype=self.first_slope.dtype, device=self.first_slope.device)
+        slopes = torch.empty(num_knots + 1, dtype=self.raw_first_slope.dtype, device=self.raw_first_slope.device)
         
         current_slope = self.first_slope.clone()
         slopes[0] = current_slope

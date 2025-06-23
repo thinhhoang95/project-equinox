@@ -3,14 +3,14 @@
 Batch Stochastic Gradient Descent Pipeline for Maximum Entropy Inverse Learning
 
 This module implements a data pipeline for batch stochastic gradient descent for Maximum Entropy 
-Inverse Learning of airline routing preferences. The pipeline processes multiple flights in parallel,
+Inverse Learning of airline routing preferences. The pipeline processes multiple flights,
 computes gradients for each flight, and updates the cost model parameters using batch SGD.
 
 Key Features:
 - Loads pre-computed TRES results for multiple flights
 - Processes flights through thinning, forward/backward SVI, and gradient computation
 - Implements batch SGD with gradient queuing and model updates
-- Supports multiprocessing for parallel SVI computation
+- Supports sequential SVI computation for easier debugging
 - Includes convergence checking and checkpointing
 - Handles empirical count computation from actual flight routes
 - Comprehensive TensorBoard logging for training monitoring and visualization
@@ -18,19 +18,29 @@ Key Features:
 The pipeline follows these steps for each flight:
 1. Load TRES forward/backward results
 2. Perform thinning to get reachable states
-3. Run forward and backward soft value iteration (SVI) in parallel
+3. Run forward and backward soft value iteration (SVI)
 4. Compute gradients using Maximum Entropy Inverse Learning
 5. Queue gradients and apply batch updates to the cost model
 
 Usage:
-    python batch_sgd_pipeline_parallel_w_tensorboard.py --case-dir data/cases/LEMD_EGLL --batch-size 5 --learning-rate 1e-6
+    python single_sgd_pipeline_parallel_tsb_truellh.py --case-dir data/cases/LEMD_EGLL --batch-size 1 --learning-rate 1e-6
     
     To monitor training with TensorBoard:
     tensorboard --logdir data/cases/LEMD_EGLL/batch_sgd_results/tensorboard_logs
     
     To start fresh training without resuming from checkpoint:
-    python batch_sgd_pipeline_parallel_w_tensorboard.py --case-dir data/cases/LEMD_EGLL --no-resume
+    python single_sgd_pipeline_parallel_tsb_truellh.py --case-dir data/cases/LEMD_EGLL --no-resume
 """
+
+# ********************************************************
+# This is a single SGD to debug the stochastic gradient descent process
+# For production, please use batch_sgd_pipeline_parallel_tsb_truellh.py
+# ********************************************************
+
+batch_id = 'batch1'
+flight_callsign = '400AFFBAW45EM'
+flight_takeoff = 1680518920
+flight_id = f'{flight_callsign}_{flight_takeoff}'
 
 import os
 import sys
@@ -42,13 +52,12 @@ import argparse
 import logging
 import time
 import random
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Tuple, Optional, Any
 from pathlib import Path
-import multiprocessing
 from tqdm import tqdm
 import yaml
+from collections import defaultdict
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_AVAILABLE = True
@@ -62,7 +71,7 @@ sys.path.insert(0, str(project_root))
 from src.equinox.config import RunConfiguration, get_cost_model_class
 from src.equinox.dp.trespass.amorwin.forward_svi_log_temp import forward_soft_value_iteration
 from src.equinox.dp.trespass.amorwin.backward_svi_log_cost_temp import backward_soft_value_iteration
-from src.equinox.dp.trespass.amorwin.backward_gradient import backward_gradient_pass
+from src.equinox.dp.trespass.amorwin.backward_gradient_dbg import backward_gradient_pass
 from src.equinox.wind.batch_wind_model import get_flight_batches
 
 # Setup logging
@@ -94,15 +103,13 @@ class FlightGradientResult:
 @dataclass
 class BatchLearningConfig:
     """Configuration for batch learning parameters."""
-    batch_size: int = 5
+    batch_size: int = 1
     learning_rate: float = 1e-6
     max_iterations: int = 100
     convergence_threshold: float = 1e-4
     checkpoint_interval: int = 10
-    num_workers: int = None
-    device: str = "cuda"
+    device: str = "cpu"
     gamma: float = 1.0
-    debug_single_process: bool = False
     tensorboard_log_dir: str = None
     log_interval: int = 1  # Log every iteration by default
     resume_from_checkpoint: bool = True  # Resume from last checkpoint by default
@@ -110,10 +117,6 @@ class BatchLearningConfig:
     random_seed: int = None  # Random seed for deterministic randomization
     fixed_batch_index: Optional[int] = None # Use a fixed batch for all iterations
     
-    def __post_init__(self):
-        if self.num_workers is None:
-            self.num_workers = max(1, multiprocessing.cpu_count() - 1)
-
 
 def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: int, 
                             components: Dict[str, Any]) -> Tuple[List, List, List, torch.Tensor]:
@@ -155,7 +158,7 @@ def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: i
                 if thinned_file.exists() and wind_file.exists():
                     with open(thinned_file, 'rb') as f:
                         thinned_transitions = pickle.load(f)
-                    avg_tailwind_knots = torch.load(wind_file)
+                    avg_tailwind_knots = torch.load(wind_file, weights_only=False)
                     # Found all required files, break the loop
                     break
                 else:
@@ -245,129 +248,20 @@ def compute_empirical_counts_for_flight(flight_data: pd.Series, node_to_idx: Dic
     return empirical_counts
 
 
-def _run_forward_svi_wrapper(args):
-    """Wrapper function for multiprocessing forward SVI."""
-    (state_transitions, avg_tailwind_knots, G, idx_to_node, origin_node_idx, 
-     cost_model_state, num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases, 
-     distance_matrix_d, airspace_charge_matrix_ac, device_str, gamma,
-     beta0, beta1, beta2, beta3, alpha_pref_reg, cost_model_version) = args
-    
-    device = torch.device(device_str)
-    
-    # Reconstruct cost model from state dict
-    cost_model_class = get_cost_model_class(cost_model_version)
-
-    cost_model = cost_model_class(
-        beta0=beta0, beta1=beta1, beta2=beta2, beta3=beta3,
-        num_waypoints=num_nodes, alpha_pref_reg=alpha_pref_reg, device=device
-    )
-    cost_model.load_state_dict(cost_model_state)
-    cost_model.to(device)
-
-    # Convert np.arrays to tensors if needed
-    if isinstance(avg_tailwind_knots, np.ndarray):
-        avg_tailwind_knots = torch.from_numpy(avg_tailwind_knots)
-    if isinstance(distance_matrix_d, np.ndarray):
-        distance_matrix_d = torch.from_numpy(distance_matrix_d)
-    if isinstance(airspace_charge_matrix_ac, np.ndarray):
-        airspace_charge_matrix_ac = torch.from_numpy(airspace_charge_matrix_ac)
-    
-    # Move tensors to device
-    avg_tailwind_knots = avg_tailwind_knots.to(device)
-    distance_matrix_d = distance_matrix_d.to(device)   
-    airspace_charge_matrix_ac = airspace_charge_matrix_ac.to(device)
-    
-    v_f = forward_soft_value_iteration(
-        state_transitions=state_transitions,
-        avg_tailwind_knots_per_transition=avg_tailwind_knots,
-        G=G,
-        idx_to_node=idx_to_node,
-        origin_node_idx=origin_node_idx,
-        cost_model=cost_model,
-        num_nodes=num_nodes,
-        num_time_bins_wall_clock=num_time_bins_wall_clock,
-        num_rho_bins=num_rho_bins,
-        num_phases=num_phases,
-        distance_matrix_d=distance_matrix_d,
-        airspace_charge_matrix_ac=airspace_charge_matrix_ac,
-        device=device,
-        gamma=gamma,
-        verbose=False
-    )
-    
-    return v_f.cpu()
-
-
-def _run_backward_svi_wrapper(args):
-    """Wrapper function for multiprocessing backward SVI."""
-    (state_transitions, avg_tailwind_knots, G, idx_to_node, goal_node_idx, 
-     cost_model_state, num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases, 
-     distance_matrix_d, airspace_charge_matrix_ac, device_str, gamma,
-     beta0, beta1, beta2, beta3, alpha_pref_reg, cost_model_version) = args
-    
-    device = torch.device(device_str)
-    
-    # Reconstruct cost model from state dict
-    cost_model_class = get_cost_model_class(cost_model_version)
-
-    cost_model = cost_model_class(
-        beta0=beta0, beta1=beta1, beta2=beta2, beta3=beta3,
-        num_waypoints=num_nodes, alpha_pref_reg=alpha_pref_reg, device=device
-    )
-    cost_model.load_state_dict(cost_model_state)
-    cost_model.to(device)
-
-    # Convert np.arrays to tensors if needed
-    if isinstance(avg_tailwind_knots, np.ndarray):
-        avg_tailwind_knots = torch.from_numpy(avg_tailwind_knots)
-    if isinstance(distance_matrix_d, np.ndarray):
-        distance_matrix_d = torch.from_numpy(distance_matrix_d)
-    if isinstance(airspace_charge_matrix_ac, np.ndarray):
-        airspace_charge_matrix_ac = torch.from_numpy(airspace_charge_matrix_ac)
-    
-    # Move tensors to device
-    avg_tailwind_knots = avg_tailwind_knots.to(device)
-    distance_matrix_d = distance_matrix_d.to(device)
-    airspace_charge_matrix_ac = airspace_charge_matrix_ac.to(device)
-    
-    v_b, _ = backward_soft_value_iteration(
-        state_transitions=state_transitions,
-        avg_tailwind_knots_per_transition=avg_tailwind_knots,
-        G=G,
-        idx_to_node=idx_to_node,
-        goal_node_idx=goal_node_idx,
-        cost_model=cost_model,
-        num_nodes=num_nodes,
-        num_time_bins_wall_clock=num_time_bins_wall_clock,
-        num_rho_bins=num_rho_bins,
-        num_phases=num_phases,
-        distance_matrix_d=distance_matrix_d,
-        airspace_charge_matrix_ac=airspace_charge_matrix_ac,
-        device=device,
-        gamma=gamma,
-        verbose=False
-    )
-    
-    return v_b.cpu()
-
-
 def process_single_flight(flight_data: pd.Series,
                          components: Dict[str, Any], 
                          batch_config: BatchLearningConfig,
                          case_dir: str,
-                         cost_model_state: Dict[str, torch.Tensor] = None,
-                         cost_model_params: Dict[str, float] = None) -> FlightGradientResult:
+                         debug_this_flight: bool = False) -> FlightGradientResult:
     """
     Process a single flight through the complete pipeline.
     
     Args:
         flight_data: Flight data from CSV
-        config: Run configuration
         components: Shared components (graph, models, etc.)
         batch_config: Batch learning configuration
         case_dir: Case directory path
-        cost_model_state: Serialized state of the cost model for multiprocessing
-        cost_model_params: Parameters of the cost model for multiprocessing
+        debug_this_flight: Flag to enable debug prints for this flight
         
     Returns:
         FlightGradientResult containing gradients and metadata
@@ -378,28 +272,7 @@ def process_single_flight(flight_data: pd.Series,
     
     device = components['device']
 
-    # If running in a worker process, reconstruct the cost model
-    if cost_model_state and cost_model_params:
-        cost_model_version = components['cost_model_version']
-        cost_model_class = get_cost_model_class(cost_model_version)
-            
-        cost_model = cost_model_class(
-            beta0=cost_model_params['beta0'],
-            beta1=cost_model_params['beta1'],
-            beta2=cost_model_params['beta2'],
-            beta3=0.0,
-            # beta3=cost_model_params['beta3'],
-            num_waypoints=components['num_nodes'],
-            alpha_pref_reg=cost_model_params['alpha_pref_reg'],
-            device=device
-        )
-        cost_model.load_state_dict(cost_model_state)
-        cost_model.to(device)
-        # make sure the same set of parameters is trainable
-        for p in cost_model.parameters():
-            p.requires_grad = True
-    else:
-        cost_model = components['cost_model']
+    cost_model = components['cost_model']
 
     try:
         # 1. Load TRES results
@@ -438,41 +311,50 @@ def process_single_flight(flight_data: pd.Series,
         origin_node_idx = components['node_to_idx'][flight_data['origin']]
         goal_node_idx = components['node_to_idx'][flight_data['destination']]
         
-        # 5. Prepare arguments for parallel SVI
-        device_str = str(device)
-        current_cost_model_state = cost_model.state_dict()
-        cost_model_version = components['cost_model_version']
-        
-        forward_args = (
-            thinned_transitions, avg_tailwind_knots, components['graph'], 
-            components['idx_to_node'], origin_node_idx, current_cost_model_state,
-            num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases,
-            components['dist_matrix'], components['ac_matrix'], device_str, batch_config.gamma,
-            0.0, 1.0, 1.0, # beta0, beta1, beta2
-            0.0, cost_model.alpha_pref_reg, cost_model_version
+        # 5. Prepare tensors and move to device
+        device = torch.device(batch_config.device)
+        avg_tailwind_knots = avg_tailwind_knots.to(device)
+        distance_matrix_d = torch.from_numpy(components['dist_matrix']).to(device)   
+        airspace_charge_matrix_ac = torch.from_numpy(components['ac_matrix']).to(device)
+
+        # 6. Run forward and backward SVI sequentially
+        logger.info(f"Running SVI sequentially for flight {flight_id}")
+
+        v_f = forward_soft_value_iteration(
+            state_transitions=thinned_transitions,
+            avg_tailwind_knots_per_transition=avg_tailwind_knots,
+            G=components['graph'],
+            idx_to_node=components['idx_to_node'],
+            origin_node_idx=origin_node_idx,
+            cost_model=cost_model,
+            num_nodes=num_nodes,
+            num_time_bins_wall_clock=num_time_bins_wall_clock,
+            num_rho_bins=num_rho_bins,
+            num_phases=num_phases,
+            distance_matrix_d=distance_matrix_d,
+            airspace_charge_matrix_ac=airspace_charge_matrix_ac,
+            device=device,
+            gamma=batch_config.gamma,
+            verbose=False
         )
         
-        backward_args = (
-            thinned_transitions, avg_tailwind_knots, components['graph'], 
-            components['idx_to_node'], goal_node_idx, current_cost_model_state,
-            num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases,
-            components['dist_matrix'], components['ac_matrix'], device_str, batch_config.gamma,
-            0.0, 1.0, 1.0, # beta0, beta1, beta2
-            0.0, cost_model.alpha_pref_reg, cost_model_version # replace with cost_model.beta3.item() when necessary
+        v_b, _ = backward_soft_value_iteration(
+            state_transitions=thinned_transitions,
+            avg_tailwind_knots_per_transition=avg_tailwind_knots,
+            G=components['graph'],
+            idx_to_node=components['idx_to_node'],
+            goal_node_idx=goal_node_idx,
+            cost_model=cost_model,
+            num_nodes=num_nodes,
+            num_time_bins_wall_clock=num_time_bins_wall_clock,
+            num_rho_bins=num_rho_bins,
+            num_phases=num_phases,
+            distance_matrix_d=distance_matrix_d,
+            airspace_charge_matrix_ac=airspace_charge_matrix_ac,
+            device=device,
+            gamma=batch_config.gamma,
+            verbose=False
         )
-        
-        # 6. Run forward and backward SVI
-        if batch_config.debug_single_process:
-            logger.info(f"Running SVI sequentially for flight {flight_id} (debug mode)")
-            v_f = _run_forward_svi_wrapper(forward_args)
-            v_b = _run_backward_svi_wrapper(backward_args)
-        else:
-            with ProcessPoolExecutor(max_workers=2) as executor:
-                future_forward = executor.submit(_run_forward_svi_wrapper, forward_args)
-                future_backward = executor.submit(_run_backward_svi_wrapper, backward_args)
-                
-                v_f = future_forward.result()
-                v_b = future_backward.result()
         
         
         # 7. Move results to device and compute empirical counts
@@ -484,7 +366,7 @@ def process_single_flight(flight_data: pd.Series,
         ).to(device)
         
         # 8. Compute gradients using backward gradient pass
-        expected_counts, gradient = backward_gradient_pass(
+        expected_counts, gradient, log_partition_z_tensor = backward_gradient_pass(
             state_transitions=thinned_transitions,
             avg_tailwind_knots_per_transition=avg_tailwind_knots.to(device),
             V_f=v_f,
@@ -500,20 +382,129 @@ def process_single_flight(flight_data: pd.Series,
             verbose=False
         )
 
+        # 8.5 Debugging: Print top links with highest empirical counts and their expected traversals
+        # Only print for the designated debug flight to avoid spam
+        if debug_this_flight:
+            logger.info(f"=== DEBUGGING COUNTS FOR FLIGHT {flight_id} ===")
+            
+            # Find all non-zero empirical counts
+            nonzero_mask = empirical_counts > 0
+            nonzero_indices = torch.nonzero(nonzero_mask, as_tuple=False)
+            
+            if len(nonzero_indices) > 0:
+                # Get empirical and expected counts for non-zero empirical links
+                empirical_values = empirical_counts[nonzero_mask]
+                expected_values = expected_counts[nonzero_mask]
+                
+                # Sort by empirical counts (descending)
+                sorted_indices = torch.argsort(empirical_values, descending=True)
+                
+                # Show top 10 links (or all if fewer than 10)
+                top_k = min(10, len(sorted_indices))
+                logger.info(f"Top {top_k} links with highest empirical counts:")
+                
+                for i in range(top_k):
+                    idx = sorted_indices[i]
+                    from_idx = nonzero_indices[idx, 0].item()
+                    to_idx = nonzero_indices[idx, 1].item()
+                    emp_count = empirical_values[idx].item()
+                    exp_count = expected_values[idx].item()
+                    
+                    from_node = components['idx_to_node'][from_idx]
+                    to_node = components['idx_to_node'][to_idx]
+                    
+                    # Calculate ratio to see if expected is catching up to empirical
+                    ratio = exp_count / emp_count if emp_count > 0 else 0.0
+                    
+                    logger.info(f"  {i+1:2d}. {from_node:8s} -> {to_node:8s} | "
+                               f"Empirical: {emp_count:.3e} | Expected: {exp_count:.3e} | "
+                               f"Ratio: {ratio:.3e}")
+            else:
+                logger.warning(f"No empirical traversals found for flight {flight_id}")
+            
+            # Also show some high expected counts that don't correspond to empirical usage
+            logger.info(f"Links with highest expected counts (regardless of empirical usage):")
+            expected_flat = expected_counts.flatten()
+            top_expected_indices = torch.topk(expected_flat, k=min(5, len(expected_flat)), largest=True).indices
+            
+            for i, flat_idx in enumerate(top_expected_indices):
+                from_idx = flat_idx // expected_counts.shape[1]
+                to_idx = flat_idx % expected_counts.shape[1]
+                emp_count = empirical_counts[from_idx, to_idx].item()
+                exp_count = expected_counts[from_idx, to_idx].item()
+                
+                from_node = components['idx_to_node'][from_idx.item()]
+                to_node = components['idx_to_node'][to_idx.item()]
+                
+                logger.info(f"  {i+1}. {from_node:8s} -> {to_node:8s} | "
+                           f"Empirical: {emp_count:.3e} | Expected: {exp_count:.3e}")
+            
+            logger.info(f"=== END DEBUGGING COUNTS FOR FLIGHT {flight_id} ===\n")
+
         # For debugging, save the expected counts and the soft value functions to a file to be inspected externally
-        if batch_config.debug_single_process:
-            import pickle
-            with open(f"expected_counts_{flight_id}.pkl", "wb") as f:
-                pickle.dump(expected_counts.cpu().numpy(), f)
-            with open(f"soft_value_functions_f_{flight_id}.pkl", "wb") as f:
-                pickle.dump(v_f.cpu().numpy(), f)
-            with open(f"soft_value_functions_b_{flight_id}.pkl", "wb") as f:
-                pickle.dump(v_b.cpu().numpy(), f)
+        import pickle
+        with open(f"expected_counts_{flight_id}.pkl", "wb") as f:
+            pickle.dump(expected_counts.cpu().numpy(), f)
+        with open(f"soft_value_functions_f_{flight_id}.pkl", "wb") as f:
+            pickle.dump(v_f.cpu().numpy(), f)
+        with open(f"soft_value_functions_b_{flight_id}.pkl", "wb") as f:
+            pickle.dump(v_b.cpu().numpy(), f)
 
         # raise Exception("Stop here")
 
-        # 9. Compute log likelihood (simplified), ideally we would like log-likelihood to increase to zero
-        log_likelihood = -torch.sum((empirical_counts - expected_counts) ** 2).item()
+        # 9. Compute true log likelihood
+        log_partition_z = log_partition_z_tensor.item()
+
+        # Calculate cost of the empirical trajectory c(xi)
+        waypoints_str = flight_data['route']
+        waypoints = waypoints_str.split()
+        empirical_route_links = []
+        for i in range(len(waypoints) - 1):
+            from_wp = waypoints[i]
+            to_wp = waypoints[i + 1]
+            if from_wp in components['node_to_idx'] and to_wp in components['node_to_idx']:
+                from_idx = components['node_to_idx'][from_wp]
+                to_idx = components['node_to_idx'][to_wp]
+                empirical_route_links.append((from_idx, to_idx))
+
+        transitions_by_link = defaultdict(list)
+        for i, t in enumerate(thinned_transitions):
+            transitions_by_link[(t[0], t[5])].append(i)
+
+        c_xi = 0.0
+        with torch.no_grad():
+            for u_idx, v_idx in empirical_route_links:
+                if (u_idx, v_idx) in transitions_by_link:
+                    transition_indices = transitions_by_link[(u_idx, v_idx)]
+                    
+                    # Average tailwind for this link, from the model's perspective
+                    avg_tailwind_for_link = avg_tailwind_knots[transition_indices].mean()
+                    
+                    edge_u_indices = torch.tensor([u_idx], device=device, dtype=torch.long)
+                    edge_v_indices = torch.tensor([v_idx], device=device, dtype=torch.long)
+                    
+                    link_cost = cost_model(
+                        (edge_u_indices, edge_v_indices),
+                        components['dist_matrix'],
+                        components['ac_matrix'],
+                        avg_tailwind_for_link.to(device).unsqueeze(0)
+                    ).item()
+                    
+                    c_xi += link_cost
+                else:
+                    # This link from the empirical route is not in our model's reachable graph.
+                    # This means the model assigns it zero probability.
+                    logger.warning(f"Link ({u_idx}, {v_idx}) from empirical route for flight {flight_id} not found in thinned transitions. Skipping this link in log-likelihood computation.")
+                    # c_xi = float('inf')
+                    pass 
+        
+        if torch.isinf(torch.tensor(c_xi)) or torch.isinf(log_partition_z_tensor):
+            log_likelihood = -float('inf')
+        else:
+            # log p(xi) = -c(xi) - log Z. Note that log_partition_z is already V, so it's -gamma*logZ.
+            # We want log(p(xi)) = -c(xi)/gamma - log(Z). log_partition_z = V_b(origin), and log(Z) = -V_b(origin)/gamma
+            log_likelihood = (-c_xi / batch_config.gamma) - (-log_partition_z / batch_config.gamma)
+            log_likelihood = (-c_xi + log_partition_z) / batch_config.gamma
         
         # Validate gradient dimensions
         expected_grad_size = sum(p.numel() for p in components['cost_model'].parameters() if p.requires_grad)
@@ -547,11 +538,6 @@ def process_single_flight(flight_data: pd.Series,
             success=False,
             error_message=str(e)
         )
-
-
-def _process_flight_wrapper(args):
-    """Wrapper for process_single_flight to be used with ProcessPoolExecutor."""
-    return process_single_flight(*args)
 
 
 def find_latest_checkpoint(output_dir: str) -> Optional[str]:
@@ -630,7 +616,7 @@ def load_checkpoint(checkpoint_path: str, cost_model, optimizer, device: torch.d
     """
     logger.info(f"Loading checkpoint from {checkpoint_path}")
     
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
     # Load model state
     cost_model.load_state_dict(checkpoint['model_state_dict'])
@@ -700,7 +686,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     components['cost_model_version'] = config.cost_model_version
     components['etto_delta_t_seconds'] = config.etto_delta_t_seconds
     
-    device = torch.device(batch_config.device if torch.cuda.is_available() else "cpu")
+    device = "cpu"
     components['device'] = device
     components['cost_model'] = components['cost_model'].to(device)
     
@@ -712,6 +698,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     optimizer = torch.optim.Adam(
         filter(lambda p: p.requires_grad, components['cost_model'].parameters()),
         lr=batch_config.learning_rate
+        # maximize=True # I have personally verified that we need to minimize the cost function!
     )
     
     logger.info(f"Using device: {device}")
@@ -719,9 +706,16 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     logger.info(f"Cost model has {num_trainable_params} trainable parameters")
     
     # 2. Load flight data and create batches
-    flights_csv = os.path.join(case_dir, "all_routes_sculpted.csv")
-    logger.info(f"Loading flights from {flights_csv} and creating batches...")
-    flight_batches = get_flight_batches(flights_csv, batch_config.batch_size)
+    flights_csv = os.path.join(case_dir, "tres_runs", "all_routes_feasibly_snapped.csv")
+
+    # logger.info(f"Loading flights from {flights_csv} and creating batches...")
+    # flight_batches = get_flight_batches(flights_csv, batch_config.batch_size)
+    
+    # For debugging, we only load one designated flight
+    df_flights = pd.read_csv(flights_csv)
+    df_flights = df_flights[(df_flights['flight_id'] == flight_callsign) & (df_flights['takeoff_time'] == flight_takeoff)]
+    flight_batches = [df_flights]
+
     num_batches = len(flight_batches)
     if num_batches == 0:
         logger.error("No flight batches were created. Please check the routes file and batch size.")
@@ -779,217 +773,238 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     # 5. Main training loop
     logger.info("Starting main training loop")
     
-    # Create a single pool of workers for parallel flight processing
-    with ProcessPoolExecutor(max_workers=batch_config.num_workers) as executor:
-        while iteration <= batch_config.max_iterations and not converged:
-            iteration_start_time = time.time()
+    while iteration <= batch_config.max_iterations and not converged:
+        iteration_start_time = time.time()
+        
+        logger.info(f"\n--- Iteration {iteration}/{batch_config.max_iterations} ---")
+        
+        # Get the next batch of flights (fixed, randomly or sequentially)
+        if batch_config.fixed_batch_index is not None:
+            batch_idx = batch_config.fixed_batch_index
+            if batch_idx >= num_batches:
+                logger.error(f"fixed_batch_index {batch_idx} is out of bounds. Number of batches is {num_batches}.")
+                raise IndexError(f"fixed_batch_index {batch_idx} is out of bounds. Number of batches is {num_batches}.")
+        elif batch_config.randomized:
+            batch_idx = random.randint(0, num_batches - 1)
+        else:
+            batch_idx = (iteration - 1) % num_batches
+        
+        batch_flights = flight_batches[batch_idx]
+        
+        if batch_config.fixed_batch_index is not None:
+            logger.info(f"Processing fixed batch {batch_idx + 1}/{num_batches} with {len(batch_flights)} flights")
+        elif batch_config.randomized:
+            logger.info(f"Processing random batch {batch_idx + 1}/{num_batches} with {len(batch_flights)} flights")
+        else:
+            logger.info(f"Processing sequential batch {batch_idx + 1}/{num_batches} with {len(batch_flights)} flights")
+        
+        # Process flights in the batch sequentially
+        batch_results = []
+        flight_list = list(batch_flights.iterrows())
+        for i, (_, flight_data) in enumerate(tqdm(flight_list, desc=f"Processing batch {batch_idx+1}")):
+            # Set debug flag for only the last flight in the batch
+            debug_this_flight = (i == len(flight_list) - 1)
             
-            logger.info(f"\n--- Iteration {iteration}/{batch_config.max_iterations} ---")
-            
-            # Get the next batch of flights (fixed, randomly or sequentially)
-            if batch_config.fixed_batch_index is not None:
-                batch_idx = batch_config.fixed_batch_index
-                if batch_idx >= num_batches:
-                    logger.error(f"fixed_batch_index {batch_idx} is out of bounds. Number of batches is {num_batches}.")
-                    raise IndexError(f"fixed_batch_index {batch_idx} is out of bounds. Number of batches is {num_batches}.")
-            elif batch_config.randomized:
-                batch_idx = random.randint(0, num_batches - 1)
+            result = process_single_flight(
+                flight_data=flight_data,
+                components=components,
+                batch_config=batch_config,
+                case_dir=case_dir,
+                debug_this_flight=debug_this_flight
+            )
+            batch_results.append(result)
+
+        successful_flights = 0
+        failed_flights = 0
+        gradient_queue.clear() # Clear queue for each new batch
+
+        for result in batch_results:
+            if result.success:
+                successful_flights += 1
+                gradient_queue.append(result.gradient)
             else:
-                batch_idx = (iteration - 1) % num_batches
-            
-            batch_flights = flight_batches[batch_idx]
-            
-            if batch_config.fixed_batch_index is not None:
-                logger.info(f"Processing fixed batch {batch_idx + 1}/{num_batches} with {len(batch_flights)} flights")
-            elif batch_config.randomized:
-                logger.info(f"Processing random batch {batch_idx + 1}/{num_batches} with {len(batch_flights)} flights")
-            else:
-                logger.info(f"Processing sequential batch {batch_idx + 1}/{num_batches} with {len(batch_flights)} flights")
-            
-            # Get current model state to be used by all flights in this batch
-            cost_model_state = components['cost_model'].state_dict()
-            cost_model_params = {
-                'beta0': 0.0,
-                # 'beta0': components['cost_model'].beta0.item(),
-                'beta1': 1.0,
-                'beta2': 1.0,
-                # 'beta3': components['cost_model'].beta3.item(),
-                'alpha_pref_reg': components['cost_model'].alpha_pref_reg,
-            }
-
-            # Process flights in the batch in parallel
-            batch_results = []
-            
-            # Prepare arguments for each flight in the batch
-            tasks = []
-            for _, flight_data in batch_flights.iterrows():
-                # Note: 'components' is passed, but the cost_model inside it will be stale.
-                # The correct, up-to-date model is passed via cost_model_state.
-                tasks.append(
-                    (flight_data, components, batch_config, case_dir, cost_model_state, cost_model_params)
-                )
-
-            # Use the executor to run flight processing in parallel
-            future_results = executor.map(_process_flight_wrapper, tasks)
-            
-            # Collect results
-            batch_results = list(tqdm(future_results, total=len(tasks), desc=f"Processing batch {batch_idx+1}"))
-
-            successful_flights = 0
-            failed_flights = 0
-            gradient_queue.clear() # Clear queue for each new batch
-
-            for result in batch_results:
-                if result.success:
-                    successful_flights += 1
-                    gradient_queue.append(result.gradient)
-                else:
-                    failed_flights += 1
-                    logger.warning(f"Flight {result.flight_id} failed: {result.error_message}")
-            
-            # Apply gradient update after the entire batch is processed
-            gradient_norm = 0.0
-            if gradient_queue:
-                # Average gradients in the queue
-                avg_gradient = (
-                    torch.stack(gradient_queue)
+                failed_flights += 1
+                logger.warning(f"Flight {result.flight_id} failed: {result.error_message}")
+        
+        # Apply gradient update after the entire batch is processed
+        gradient_norm = 0.0
+        if gradient_queue:
+            # Average gradients in the queue
+            avg_gradient = (
+                torch.stack(gradient_queue)
                          .mean(dim=0)
                          .to(device=device, dtype=torch.float32)
-                )
-                # gradient_norm = torch.max(torch.abs(avg_gradient)).item()
-                gradient_norm = torch.norm(avg_gradient, p=2).item()
-                
-                # Apply gradient update
-                optimizer.zero_grad()
-                
-                # Manually set gradients
-                param_idx = 0
-                for param in components['cost_model'].parameters():
-                    if param.requires_grad:
-                        param_size = param.numel()
-                        param.grad = (
-                            avg_gradient[param_idx: param_idx + param_size]
-                            .view(param.shape)
-                            .to(dtype=param.dtype)
-                        )
-                        param_idx += param_size
-                
-                optimizer.step()
-                
-                logger.info(f"Applied gradient update with norm L2: {gradient_norm:.6f}")
-                
-                # Check convergence
-                if gradient_norm < batch_config.convergence_threshold:
-                    logger.info(f"Convergence achieved! Gradient norm L2: {gradient_norm:.6f} < {batch_config.convergence_threshold}")
-                    converged = True
+            )
+            # gradient_norm = torch.max(torch.abs(avg_gradient)).item()
+            gradient_norm = torch.norm(avg_gradient, p=2).item()
             
-            # Compute iteration statistics
-            avg_log_likelihood = np.mean([r.log_likelihood for r in batch_results if r.success]) if successful_flights > 0 else 0.0
-            iteration_time = time.time() - iteration_start_time
+            # Print the averaged gradient for comparison
+            logger.info("--- Averaged Gradient to be Applied ---")
+            param_idx = 0
+            for name, param in components['cost_model'].named_parameters():
+                if param.requires_grad:
+                    param_size = param.numel()
+                    grad_slice = avg_gradient[param_idx : param_idx + param_size]
+                    
+                    if param_size == 1:
+                        logger.info(f"  {name:<55}: {grad_slice.item():12.8f}")
+                    else:
+                        for i, grad_val in enumerate(grad_slice):
+                            expanded_name = f"{name}[{i}]"
+                            logger.info(f"  {expanded_name:<55}: {grad_val.item():12.8f}")
+                    
+                    param_idx += param_size
+            logger.info("--- End of Averaged Gradient ---")
+
+            # Store old parameters for comparison
+            old_params = {name: param.clone().detach() for name, param in components['cost_model'].named_parameters() if param.requires_grad}
+
+            optimizer.zero_grad()
             
-            # Update training history
-            training_history['iterations'].append(iteration)
-            training_history['avg_log_likelihood'].append(avg_log_likelihood)
-            training_history['gradient_norms'].append(gradient_norm)
-            training_history['processing_times'].append(iteration_time)
-            training_history['successful_flights'].append(successful_flights)
-            training_history['failed_flights'].append(failed_flights)
+            # Manually set gradients
+            param_idx = 0
+            for param in components['cost_model'].parameters():
+                if param.requires_grad:
+                    param_size = param.numel()
+                    param.grad = (
+                        avg_gradient[param_idx: param_idx + param_size]
+                        .view(param.shape)
+                        .to(dtype=param.dtype)
+                    )
+                    param_idx += param_size
             
-            logger.info(f"Iteration {iteration} completed:")
-            logger.info(f"  - Successful flights: {successful_flights}/{len(batch_flights)}")
-            logger.info(f"  - Average log likelihood: {avg_log_likelihood:.6f}")
-            logger.info(f"  - Gradient norm: {gradient_norm:.6f}")
-            logger.info(f"  - Processing time: {iteration_time:.2f}s")
+            optimizer.step()
+
+            # Log parameter updates
+            logger.info("--- Parameter Updates after Gradient Step ---")
+            for name, param in components['cost_model'].named_parameters():
+                if param.requires_grad:
+                    old_param = old_params[name]
+                    new_param = param.detach()
+
+                    if param.numel() == 1:
+                        logger.info(f"  {name}: {old_param.item():.4f} -> {new_param.item():.4f}")
+                    else:
+                        for i in range(param.numel()):
+                            expanded_name = f"{name}_{i}"
+                            logger.info(f"  {expanded_name}: {old_param.flatten()[i].item():.4f} -> {new_param.flatten()[i].item():.4f}")
+            logger.info("--- End of Parameter Updates ---")
             
-            # Log to TensorBoard
-            if tensorboard_writer is not None and iteration % batch_config.log_interval == 0:
-                # Training metrics
-                tensorboard_writer.add_scalar('Training/Average_Log_Likelihood', avg_log_likelihood, iteration)
-                tensorboard_writer.add_scalar('Training/Gradient_Norm_Linf', gradient_norm, iteration)
-                tensorboard_writer.add_scalar('Training/Learning_Rate', batch_config.learning_rate, iteration)
-                
-                # Flight processing metrics
-                tensorboard_writer.add_scalar('Flights/Successful_Count', successful_flights, iteration)
-                tensorboard_writer.add_scalar('Flights/Failed_Count', failed_flights, iteration)
-                tensorboard_writer.add_scalar('Flights/Success_Rate', successful_flights / len(batch_flights), iteration)
-                
-                # Performance metrics
-                tensorboard_writer.add_scalar('Performance/Iteration_Time_Seconds', iteration_time, iteration)
-                tensorboard_writer.add_scalar('Performance/Flights_Per_Second', len(batch_flights) / iteration_time, iteration)
-                
-                # Model parameters statistics
+            
+            logger.info(f"✓ Applied gradient update with norm L2: {gradient_norm:.6f}")
+            
+            # Check convergence
+            if gradient_norm < batch_config.convergence_threshold:
+                logger.info(f"✓ Convergence achieved! Gradient norm L2: {gradient_norm:.6f} < {batch_config.convergence_threshold}")
+                converged = True
+        
+        # Compute iteration statistics
+        avg_log_likelihood = np.mean([r.log_likelihood for r in batch_results if r.success]) if successful_flights > 0 else 0.0
+        iteration_time = time.time() - iteration_start_time
+        
+        # Update training history
+        training_history['iterations'].append(iteration)
+        training_history['avg_log_likelihood'].append(avg_log_likelihood)
+        training_history['gradient_norms'].append(gradient_norm)
+        training_history['processing_times'].append(iteration_time)
+        training_history['successful_flights'].append(successful_flights)
+        training_history['failed_flights'].append(failed_flights)
+        
+        logger.info(f"Iteration {iteration} completed:")
+        logger.info(f"  - Successful flights: {successful_flights}/{len(batch_flights)}")
+        logger.info(f"  - Average log likelihood: {avg_log_likelihood:.6f}")
+        logger.info(f"  - Gradient norm: {gradient_norm:.6f}")
+        logger.info(f"  - Processing time: {iteration_time:.2f}s")
+        
+        # Log to TensorBoard
+        if tensorboard_writer is not None and iteration % batch_config.log_interval == 0:
+            # Training metrics
+            tensorboard_writer.add_scalar('Training/Average_Log_Likelihood', avg_log_likelihood, iteration)
+            tensorboard_writer.add_scalar('Training/Gradient_Norm_Linf', gradient_norm, iteration)
+            tensorboard_writer.add_scalar('Training/Learning_Rate', batch_config.learning_rate, iteration)
+            
+            # Flight processing metrics
+            tensorboard_writer.add_scalar('Flights/Successful_Count', successful_flights, iteration)
+            tensorboard_writer.add_scalar('Flights/Failed_Count', failed_flights, iteration)
+            tensorboard_writer.add_scalar('Flights/Success_Rate', successful_flights / len(batch_flights), iteration)
+            
+            # Performance metrics
+            tensorboard_writer.add_scalar('Performance/Iteration_Time_Seconds', iteration_time, iteration)
+            tensorboard_writer.add_scalar('Performance/Flights_Per_Second', len(batch_flights) / iteration_time, iteration)
+            
+            # Model parameters statistics
+            for name, param in components['cost_model'].named_parameters():
+                if param.requires_grad:
+                    tensorboard_writer.add_scalar(f'Parameters/{name}_mean', param.data.mean().item(), iteration)
+                    tensorboard_writer.add_scalar(f'Parameters/{name}_std', param.data.std().item(), iteration)
+                    tensorboard_writer.add_scalar(f'Parameters/{name}_max', param.data.max().item(), iteration)
+                    tensorboard_writer.add_scalar(f'Parameters/{name}_min', param.data.min().item(), iteration)
+                    
+                    # Log gradient statistics if available
+                    if param.grad is not None:
+                        tensorboard_writer.add_scalar(f'Gradients/{name}_mean', param.grad.data.mean().item(), iteration)
+                        tensorboard_writer.add_scalar(f'Gradients/{name}_std', param.grad.data.std().item(), iteration)
+                        tensorboard_writer.add_scalar(f'Gradients/{name}_norm', param.grad.data.norm().item(), iteration)
+            
+            # Log histograms less frequently to avoid cluttering
+            if iteration % (batch_config.log_interval * 5) == 0:
                 for name, param in components['cost_model'].named_parameters():
                     if param.requires_grad:
-                        tensorboard_writer.add_scalar(f'Parameters/{name}_mean', param.data.mean().item(), iteration)
-                        tensorboard_writer.add_scalar(f'Parameters/{name}_std', param.data.std().item(), iteration)
-                        tensorboard_writer.add_scalar(f'Parameters/{name}_max', param.data.max().item(), iteration)
-                        tensorboard_writer.add_scalar(f'Parameters/{name}_min', param.data.min().item(), iteration)
-                        
-                        # Log gradient statistics if available
+                        tensorboard_writer.add_histogram(f'Parameters_Hist/{name}', param.data, iteration)
                         if param.grad is not None:
-                            tensorboard_writer.add_scalar(f'Gradients/{name}_mean', param.grad.data.mean().item(), iteration)
-                            tensorboard_writer.add_scalar(f'Gradients/{name}_std', param.grad.data.std().item(), iteration)
-                            tensorboard_writer.add_scalar(f'Gradients/{name}_norm', param.grad.data.norm().item(), iteration)
-                
-                # Log histograms less frequently to avoid cluttering
-                if iteration % (batch_config.log_interval * 5) == 0:
-                    for name, param in components['cost_model'].named_parameters():
-                        if param.requires_grad:
-                            tensorboard_writer.add_histogram(f'Parameters_Hist/{name}', param.data, iteration)
-                            if param.grad is not None:
-                                tensorboard_writer.add_histogram(f'Gradients_Hist/{name}', param.grad.data, iteration)
-                
-                # Log batch-specific metrics if available
-                flight_processing_times = [r.processing_time for r in batch_results if r.success]
-                if flight_processing_times:
-                    tensorboard_writer.add_scalar('Performance/Avg_Flight_Processing_Time', 
-                                                 np.mean(flight_processing_times), iteration)
-                    tensorboard_writer.add_scalar('Performance/Max_Flight_Processing_Time', 
-                                                 np.max(flight_processing_times), iteration)
-                
-                # Log individual flight log likelihoods distribution
-                flight_log_likelihoods = [r.log_likelihood for r in batch_results if r.success]
-                if flight_log_likelihoods:
-                    tensorboard_writer.add_histogram('Training/Flight_Log_Likelihoods', 
-                                                    np.array(flight_log_likelihoods), iteration)
-                
-                # Flush to ensure data is written
-                tensorboard_writer.flush()
+                            tensorboard_writer.add_histogram(f'Gradients_Hist/{name}', param.grad.data, iteration)
             
-            # Save checkpoint before incrementing iteration
-            if iteration % batch_config.checkpoint_interval == 0:
-                checkpoint_path = os.path.join(output_dir, f"checkpoint_iter_{iteration}.pt")
+            # Log batch-specific metrics if available
+            flight_processing_times = [r.processing_time for r in batch_results if r.success]
+            if flight_processing_times:
+                tensorboard_writer.add_scalar('Performance/Avg_Flight_Processing_Time', 
+                                             np.mean(flight_processing_times), iteration)
+                tensorboard_writer.add_scalar('Performance/Max_Flight_Processing_Time', 
+                                             np.max(flight_processing_times), iteration)
+            
+            # Log individual flight log likelihoods distribution
+            flight_log_likelihoods = [r.log_likelihood for r in batch_results if r.success]
+            if flight_log_likelihoods:
+                tensorboard_writer.add_histogram('Training/Flight_Log_Likelihoods', 
+                                                np.array(flight_log_likelihoods), iteration)
+            
+            # Flush to ensure data is written
+            tensorboard_writer.flush()
+        
+        # Save checkpoint before incrementing iteration
+        if iteration % batch_config.checkpoint_interval == 0:
+            checkpoint_path = os.path.join(output_dir, f"checkpoint_iter_{iteration}.pt")
+            
+            # Ensure output directory exists
+            os.makedirs(output_dir, exist_ok=True)
+            
+            try:
+                torch.save({
+                    'iteration': iteration,
+                    'model_state_dict': components['cost_model'].state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'training_history': training_history,
+                    'batch_config': asdict(batch_config)
+                }, checkpoint_path)
                 
-                # Ensure output directory exists
-                os.makedirs(output_dir, exist_ok=True)
-                
-                try:
-                    torch.save({
-                        'iteration': iteration,
-                        'model_state_dict': components['cost_model'].state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'training_history': training_history,
-                        'batch_config': asdict(batch_config)
-                    }, checkpoint_path)
+                # Verify the checkpoint was saved successfully
+                if os.path.exists(checkpoint_path):
+                    file_size = os.path.getsize(checkpoint_path)
+                    logger.info(f"✓ Checkpoint saved successfully to {checkpoint_path} (size: {file_size:,} bytes)")
+                else:
+                    logger.error(f"✗ Checkpoint save failed - file does not exist: {checkpoint_path}")
                     
-                    # Verify the checkpoint was saved successfully
-                    if os.path.exists(checkpoint_path):
-                        file_size = os.path.getsize(checkpoint_path)
-                        logger.info(f"✓ Checkpoint saved successfully to {checkpoint_path} (size: {file_size:,} bytes)")
-                    else:
-                        logger.error(f"✗ Checkpoint save failed - file does not exist: {checkpoint_path}")
-                        
-                except Exception as e:
-                    logger.error(f"✗ Error saving checkpoint to {checkpoint_path}: {e}")
-                
-                # Log checkpoint save to TensorBoard
-                if tensorboard_writer is not None:
-                    tensorboard_writer.add_text('Training/Checkpoint', 
-                                               f"Checkpoint saved at iteration {iteration}: {checkpoint_path}", 
-                                               iteration)
+            except Exception as e:
+                logger.error(f"✗ Error saving checkpoint to {checkpoint_path}: {e}")
             
-            # Increment iteration for next loop
-            iteration += 1
+            # Log checkpoint save to TensorBoard
+            if tensorboard_writer is not None:
+                tensorboard_writer.add_text('Training/Checkpoint', 
+                                           f"Checkpoint saved at iteration {iteration}: {checkpoint_path}", 
+                                           iteration)
+        
+        # Increment iteration for next loop
+        iteration += 1
 
     # 5. Save final results and checkpoint
     final_results = {
@@ -1148,25 +1163,15 @@ def main():
         help="Interval for saving checkpoints (default: 10)"
     )
     parser.add_argument(
-        "--num-workers", 
-        type=int,
-        help="Number of worker processes (default: CPU count - 1)"
-    )
-    parser.add_argument(
         "--device", 
-        default="cuda",
-        help="Device to use (cuda/cpu, default: cuda)"
+        default="cpu",
+        help="Device to use (cuda/cpu, default: cpu)"
     )
     parser.add_argument(
         "--gamma", 
         type=float, 
         default=1.0,
-        help="Temperature parameter (default: 1.0)"
-    )
-    parser.add_argument(
-        "--debug-single-process",
-        action="store_true",
-        help="Run in a single process for debugging purposes."
+        help="Temperature parameter (default: 1.0)" 
     )
     parser.add_argument(
         "--tensorboard-log-dir",
@@ -1213,10 +1218,8 @@ def main():
         max_iterations=args.max_iterations,
         convergence_threshold=args.convergence_threshold,
         checkpoint_interval=args.checkpoint_interval,
-        num_workers=args.num_workers,
         device=args.device,
         gamma=args.gamma,
-        debug_single_process=args.debug_single_process,
         tensorboard_log_dir=args.tensorboard_log_dir,
         log_interval=args.log_interval,
         resume_from_checkpoint=not args.no_resume,  # Resume by default unless --no-resume is specified
@@ -1239,17 +1242,25 @@ def main():
     else:
         tensorboard_dir = None
     
-    import shutil
     if tensorboard_dir:
-        try:
-            if os.path.exists(tensorboard_dir):
+        from pathlib import Path
+        tensorboard_path = Path(tensorboard_dir)
+        if tensorboard_path.exists() and tensorboard_path.is_dir():
+            try:
                 logger.info(f"Removing existing TensorBoard log directory: {tensorboard_dir}")
-                shutil.rmtree(tensorboard_dir)
-        except FileNotFoundError:
-            logger.warning(f"TensorBoard log directory {tensorboard_dir} was not found when attempting to remove it. Skipping deletion.")
-        except Exception as e:
-            logger.error(f"Error while removing TensorBoard log directory {tensorboard_dir}: {e}")
-            raise
+                import shutil
+                shutil.rmtree(tensorboard_path)
+                logger.info(f"Successfully removed TensorBoard log directory: {tensorboard_dir}")
+            except OSError as e:
+                # Handle permission errors, directory in use, etc.
+                logger.warning(f"Could not remove TensorBoard log directory {tensorboard_dir}: {e}. Continuing anyway.")
+            except Exception as e:
+                logger.error(f"Unexpected error while removing TensorBoard log directory {tensorboard_dir}: {e}")
+                raise
+        elif tensorboard_path.exists():
+            logger.warning(f"TensorBoard log path exists but is not a directory: {tensorboard_dir}. Skipping removal.")
+        else:
+            logger.debug(f"TensorBoard log directory does not exist: {tensorboard_dir}. Nothing to remove.")
     
     # Run the pipeline
     try:

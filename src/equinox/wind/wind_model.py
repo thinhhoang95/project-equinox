@@ -238,10 +238,28 @@ class WindModel:
         interp_lats_np = np.clip(lats_np, self._lat_min, self._lat_max)
         interp_lons_np = np.clip(lons_np, self._lon_min, self._lon_max)
         
-        # Ensure self.data.valid_time.min/max are numpy.datetime64 for comparison
+        # # Ensure self.data.valid_time.min/max are numpy.datetime64 for comparison
+        # data_time_min_np = self.data.valid_time.min().values
+        # data_time_max_np = self.data.valid_time.max().values
+        # interp_times_np = np.clip(query_datetimes_np, data_time_min_np, data_time_max_np)
+
+        # Use self._time_min and self._time_max for clipping to handle cross-day flights correctly
         data_time_min_np = self.data.valid_time.min().values
         data_time_max_np = self.data.valid_time.max().values
-        interp_times_np = np.clip(query_datetimes_np, data_time_min_np, data_time_max_np)
+        time_min_np_self = np.datetime64(self._time_min)
+        time_max_np_self = np.datetime64(self._time_max)
+        # Compare the min/max values between the two approaches
+        if (data_time_min_np != time_min_np_self) or (data_time_max_np != time_max_np_self):
+            raise Exception(
+                f"WARNING: self.data.valid_time.min/max ({data_time_min_np}, {data_time_max_np}) "
+                f"do not match self._time_min/_time_max ({time_min_np_self}, {time_max_np_self}). "
+                "These values should not be different!"
+            )
+        interp_times_np = np.clip(
+            query_datetimes_np, 
+            time_min_np_self, 
+            time_max_np_self
+        )
 
         # Create xarray DataArrays for coordinates for interpolation
         # These will be used for indexing into the xarray dataset

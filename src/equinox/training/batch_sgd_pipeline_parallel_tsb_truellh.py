@@ -49,6 +49,7 @@ from pathlib import Path
 import multiprocessing
 from tqdm import tqdm
 import yaml
+from collections import defaultdict
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_AVAILABLE = True
@@ -155,7 +156,7 @@ def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: i
                 if thinned_file.exists() and wind_file.exists():
                     with open(thinned_file, 'rb') as f:
                         thinned_transitions = pickle.load(f)
-                    avg_tailwind_knots = torch.load(wind_file)
+                    avg_tailwind_knots = torch.load(wind_file, weights_only=False)
                     # Found all required files, break the loop
                     break
                 else:
@@ -356,7 +357,8 @@ def process_single_flight(flight_data: pd.Series,
                          batch_config: BatchLearningConfig,
                          case_dir: str,
                          cost_model_state: Dict[str, torch.Tensor] = None,
-                         cost_model_params: Dict[str, float] = None) -> FlightGradientResult:
+                         cost_model_params: Dict[str, float] = None,
+                         debug_this_flight: bool = False) -> FlightGradientResult:
     """
     Process a single flight through the complete pipeline.
     
@@ -484,7 +486,7 @@ def process_single_flight(flight_data: pd.Series,
         ).to(device)
         
         # 8. Compute gradients using backward gradient pass
-        expected_counts, gradient = backward_gradient_pass(
+        expected_counts, gradient, log_partition_z_tensor = backward_gradient_pass(
             state_transitions=thinned_transitions,
             avg_tailwind_knots_per_transition=avg_tailwind_knots.to(device),
             V_f=v_f,
@@ -500,6 +502,65 @@ def process_single_flight(flight_data: pd.Series,
             verbose=False
         )
 
+        # 8.5 Debugging: Print top links with highest empirical counts and their expected traversals
+        # Only print for the designated debug flight to avoid spam
+        # if debug_this_flight:
+        #     logger.info(f"=== DEBUGGING COUNTS FOR FLIGHT {flight_id} ===")
+            
+        #     # Find all non-zero empirical counts
+        #     nonzero_mask = empirical_counts > 0
+        #     nonzero_indices = torch.nonzero(nonzero_mask, as_tuple=False)
+            
+        #     if len(nonzero_indices) > 0:
+        #         # Get empirical and expected counts for non-zero empirical links
+        #         empirical_values = empirical_counts[nonzero_mask]
+        #         expected_values = expected_counts[nonzero_mask]
+                
+        #         # Sort by empirical counts (descending)
+        #         sorted_indices = torch.argsort(empirical_values, descending=True)
+                
+        #         # Show top 10 links (or all if fewer than 10)
+        #         top_k = min(10, len(sorted_indices))
+        #         logger.info(f"Top {top_k} links with highest empirical counts:")
+                
+        #         for i in range(top_k):
+        #             idx = sorted_indices[i]
+        #             from_idx = nonzero_indices[idx, 0].item()
+        #             to_idx = nonzero_indices[idx, 1].item()
+        #             emp_count = empirical_values[idx].item()
+        #             exp_count = expected_values[idx].item()
+                    
+        #             from_node = components['idx_to_node'][from_idx]
+        #             to_node = components['idx_to_node'][to_idx]
+                    
+        #             # Calculate ratio to see if expected is catching up to empirical
+        #             ratio = exp_count / emp_count if emp_count > 0 else 0.0
+                    
+        #             logger.info(f"  {i+1:2d}. {from_node:8s} -> {to_node:8s} | "
+        #                        f"Empirical: {emp_count:.3e} | Expected: {exp_count:.3e} | "
+        #                        f"Ratio: {ratio:.3e}")
+        #     else:
+        #         logger.warning(f"No empirical traversals found for flight {flight_id}")
+            
+        #     # Also show some high expected counts that don't correspond to empirical usage
+        #     logger.info(f"Links with highest expected counts (regardless of empirical usage):")
+        #     expected_flat = expected_counts.flatten()
+        #     top_expected_indices = torch.topk(expected_flat, k=min(5, len(expected_flat)), largest=True).indices
+            
+        #     for i, flat_idx in enumerate(top_expected_indices):
+        #         from_idx = flat_idx // expected_counts.shape[1]
+        #         to_idx = flat_idx % expected_counts.shape[1]
+        #         emp_count = empirical_counts[from_idx, to_idx].item()
+        #         exp_count = expected_counts[from_idx, to_idx].item()
+                
+        #         from_node = components['idx_to_node'][from_idx.item()]
+        #         to_node = components['idx_to_node'][to_idx.item()]
+                
+        #         logger.info(f"  {i+1}. {from_node:8s} -> {to_node:8s} | "
+        #                    f"Empirical: {emp_count:.3e} | Expected: {exp_count:.3e}")
+            
+        #     logger.info(f"=== END DEBUGGING COUNTS FOR FLIGHT {flight_id} ===\n")
+
         # For debugging, save the expected counts and the soft value functions to a file to be inspected externally
         if batch_config.debug_single_process:
             import pickle
@@ -512,8 +573,60 @@ def process_single_flight(flight_data: pd.Series,
 
         # raise Exception("Stop here")
 
-        # 9. Compute log likelihood (simplified), ideally we would like log-likelihood to increase to zero
-        log_likelihood = -torch.sum((empirical_counts - expected_counts) ** 2).item()
+        # 9. Compute true log likelihood
+        log_partition_z = log_partition_z_tensor.item()
+
+        # Calculate cost of the empirical trajectory c(xi)
+        waypoints_str = flight_data['route']
+        waypoints = waypoints_str.split()
+        empirical_route_links = []
+        for i in range(len(waypoints) - 1):
+            from_wp = waypoints[i]
+            to_wp = waypoints[i + 1]
+            if from_wp in components['node_to_idx'] and to_wp in components['node_to_idx']:
+                from_idx = components['node_to_idx'][from_wp]
+                to_idx = components['node_to_idx'][to_wp]
+                empirical_route_links.append((from_idx, to_idx))
+
+        transitions_by_link = defaultdict(list)
+        for i, t in enumerate(thinned_transitions):
+            transitions_by_link[(t[0], t[5])].append(i)
+
+        c_xi = 0.0
+        with torch.no_grad():
+            for u_idx, v_idx in empirical_route_links:
+                if (u_idx, v_idx) in transitions_by_link:
+                    transition_indices = transitions_by_link[(u_idx, v_idx)]
+                    
+                    # Average tailwind for this link, from the model's perspective
+                    avg_tailwind_for_link = avg_tailwind_knots[transition_indices].mean()
+                    
+                    edge_u_indices = torch.tensor([u_idx], device=device, dtype=torch.long)
+                    edge_v_indices = torch.tensor([v_idx], device=device, dtype=torch.long)
+                    
+                    link_cost = cost_model(
+                        (edge_u_indices, edge_v_indices),
+                        components['dist_matrix'],
+                        components['ac_matrix'],
+                        avg_tailwind_for_link.to(device).unsqueeze(0)
+                    ).item()
+                    
+                    c_xi += link_cost
+                else:
+                    # This link from the empirical route is not in our model's reachable graph.
+                    # This means the model assigns it zero probability.
+                    logger.warning(f"Link ({u_idx}, {v_idx}) from empirical route for flight {flight_id} not found in thinned transitions. Skipping this link in log-likelihood computation.")
+                    # c_xi = float('inf')
+                    # break
+                    pass 
+        
+        if torch.isinf(torch.tensor(c_xi)) or torch.isinf(log_partition_z_tensor):
+            log_likelihood = -float('inf')
+        else:
+            # log p(xi) = -c(xi) - log Z. Note that log_partition_z is already V, so it's -gamma*logZ.
+            # We want log(p(xi)) = -c(xi)/gamma - log(Z). log_partition_z = V_b(origin), and log(Z) = -V_b(origin)/gamma
+            log_likelihood = (-c_xi / batch_config.gamma) - (-log_partition_z / batch_config.gamma)
+            log_likelihood = (-c_xi + log_partition_z) / batch_config.gamma
         
         # Validate gradient dimensions
         expected_grad_size = sum(p.numel() for p in components['cost_model'].parameters() if p.requires_grad)
@@ -630,7 +743,7 @@ def load_checkpoint(checkpoint_path: str, cost_model, optimizer, device: torch.d
     """
     logger.info(f"Loading checkpoint from {checkpoint_path}")
     
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
     # Load model state
     cost_model.load_state_dict(checkpoint['model_state_dict'])
@@ -712,6 +825,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     optimizer = torch.optim.Adam(
         filter(lambda p: p.requires_grad, components['cost_model'].parameters()),
         lr=batch_config.learning_rate
+        # maximize=True # I have personally verified that we need to minimize the cost function!
     )
     
     logger.info(f"Using device: {device}")
@@ -719,7 +833,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     logger.info(f"Cost model has {num_trainable_params} trainable parameters")
     
     # 2. Load flight data and create batches
-    flights_csv = os.path.join(case_dir, "all_routes_sculpted.csv")
+    flights_csv = os.path.join(case_dir, "tres_runs", "all_routes_feasibly_snapped.csv")
     logger.info(f"Loading flights from {flights_csv} and creating batches...")
     flight_batches = get_flight_batches(flights_csv, batch_config.batch_size)
     num_batches = len(flight_batches)
@@ -822,11 +936,14 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             
             # Prepare arguments for each flight in the batch
             tasks = []
-            for _, flight_data in batch_flights.iterrows():
+            flight_list = list(batch_flights.iterrows())
+            for i, (_, flight_data) in enumerate(flight_list):
                 # Note: 'components' is passed, but the cost_model inside it will be stale.
                 # The correct, up-to-date model is passed via cost_model_state.
+                # Set debug flag for only the last flight in the batch
+                debug_this_flight = (i == len(flight_list) - 1)
                 tasks.append(
-                    (flight_data, components, batch_config, case_dir, cost_model_state, cost_model_params)
+                    (flight_data, components, batch_config, case_dir, cost_model_state, cost_model_params, debug_this_flight)
                 )
 
             # Use the executor to run flight processing in parallel
@@ -876,11 +993,11 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 
                 optimizer.step()
                 
-                logger.info(f"Applied gradient update with norm L2: {gradient_norm:.6f}")
+                logger.info(f"✓ Applied gradient update with norm L2: {gradient_norm:.6f}")
                 
                 # Check convergence
                 if gradient_norm < batch_config.convergence_threshold:
-                    logger.info(f"Convergence achieved! Gradient norm L2: {gradient_norm:.6f} < {batch_config.convergence_threshold}")
+                    logger.info(f"✓ Convergence achieved! Gradient norm L2: {gradient_norm:.6f} < {batch_config.convergence_threshold}")
                     converged = True
             
             # Compute iteration statistics
