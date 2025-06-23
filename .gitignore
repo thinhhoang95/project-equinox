@@ -43,3 +43,6 @@ notes/
 notes_2/
 
 data/cases
+
+# Temporary graphs
+temp_graph_*.pdf

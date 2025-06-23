@@ -7,11 +7,12 @@ from equinox.feateng.airspace_charges import compute_charges_for_graph
 from equinox.feateng.laplace import enumerate_nodes, node_names_to_ids
 from equinox.feateng.distance import haversine_distance_matrix
 from equinox.training.prep.resculpt_viterbi import viterbi_match, haversine_nm
+from equinox.training.prep.remove_edges_for_sectors import remove_edges_through_sectors
 
-# path_prefix = "D:\\project-akrav\\"
-path_prefix = '/Volumes/CrucialX/project-akrav/'
-# path_output = "D:\\project-equinox\\"
-path_output = '/Volumes/CrucialX/project-equinox/'
+path_prefix = "D:\\project-akrav\\"
+# path_prefix = '/Volumes/CrucialX/project-akrav/'
+path_output = "D:\\project-equinox\\"
+# path_output = '/Volumes/CrucialX/project-equinox/'
 source_id = "LEMD"
 destination_id = "EGLL"
 routes_dir = os.path.join(path_prefix, "matched_filtered_data")
@@ -32,6 +33,10 @@ def prep_graph():
     )
     # Create directory if it doesn't exist
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    # Sectors to avoid
+    sectors_2_avoid = ["LFBBZ3"] # Bordeaux Z3 is avoided
+
     Gno = process_and_save_graph(
         nodes_only_graph_path,
         source_id,
@@ -41,7 +46,8 @@ def prep_graph():
         minimum_detour_allowed=0.04,
         n_iter=15,
         max_allowed_deviation_angle=60,
-        remove_collinear_edges_option=False
+        remove_collinear_edges_option=False,
+        sectors_to_avoid=sectors_2_avoid
     )
     print(f"Graph processing completed in {time.time() - start_time} seconds")
     print(

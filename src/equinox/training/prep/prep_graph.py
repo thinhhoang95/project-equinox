@@ -6,7 +6,11 @@ from equinox.training.prep.graph_scripts.cycle_prune import (
     make_acyclic_by_bearing_and_degree,
 )
 import math
-
+from equinox.training.prep.remove_edges_for_sectors import remove_edges_through_sectors
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature
+import numpy as np
 
 def filter_graph_by_detour(
     G: nx.Graph, origin, destination, threshold: float
@@ -300,7 +304,7 @@ def prepare_base_graph(
     destination_id: str,
     routes_dir: str,
     delete_isolated_nodes: bool = True,
-    minimum_detour_allowed: float = 0.025,
+    minimum_detour_allowed: float = 0.025
 ):
     Gno = nx.read_gml(nodes_only_graph_path)
     # Convert Gno to a directed graph
@@ -491,6 +495,77 @@ def remove_unreachable_nodes(G, source_id, destination_id):
     return G
 
 
+def plot_route_graph_with_sectors_pdf(Gm, show_label=False, highlighted_labels = [], output_path=None, sectors_gdf=None):
+    # Assuming Gm is your NetworkX graph
+    # Each node in Gm has 'lat' and 'lon' attributes
+
+    # Extract latitudes and longitudes
+    lats = []
+    lons = []
+    ids = []
+    for node, data in Gm.nodes(data=True):
+        lats.append(data['lat'])
+        lons.append(data['lon'])
+        ids.append(node)
+
+    # Calculate the bounds with some padding
+    min_lon, max_lon = min(lons) - 2, max(lons) + 2
+    min_lat, max_lat = min(lats) - 2, max(lats) + 2
+
+    # Set up the map
+    if show_label:
+        fig = plt.figure(figsize=(40, 56))
+    else:
+        fig = plt.figure(figsize=(10, 14))
+    ax = plt.axes(projection=ccrs.PlateCarree())
+    ax.coastlines()
+    ax.add_feature(cartopy.feature.LAND)
+    ax.set_extent([min_lon, max_lon, min_lat, max_lat], crs=ccrs.PlateCarree())
+
+    # Plot the waypoints
+    ax.scatter(lons, lats, color='blue', s=1, transform=ccrs.PlateCarree(), label='Waypoints')
+    # Add text labels for each waypoint
+    if show_label:
+        for lon, lat, id_text in zip(lons, lats, ids):
+            if id_text in highlighted_labels:
+                ax.text(lon, lat, id_text, transform=ccrs.PlateCarree(), fontsize=10, color='blue')
+            else:
+                ax.text(lon, lat, id_text, transform=ccrs.PlateCarree(), fontsize=10)
+    # Plot the edges
+    for u, v in Gm.edges():
+        lon1, lat1 = Gm.nodes[u]['lon'], Gm.nodes[u]['lat']
+        lon2, lat2 = Gm.nodes[v]['lon'], Gm.nodes[v]['lat']
+        ax.plot([lon1, lon2], [lat1, lat2], color='gray', linewidth=0.5, 
+                alpha=0.3, transform=ccrs.PlateCarree())
+    
+    # Plot the excluded sectors
+    if sectors_gdf is not None and not sectors_gdf.empty:
+        ax.add_geometries(sectors_gdf.geometry, crs=ccrs.PlateCarree(), facecolor='red', edgecolor='red', alpha=0.3)
+
+    # Add the LEMD and EGLL nodes as stars with text labels
+    lemd_lon, lemd_lat = Gm.nodes['LEMD']['lon'], Gm.nodes['LEMD']['lat']
+    egll_lon, egll_lat = Gm.nodes['EGLL']['lon'], Gm.nodes['EGLL']['lat']
+
+    # Plot stars for origin and destination
+    ax.scatter(lemd_lon, lemd_lat, color='red', s=100, marker='*', transform=ccrs.PlateCarree())
+    ax.scatter(egll_lon, egll_lat, color='red', s=100, marker='*', transform=ccrs.PlateCarree())
+
+    # Add text labels for the airports
+    ax.text(lemd_lon+0.2, lemd_lat+0.2, 'LEMD', transform=ccrs.PlateCarree(), fontsize=8)
+    ax.text(egll_lon+0.2, egll_lat+0.2, 'EGLL', transform=ccrs.PlateCarree(), fontsize=8)
+
+    # Add gridlines
+    gl = ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+    gl.top_labels = False
+    gl.right_labels = False
+
+    plt.title('Plausible Connections between LEMD and EGLL')
+    if output_path is not None:
+        plt.savefig(output_path, format="pdf", bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
+
 def process_graph(
     nodes_only_graph_path: str,
     source_id: str,
@@ -504,6 +579,7 @@ def process_graph(
     remove_backtracking_edges_option: bool = True,
     remove_unreachable_nodes_option: bool = True,
     make_acyclic_option: bool = True,
+    sectors_to_avoid: list[str] = None
 ):
     Gno = prepare_base_graph(
         nodes_only_graph_path,
@@ -513,10 +589,30 @@ def process_graph(
         delete_isolated_nodes,
         minimum_detour_allowed,
     )
+
     improve_connectivity(Gno, source_id, destination_id, n_iter=n_iter)
     # Remove collinear edges
     if remove_collinear_edges_option:
         Gno = remove_collinear_edges(Gno)
+
+    if sectors_to_avoid is not None:
+        # Save the graph temporarily to a PNG file
+        import time
+        from equinox.helpers.plotters import plot_route_graph_pdf
+        timestamp = int(time.time())
+        temp_plot_path = f"temp_graph_{timestamp}.pdf"
+        plot_route_graph_with_sectors_pdf(Gno, show_label=True, highlighted_labels=[], output_path=temp_plot_path)
+        print(f"Saved temporary graph plot to {temp_plot_path}")
+        # Remove edges passing through the designated sectors
+        sectors_geojson_path = os.path.join("data", "airspace", "sectors.geojson")
+        Gno, excluded_sectors_gdf = remove_edges_through_sectors(Gno, sectors_to_avoid, sectors_geojson_path, output_dir=None)
+        print(f'Removed sectors {", ".join(sectors_to_avoid)} from the graph')
+        # Save the graph again after removing edges associated with the sector
+        temp_plot_path_after = f"temp_graph_after_sector_removal_{timestamp}.pdf"
+        plot_route_graph_with_sectors_pdf(Gno, show_label=True, highlighted_labels=[], output_path=temp_plot_path_after, sectors_gdf=excluded_sectors_gdf)
+        print(f"Saved graph plot after sector removal to {temp_plot_path_after}")
+        # raise Exception("Deliberate stop")
+
     if remove_backtracking_edges_option:
         Gno = remove_backtracking_edges(
             Gno,
@@ -524,12 +620,16 @@ def process_graph(
             destination_id,
             max_allowed_deviation_angle=max_allowed_deviation_angle,
         )
+
     if delete_isolated_nodes:
         Gno = remove_isolated_nodes(Gno)
+
     if remove_unreachable_nodes_option:
         Gno = remove_unreachable_nodes(Gno, source_id, destination_id)
+
     if make_acyclic_option:
         Gno = make_graph_acyclic(Gno, source_id, destination_id)
+
     return Gno
 
 
@@ -547,6 +647,7 @@ def process_and_save_graph(
     remove_backtracking_edges_option: bool = True,
     remove_unreachable_nodes_option: bool = True,
     make_acyclic_option: bool = True,
+    sectors_to_avoid: list[str] = None
 ):
     Gno = process_graph(
         nodes_only_graph_path,
@@ -561,11 +662,13 @@ def process_and_save_graph(
         remove_backtracking_edges_option,
         remove_unreachable_nodes_option,
         make_acyclic_option,
+        sectors_to_avoid
     )
     if output_path is not None:
         nx.write_gml(Gno, output_path)
+        print(f"Graph processing complete. Saved to {output_path}")
     return Gno
-
+    
 
 if __name__ == "__main__":
     path_prefix = "D:\\project-akrav\\"
@@ -584,6 +687,10 @@ if __name__ == "__main__":
     output_path = os.path.join(
         path_prefix_output, "data", "cases", case_name, "graphs", f"routes.gml"
     )
+
+    # Sectors to avoid
+    sectors_2_avoid = ["LFBBZ3"] # Bordeaux Z3 is avoided
+
     # Create directory if it doesn't exist
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     Gno = process_and_save_graph(
@@ -592,6 +699,7 @@ if __name__ == "__main__":
         destination_id,
         routes_dir,
         output_path=output_path,
+        sectors_to_avoid=sectors_2_avoid
     )
     print(f"Graph processing completed in {time.time() - start_time} seconds")
     print(
