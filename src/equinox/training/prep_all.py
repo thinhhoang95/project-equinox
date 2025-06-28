@@ -13,8 +13,8 @@ path_prefix = "D:\\project-akrav\\"
 # path_prefix = '/Volumes/CrucialX/project-akrav/'
 path_output = "D:\\project-equinox\\"
 # path_output = '/Volumes/CrucialX/project-equinox/'
-source_id = "LEMD"
-destination_id = "EGLL"
+source_id = "LGAV"
+destination_id = "LFPG"
 routes_dir = os.path.join(path_prefix, "matched_filtered_data")
 
 def prep_graph():
@@ -35,7 +35,7 @@ def prep_graph():
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     # Sectors to avoid
-    sectors_2_avoid = ["LFBBZ3"] # Bordeaux Z3 is avoided
+    sectors_2_avoid = [] # Name of the sectors to be avoided.
 
     Gno = process_and_save_graph(
         nodes_only_graph_path,
@@ -47,7 +47,8 @@ def prep_graph():
         n_iter=15,
         max_allowed_deviation_angle=60,
         remove_collinear_edges_option=False,
-        sectors_to_avoid=sectors_2_avoid
+        sectors_to_avoid=sectors_2_avoid,
+        improve_connectivity_option=False # for long routes, it is better to disable this
     )
     print(f"Graph processing completed in {time.time() - start_time} seconds")
     print(
@@ -351,6 +352,7 @@ if __name__ == "__main__":
     from equinox.helpers.plotters import plot_route_graph_pdf
     route_graph_path = os.path.join(path_output, "data", "cases", f"{source_id}_{destination_id}", "graphs", "routes.gml")
     Gm = nx.read_gml(route_graph_path)
-    plot_route_graph_pdf(Gm, show_label=True, highlighted_labels = [], output_path=os.path.join(path_output, "data", "cases", f"{source_id}_{destination_id}", "graphs", "routes.pdf"))
+    plot_route_graph_pdf(Gm, show_label=True, highlighted_labels = [], output_path=os.path.join(path_output, "data", "cases", f"{source_id}_{destination_id}", "graphs", "routes.pdf"),
+                         origin_node=source_id, destination_node=destination_id)
     print("Route graph plot saved to ", os.path.join(path_output, "data", "cases", f"{source_id}_{destination_id}", "graphs", "routes.pdf"))
     print("Preparation completed")

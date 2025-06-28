@@ -129,7 +129,8 @@ import cartopy.crs as ccrs
 import cartopy.feature
 import numpy as np
 
-def plot_route_graph_pdf(Gm, show_label=False, highlighted_labels = [], output_path=None):
+def plot_route_graph_pdf(Gm, show_label=False, highlighted_labels = [], output_path=None,
+                         origin_node="LEMD", destination_node="EGLL"):
     # Assuming Gm is your NetworkX graph
     # Each node in Gm has 'lat' and 'lon' attributes
 
@@ -173,23 +174,23 @@ def plot_route_graph_pdf(Gm, show_label=False, highlighted_labels = [], output_p
                 alpha=0.3, transform=ccrs.PlateCarree())
 
     # Add the LEMD and EGLL nodes as stars with text labels
-    lemd_lon, lemd_lat = Gm.nodes['LEMD']['lon'], Gm.nodes['LEMD']['lat']
-    egll_lon, egll_lat = Gm.nodes['EGLL']['lon'], Gm.nodes['EGLL']['lat']
+    lemd_lon, lemd_lat = Gm.nodes[origin_node]['lon'], Gm.nodes[origin_node]['lat']
+    egll_lon, egll_lat = Gm.nodes[destination_node]['lon'], Gm.nodes[destination_node]['lat']
 
     # Plot stars for origin and destination
     ax.scatter(lemd_lon, lemd_lat, color='red', s=100, marker='*', transform=ccrs.PlateCarree())
     ax.scatter(egll_lon, egll_lat, color='red', s=100, marker='*', transform=ccrs.PlateCarree())
 
     # Add text labels for the airports
-    ax.text(lemd_lon+0.2, lemd_lat+0.2, 'LEMD', transform=ccrs.PlateCarree(), fontsize=8)
-    ax.text(egll_lon+0.2, egll_lat+0.2, 'EGLL', transform=ccrs.PlateCarree(), fontsize=8)
+    ax.text(lemd_lon+0.2, lemd_lat+0.2, origin_node, transform=ccrs.PlateCarree(), fontsize=8)
+    ax.text(egll_lon+0.2, egll_lat+0.2, destination_node, transform=ccrs.PlateCarree(), fontsize=8)
 
     # Add gridlines
     gl = ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
     gl.top_labels = False
     gl.right_labels = False
 
-    plt.title('Plausible Connections between LEMD and EGLL')
+    plt.title(f'Plausible Connections between {origin_node} and {destination_node}')
     if output_path is not None:
         plt.savefig(output_path, format="pdf", bbox_inches="tight")
     else:

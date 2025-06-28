@@ -495,7 +495,8 @@ def remove_unreachable_nodes(G, source_id, destination_id):
     return G
 
 
-def plot_route_graph_with_sectors_pdf(Gm, show_label=False, highlighted_labels = [], output_path=None, sectors_gdf=None):
+def plot_route_graph_with_sectors_pdf(Gm, show_label=False, highlighted_labels = [], output_path=None, sectors_gdf=None,
+                                      node_origin=None, node_destination=None):
     # Assuming Gm is your NetworkX graph
     # Each node in Gm has 'lat' and 'lon' attributes
 
@@ -543,23 +544,23 @@ def plot_route_graph_with_sectors_pdf(Gm, show_label=False, highlighted_labels =
         ax.add_geometries(sectors_gdf.geometry, crs=ccrs.PlateCarree(), facecolor='red', edgecolor='red', alpha=0.3)
 
     # Add the LEMD and EGLL nodes as stars with text labels
-    lemd_lon, lemd_lat = Gm.nodes['LEMD']['lon'], Gm.nodes['LEMD']['lat']
-    egll_lon, egll_lat = Gm.nodes['EGLL']['lon'], Gm.nodes['EGLL']['lat']
+    lemd_lon, lemd_lat = Gm.nodes[node_origin]['lon'], Gm.nodes[node_origin]['lat']
+    egll_lon, egll_lat = Gm.nodes[node_destination]['lon'], Gm.nodes[node_destination]['lat']
 
     # Plot stars for origin and destination
     ax.scatter(lemd_lon, lemd_lat, color='red', s=100, marker='*', transform=ccrs.PlateCarree())
     ax.scatter(egll_lon, egll_lat, color='red', s=100, marker='*', transform=ccrs.PlateCarree())
 
     # Add text labels for the airports
-    ax.text(lemd_lon+0.2, lemd_lat+0.2, 'LEMD', transform=ccrs.PlateCarree(), fontsize=8)
-    ax.text(egll_lon+0.2, egll_lat+0.2, 'EGLL', transform=ccrs.PlateCarree(), fontsize=8)
+    ax.text(lemd_lon+0.2, lemd_lat+0.2, node_origin, transform=ccrs.PlateCarree(), fontsize=8)
+    ax.text(egll_lon+0.2, egll_lat+0.2, node_destination, transform=ccrs.PlateCarree(), fontsize=8)
 
     # Add gridlines
     gl = ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
     gl.top_labels = False
     gl.right_labels = False
 
-    plt.title('Plausible Connections between LEMD and EGLL')
+    plt.title(f'Plausible Connections between {node_origin} and {node_destination}')
     if output_path is not None:
         plt.savefig(output_path, format="pdf", bbox_inches="tight")
         plt.close(fig)
@@ -579,7 +580,8 @@ def process_graph(
     remove_backtracking_edges_option: bool = True,
     remove_unreachable_nodes_option: bool = True,
     make_acyclic_option: bool = True,
-    sectors_to_avoid: list[str] = None
+    sectors_to_avoid: list[str] = None,
+    improve_connectivity_option: bool = True
 ):
     Gno = prepare_base_graph(
         nodes_only_graph_path,
@@ -589,8 +591,8 @@ def process_graph(
         delete_isolated_nodes,
         minimum_detour_allowed,
     )
-
-    improve_connectivity(Gno, source_id, destination_id, n_iter=n_iter)
+    if improve_connectivity_option:
+        improve_connectivity(Gno, source_id, destination_id, n_iter=n_iter)
     # Remove collinear edges
     if remove_collinear_edges_option:
         Gno = remove_collinear_edges(Gno)
@@ -601,7 +603,8 @@ def process_graph(
         from equinox.helpers.plotters import plot_route_graph_pdf
         timestamp = int(time.time())
         temp_plot_path = f"temp_graph_{timestamp}.pdf"
-        plot_route_graph_with_sectors_pdf(Gno, show_label=True, highlighted_labels=[], output_path=temp_plot_path)
+        plot_route_graph_with_sectors_pdf(Gno, show_label=True, highlighted_labels=[], output_path=temp_plot_path,
+                                          node_origin=source_id, node_destination=destination_id)
         print(f"Saved temporary graph plot to {temp_plot_path}")
         # Remove edges passing through the designated sectors
         sectors_geojson_path = os.path.join("data", "airspace", "sectors.geojson")
@@ -609,7 +612,8 @@ def process_graph(
         print(f'Removed sectors {", ".join(sectors_to_avoid)} from the graph')
         # Save the graph again after removing edges associated with the sector
         temp_plot_path_after = f"temp_graph_after_sector_removal_{timestamp}.pdf"
-        plot_route_graph_with_sectors_pdf(Gno, show_label=True, highlighted_labels=[], output_path=temp_plot_path_after, sectors_gdf=excluded_sectors_gdf)
+        plot_route_graph_with_sectors_pdf(Gno, show_label=True, highlighted_labels=[], output_path=temp_plot_path_after, sectors_gdf=excluded_sectors_gdf,
+                                          node_origin=source_id, node_destination=destination_id)
         print(f"Saved graph plot after sector removal to {temp_plot_path_after}")
         # raise Exception("Deliberate stop")
 
@@ -647,7 +651,8 @@ def process_and_save_graph(
     remove_backtracking_edges_option: bool = True,
     remove_unreachable_nodes_option: bool = True,
     make_acyclic_option: bool = True,
-    sectors_to_avoid: list[str] = None
+    sectors_to_avoid: list[str] = None,
+    improve_connectivity_option: bool = True
 ):
     Gno = process_graph(
         nodes_only_graph_path,
@@ -662,7 +667,8 @@ def process_and_save_graph(
         remove_backtracking_edges_option,
         remove_unreachable_nodes_option,
         make_acyclic_option,
-        sectors_to_avoid
+        sectors_to_avoid,
+        improve_connectivity_option
     )
     if output_path is not None:
         nx.write_gml(Gno, output_path)
