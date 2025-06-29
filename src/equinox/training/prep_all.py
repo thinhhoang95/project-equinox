@@ -9,10 +9,10 @@ from equinox.feateng.distance import haversine_distance_matrix
 from equinox.training.prep.resculpt_viterbi import viterbi_match, haversine_nm
 from equinox.training.prep.remove_edges_for_sectors import remove_edges_through_sectors
 
-path_prefix = "D:\\project-akrav\\"
-# path_prefix = '/Volumes/CrucialX/project-akrav/'
-path_output = "D:\\project-equinox\\"
-# path_output = '/Volumes/CrucialX/project-equinox/'
+# path_prefix = "D:\\project-akrav\\"
+path_prefix = '/Volumes/CrucialX/project-akrav/'
+# path_output = "D:\\project-equinox\\"
+path_output = '/Volumes/CrucialX/project-equinox/'
 source_id = "LGAV"
 destination_id = "LFPG"
 routes_dir = os.path.join(path_prefix, "matched_filtered_data")
@@ -43,7 +43,7 @@ def prep_graph():
         destination_id,
         routes_dir,
         output_path=output_path,
-        minimum_detour_allowed=0.04,
+        minimum_detour_allowed=0.075,
         n_iter=15,
         max_allowed_deviation_angle=60,
         remove_collinear_edges_option=False,

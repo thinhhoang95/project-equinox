@@ -46,3 +46,6 @@ data/cases
 
 # Temporary graphs
 temp_graph_*.pdf
+
+# Ronbun experiments
+ronbun_experiments/runs_*

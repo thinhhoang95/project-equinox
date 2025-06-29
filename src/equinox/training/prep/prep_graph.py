@@ -339,7 +339,6 @@ def prepare_base_graph(
 
     return Gno
 
-
 def remove_collinear_edges(Gno):
     # Remove collinear edges
     from equinox.training.prep.graph_scripts.collinear import refine_graph
