@@ -1,3 +1,6 @@
+# import os
+# os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+
 #!/usr/bin/env python3
 """
 Route Visualization Script
@@ -26,6 +29,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import networkx as nx
 import argparse
+import yaml
 
 # Try importing cartopy
 try:
@@ -54,6 +58,14 @@ try:
 except ImportError as e:
     print(f"Warning: Equinox modules not available for cost calculation: {e}")
     EQUINOX_AVAILABLE = False
+
+# Try importing likelihood map functionality
+try:
+    from get_link_likelihood import compute_link_likelihood, render_likelihood_map
+    LIKELIHOOD_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Likelihood map functionality not available: {e}")
+    LIKELIHOOD_AVAILABLE = False
 DATA_DIR = PROJECT_ROOT / "data" / "cases" / CASE_NAME
 RESULTS_DIR = PROJECT_ROOT / "ronbun_experiments" / f"runs_{CASE_NAME}"
 
@@ -73,6 +85,7 @@ class RouteVisualizer:
         self.trajectories_dir = self.results_dir / "trajectories"
         self.plots_dir = self.results_dir / "plots"
         self.samples_dir = self.results_dir / "samples"
+        self.config_file = PROJECT_ROOT / "ronbun_experiments" / "template.yaml"
         
         # Create plots directory
         self.plots_dir.mkdir(parents=True, exist_ok=True)
@@ -85,13 +98,31 @@ class RouteVisualizer:
         self.charges_matrix = None
         self.cost_model = None
         self.wind_model = None
+        self.config = None
         
+        self.load_config()
         self.load_graph_data()
         self.load_flights_data()
         self.initialize_cost_calculation()
         
         # Default: don't calculate original costs unless explicitly requested
         self._calculate_original_costs = False
+        
+    def load_config(self):
+        """Load configuration from YAML file."""
+        if self.config_file.exists():
+            try:
+                with open(self.config_file, 'r') as f:
+                    self.config = yaml.safe_load(f)
+                print(f"Loaded config from {self.config_file}")
+                if 'gamma' in self.config:
+                    print(f"Using gamma = {self.config['gamma']} from config")
+            except Exception as e:
+                print(f"Warning: Could not load config file {self.config_file}: {e}")
+                self.config = {}
+        else:
+            print(f"Warning: Config file not found: {self.config_file}")
+            self.config = {}
         
     def load_graph_data(self):
         """Load waypoint coordinates from the graph file."""
@@ -295,6 +326,93 @@ class RouteVisualizer:
         except Exception as e:
             print(f"Error calculating original route cost for {unique_flight_id}: {e}")
             return None
+    
+    def render_likelihood_map_for_flight(self, unique_flight_id: str, flight_row: pd.Series, 
+                                       cell_size_nm: float = 10.0) -> bool:
+        """Render a likelihood map for a specific flight with route overlay."""
+        if not LIKELIHOOD_AVAILABLE:
+            print("Likelihood map functionality not available")
+            return False
+            
+        try:
+            # Check if likelihood tensor exists
+            sample_dir = self.samples_dir / unique_flight_id
+            likelihood_file = sample_dir / f"{unique_flight_id}_LINK_LIKELIHOOD_WIND.pt"
+            
+            if not likelihood_file.exists():
+                print(f"Likelihood tensor not found for {unique_flight_id}, computing it...")
+                
+                # Check if required files exist for computation
+                transitions_file = sample_dir / f"{unique_flight_id}_REACHABLE_WIND.pkl"
+                forward_v_file = sample_dir / f"{unique_flight_id}_V_FWD_SPRSE_WIND.pt"
+                backward_v_file = sample_dir / f"{unique_flight_id}_V_BWD_SPRSE_WIND.pt"
+                
+                if not all([transitions_file.exists(), forward_v_file.exists(), backward_v_file.exists()]):
+                    print(f"Required files for likelihood computation not found for {unique_flight_id}")
+                    print(f"  Transitions: {transitions_file.exists()}")
+                    print(f"  Forward V: {forward_v_file.exists()}")
+                    print(f"  Backward V: {backward_v_file.exists()}")
+                    return False
+                
+                # Compute likelihood tensor
+                print(f"Computing likelihood tensor for {unique_flight_id}...")
+                gamma_value = self.config.get('gamma', 0)  # Default to 0 if not found
+                if gamma_value == 0:
+                    raise ValueError("Gamma value is 0, which is not allowed. Maybe the temperature is not available in template.yaml?")
+                print(f"Using gamma = {gamma_value} from config")
+
+                goal_node = flight_row.get('destination')
+                if not goal_node or not isinstance(goal_node, str):
+                    raise ValueError(f"Invalid or missing destination/goal node for flight {unique_flight_id}")
+
+                likelihood_tensor = compute_link_likelihood(
+                    base_directory=str(self.samples_dir),
+                    flight_id=unique_flight_id,
+                    graph_file_path=str(self.graph_file),
+                    goal_node=goal_node,
+                    gamma=gamma_value,
+                    save=True
+                )
+                
+                if likelihood_tensor is None:
+                    print(f"Failed to compute likelihood tensor for {unique_flight_id}")
+                    return False
+                    
+                print(f"Successfully computed likelihood tensor for {unique_flight_id}")
+            else:
+                # Load existing likelihood tensor
+                print(f"Loading existing likelihood tensor from: {likelihood_file}")
+                likelihood_tensor = torch.load(likelihood_file)
+            
+            # Parse original route
+            original_route = self.parse_route_waypoints(flight_row['route'])
+            route_string = ' '.join(original_route) if original_route else None
+            
+            # Set output path in plots directory
+            map_filename = f"{unique_flight_id}_likelihood_map.png"
+            save_path = self.plots_dir / map_filename
+            
+            # Render the likelihood map with route overlay
+            render_likelihood_map(
+                link_likelihood_tensor=likelihood_tensor,
+                graph_file_path=str(self.graph_file),
+                size_nm=cell_size_nm,
+                save_path=str(save_path),
+                smoothen=False,
+                route_string=route_string,
+                origin=flight_row['origin'],
+                destination=flight_row['destination'],
+                flight_id=unique_flight_id
+            )
+            
+            print(f"Likelihood map saved to: {save_path}")
+
+            raise ValueError("Stop here")
+            return True
+            
+        except Exception as e:
+            print(f"Error rendering likelihood map for {unique_flight_id}: {e}")
+            return False
         
     def calculate_map_bounds(self, all_lats: List[float], all_lons: List[float]) -> Tuple[float, float, float, float]:
         """Calculate appropriate map bounds with padding."""
@@ -318,7 +436,9 @@ class RouteVisualizer:
             lon_max + padding_lon
         )
         
-    def plot_flight_routes(self, flight_id: str, preview: bool = True, save_png: bool = False) -> bool:
+    def plot_flight_routes(self, flight_id: str, preview: bool = True, save_png: bool = False,
+                           n_sampled_trajectories: int = 50, show_best_trajectory: bool = False,
+                           render_likelihood_map: bool = False, cell_size_nm: float = 10.0) -> bool:
         """Plot original route and sampled trajectories for a single flight."""
         
         if not CARTOPY_AVAILABLE:
@@ -407,17 +527,17 @@ class RouteVisualizer:
         gl.top_labels = False
         gl.right_labels = False
         
-        # Plot original route in red
+        # Plot original route in blue
         original_route_label = 'Original Route'
         if original_route_cost is not None:
             original_route_label += f' (cost: {original_route_cost:.3f})'
             
         if len(orig_lats) > 1:
-            ax.plot(orig_lons, orig_lats, 'r-', linewidth=3, 
-                   transform=ccrs.PlateCarree(), label=original_route_label)
+            ax.plot(orig_lons, orig_lats, 'b:', linewidth=1.5, 
+                   transform=ccrs.PlateCarree(), label=original_route_label, zorder=4)
             
         # Plot waypoints
-        ax.scatter(orig_lons, orig_lats, c='red', s=50, marker='o', 
+        ax.scatter(orig_lons, orig_lats, c='blue', s=50, marker='o', 
                   transform=ccrs.PlateCarree(), zorder=5)
         
         # Find the lowest cost trajectory
@@ -432,7 +552,7 @@ class RouteVisualizer:
         
         # Plot the best trajectory first with special styling (always show it)
         best_trajectory_plotted = False
-        if best_trajectory is not None:
+        if show_best_trajectory and best_trajectory is not None:
             best_lats, best_lons = self.get_route_coordinates(best_trajectory)
             if len(best_lats) > 1:
                 ax.plot(best_lons, best_lats, color='darkgreen', linewidth=3, 
@@ -440,26 +560,42 @@ class RouteVisualizer:
                        label=f'Lowest Cost Path (cost: {best_cost:.3f})')
                 best_trajectory_plotted = True
         
-        # Plot other sampled trajectories in different colors
-        colors = ['blue', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+        # Setup colormap for sampled trajectories
+        cmap = None
+        norm = None
+        if cost_analysis and cost_analysis['total_trajectories'] > 0:
+            min_cost = cost_analysis['min_cost']
+            max_cost = cost_analysis['max_cost']
+            if min_cost == max_cost:
+                norm = plt.Normalize(vmin=min_cost - 1, vmax=max_cost + 1)
+            else:
+                norm = plt.Normalize(vmin=min_cost, vmax=max_cost)
+            # Use a reversed RdYlGn to have Green for low values and Red for high values
+            cmap = plt.get_cmap('RdYlGn_r')
         
         plotted_trajectories = 0
         
         for i, (cost, waypoints) in enumerate(sampled_trajectories):
-            if plotted_trajectories >= 15:  # Limit number of other trajectories to avoid clutter
+            if plotted_trajectories >= n_sampled_trajectories:  # Limit number of other trajectories to avoid clutter
                 break
                 
-            # Skip the best trajectory since we already plotted it
-            if waypoints == best_trajectory:
+            # Skip the best trajectory since we already plotted it with special style
+            if show_best_trajectory and waypoints == best_trajectory:
                 continue
                 
             traj_lats, traj_lons = self.get_route_coordinates(waypoints)
             
             if len(traj_lats) > 1:
-                color = colors[plotted_trajectories % len(colors)]
-                alpha = 0.5 if plotted_trajectories < 5 else 0.3  # Make first few more visible
+                if cmap and norm:
+                    color = cmap(norm(cost))
+                    alpha = 0.6
+                    linewidth = 1.2
+                else:  # Fallback
+                    color = 'grey'
+                    alpha = 0.25
+                    linewidth = 1.0
                 
-                ax.plot(traj_lons, traj_lats, color=color, linewidth=1.5, alpha=alpha,
+                ax.plot(traj_lons, traj_lats, color=color, linewidth=linewidth, alpha=alpha,
                        transform=ccrs.PlateCarree())
                 
                 plotted_trajectories += 1
@@ -486,8 +622,7 @@ class RouteVisualizer:
         
         # Create legend
         legend_elements = [
-            mpatches.Patch(color='red', label=original_route_label),
-            mpatches.Patch(color='blue', alpha=0.6, label=f'Sampled Trajectories ({len(sampled_trajectories)} total)'),
+            plt.Line2D([0], [0], color='blue', linestyle=':', linewidth=1.5, label=original_route_label),
             plt.Line2D([0], [0], marker='^', color='w', markerfacecolor='green', 
                       markersize=10, label='Origin'),
             plt.Line2D([0], [0], marker='s', color='w', markerfacecolor='red', 
@@ -496,24 +631,31 @@ class RouteVisualizer:
         
         # Add lowest cost path to legend if available
         if best_trajectory_plotted:
-            legend_elements.insert(2, plt.Line2D([0], [0], color='darkgreen', linewidth=3, 
+            legend_elements.insert(1, plt.Line2D([0], [0], color='darkgreen', linewidth=3, 
                                                linestyle='--', label=f'Lowest Cost Path ({best_cost:.3f})'))
         
         
         ax.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(1, 1))
         
+        # Add a colorbar if we used a colormap
+        if cmap and norm:
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+            sm.set_array([])
+            cbar = plt.colorbar(sm, ax=ax, orientation='vertical', fraction=0.03, pad=0.04)
+            cbar.set_label('Sampled Trajectory Cost')
+
         # Set title
-        title_text = f'Flight Routes: {unique_flight_id}\n{origin} → {destination}\n'
-        title_text += f'Original: {len(original_route)} waypoints'
-        if original_route_cost is not None:
-            title_text += f' (cost: {original_route_cost:.3f})'
-        title_text += f', Sampled: {plotted_trajectories} trajectories shown'
+        title_text = f'Flight Routes: {unique_flight_id}\n{origin} - {destination}\n'
+        # title_text += f'Original: {len(original_route)} waypoints'
+        # if original_route_cost is not None:
+        #     title_text += f' (cost: {original_route_cost:.3f})'
+        # title_text += f', Sampled: {plotted_trajectories} trajectories shown'
         
-        if best_trajectory is not None:
-            title_text += f'\nLowest cost trajectory: {best_cost:.3f} ({len(best_trajectory)} waypoints)'
-            if original_route_cost is not None and best_cost < original_route_cost:
-                improvement = ((original_route_cost - best_cost) / original_route_cost) * 100
-                title_text += f' ({improvement:.1f}% improvement)'
+        # if best_trajectory is not None:
+        #     title_text += f'\nLowest cost trajectory: {best_cost:.3f} ({len(best_trajectory)} waypoints)'
+        #     if original_route_cost is not None and best_cost < original_route_cost:
+        #         improvement = ((original_route_cost - best_cost) / original_route_cost) * 100
+        #         title_text += f' ({improvement:.1f}% improvement)'
         
         plt.title(title_text, fontsize=12, pad=20)
         
@@ -527,10 +669,21 @@ class RouteVisualizer:
             plt.show()
         else:
             plt.close()
+        
+        # Render likelihood map if requested
+        if render_likelihood_map:
+            print(f"Rendering likelihood map for {unique_flight_id}...")
+            likelihood_success = self.render_likelihood_map_for_flight(
+                unique_flight_id, flight_row, cell_size_nm=cell_size_nm
+            )
+            if not likelihood_success:
+                print(f"Failed to render likelihood map for {unique_flight_id}")
             
         return True
         
-    def plot_all_flights(self, preview: bool = False, save_png: bool = True, max_flights: Optional[int] = None):
+    def plot_all_flights(self, preview: bool = False, save_png: bool = True, max_flights: Optional[int] = None, 
+                         show_best_trajectory: bool = False, render_likelihood_map: bool = False, 
+                         cell_size_nm: float = 10.0):
         """Plot routes for all flights with trajectory data."""
         
         # Get list of flights with trajectory data (these should now be unique flight IDs)
@@ -549,7 +702,10 @@ class RouteVisualizer:
             print(f"Processing flight {i}/{total_flights}: {unique_flight_id}")
             
             try:
-                if self.plot_flight_routes(unique_flight_id, preview=preview and i <= 3, save_png=save_png):
+                if self.plot_flight_routes(unique_flight_id, preview=preview and i <= 3, save_png=save_png, 
+                                          show_best_trajectory=show_best_trajectory, 
+                                          render_likelihood_map=render_likelihood_map, 
+                                          cell_size_nm=cell_size_nm):
                     successful_plots += 1
                     
             except Exception as e:
@@ -689,6 +845,9 @@ def main():
     parser.add_argument("--all", action="store_true", help="Plot all flights (same as --save)")
     parser.add_argument("--analyze-costs", action="store_true", help="Show cost analysis for all flights")
     parser.add_argument("--calculate-original-cost", action="store_true", help="Calculate original route costs using cost model")
+    parser.add_argument("--show-best-trajectory", action="store_true", help="Highlight the lowest-cost trajectory.")
+    parser.add_argument("--render-likelihood-map", action="store_true", help="Render likelihood map for each flight with route overlay", default=True)
+    parser.add_argument("--cell-size-nm", type=float, default=10.0, help="Cell size in nautical miles for likelihood map rendering")
     
     args = parser.parse_args()
     
@@ -745,7 +904,10 @@ def main():
             success = visualizer.plot_flight_routes(
                 args.flight, 
                 preview=args.preview, 
-                save_png=args.save
+                save_png=args.save,
+                show_best_trajectory=args.show_best_trajectory,
+                render_likelihood_map=args.render_likelihood_map,
+                cell_size_nm=args.cell_size_nm
             )
             if not success:
                 print(f"Failed to plot flight {args.flight}")
@@ -756,7 +918,10 @@ def main():
             successful, failed = visualizer.plot_all_flights(
                 preview=args.preview,
                 save_png=args.save,
-                max_flights=args.max_flights
+                max_flights=args.max_flights,
+                show_best_trajectory=args.show_best_trajectory,
+                render_likelihood_map=args.render_likelihood_map,
+                cell_size_nm=args.cell_size_nm
             )
             
             if failed > 0:

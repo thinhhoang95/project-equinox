@@ -186,9 +186,10 @@ def amortize_wind_average(config: RunConfiguration, components: dict):
     delta_t_wall_clock_sec = 300.0  # 5 minutes
     max_flight_duration_hours = config.max_flight_duration_hours
     num_time_bins_wall_clock = int(max_flight_duration_hours * 3600 / delta_t_wall_clock_sec) + 1
-    estimated_takeoff_time_str = config.estimated_takeoff_time_str
-    takeoff_ssm = datestr_to_seconds_since_midnight(estimated_takeoff_time_str)
-    min_wall_clock_time_sec = float(takeoff_ssm)
+    # CRITICAL FIX: Use same time reference as tres_backward
+    estimated_landing_time_str = config.estimated_landing_time_str
+    estimated_landing_ssm = datestr_to_seconds_since_midnight(estimated_landing_time_str)
+    min_wall_clock_time_sec = float(estimated_landing_ssm - max_flight_duration_hours * 3600)
 
     node_coords_deg = components['node_coords_deg']
 

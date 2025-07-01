@@ -71,9 +71,9 @@ def sample_tres_trajectory(
     current_rho = initial_rho
     current_phase = initial_phase
 
-    # FOR DEBUGGING
-    print("WARNING: DEBUGGING MODE, setting current_k, current_rho, current_phase to 39, 36, 0")
-    print("*" * 100)
+    # FOR DEBUGGING (NOT USED ANYMORE)
+    # print("WARNING: DEBUGGING MODE, setting current_k, current_rho, current_phase to 39, 36, 0")
+    # print("*" * 100)
     # Find the last non-inf value of soft_cost_to_go[current_node_idx, :, current_rho, current_phase]
     cost_slice = soft_cost_to_go[current_node_idx, :, current_rho, current_phase]
     finite_mask = torch.isfinite(cost_slice)

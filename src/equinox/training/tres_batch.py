@@ -259,10 +259,11 @@ def process_flight(flight_series, config, components, case_name, batch_idx, outp
     logging.info(f"Amortizing wind for flight {flight_id}.")
     try:
         node_coords_deg = flight_components['node_coords_deg']
-        # The 'k' time bins in transitions are relative to a min_wall_clock_time_sec,
-        # which in the forward pass is the takeoff time in seconds since midnight.
-        takeoff_ssm = datestr_to_seconds_since_midnight(flight_config.takeoff_time_str)
-        min_wall_clock_time_sec = float(takeoff_ssm)
+        # CRITICAL FIX: The 'k' time bins in thinned_transitions are from the backward pass,
+        # which uses estimated_landing_ssm - max_flight_duration_hours * 3600 as the time reference.
+        # We must use the SAME time reference here to calculate correct wind times.
+        estimated_landing_ssm = datestr_to_seconds_since_midnight(flight_config.estimated_landing_time_str)
+        min_wall_clock_time_sec = float(estimated_landing_ssm - flight_config.max_flight_duration_hours * 3600)
         
         avg_tailwind_knots = flight_components['wind_model'].get_average_tailwind_on_edges_knots(
             transitions=thinned_transitions,

@@ -246,9 +246,10 @@ def amortize_wind_average():
     delta_t_wall_clock_sec = 300.0  # 5 minutes
     max_flight_duration_hours = 5.0
     num_time_bins_wall_clock = int(max_flight_duration_hours * 3600 / delta_t_wall_clock_sec) + 1
-    estimated_takeoff_time_str = "2023-04-01 10:15:00"
-    takeoff_ssm = datestr_to_seconds_since_midnight(estimated_takeoff_time_str)
-    min_wall_clock_time_sec = float(takeoff_ssm)
+    # CRITICAL FIX: Use same time reference as tres_backward
+    estimated_landing_time_str = "2023-04-01 12:00:00"
+    estimated_landing_ssm = datestr_to_seconds_since_midnight(estimated_landing_time_str)
+    min_wall_clock_time_sec = float(estimated_landing_ssm - max_flight_duration_hours * 3600)
 
     # Load the route graph
     G = nx.read_gml("data/graph/LEMD_EGLL_2023_04_01.gml")
@@ -354,8 +355,10 @@ def forward_svi(headless=False):
     elif not transitions:
         print("Warning: No transitions loaded. num_time_bins_wall_clock, num_rho_bins, num_phases derived as 1. This might be too small if transitions are expected.")
     
-    # Set min_wall_clock_time_sec to takeoff time
-    min_wall_clock_time_sec = float(takeoff_ssm)
+    # CRITICAL FIX: Use same time reference as tres_backward transitions
+    estimated_landing_time_str = "2023-04-01 12:00:00"
+    estimated_landing_ssm = datestr_to_seconds_since_midnight(estimated_landing_time_str)
+    min_wall_clock_time_sec = float(estimated_landing_ssm - max_flight_duration_hours * 3600)
 
     print(f"Calling forward_soft_value_iteration with:")
     print(f"  num_nodes: {num_nodes}")
@@ -526,8 +529,10 @@ def backward_svi(headless=False):
     num_rho_bins = max_rho_val + 1
     num_phases = max_phase_val + 1
     
-    # Set min_wall_clock_time_sec to takeoff time (anchor for k_idx calculations)
-    min_wall_clock_time_sec = float(takeoff_ssm)
+    # CRITICAL FIX: Use same time reference as tres_backward transitions (anchor for k_idx calculations)
+    estimated_landing_time_str = "2023-04-01 12:00:00"
+    estimated_landing_ssm = datestr_to_seconds_since_midnight(estimated_landing_time_str)
+    min_wall_clock_time_sec = float(estimated_landing_ssm - max_flight_duration_hours * 3600)
 
     print(f"Calling backward_soft_value_iteration with:")
     print(f"  num_nodes: {num_nodes}")
@@ -696,7 +701,11 @@ def test_tres_sampler(headless=True):
     from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight # Already imported
     takeoff_ssm = datestr_to_seconds_since_midnight(estimated_takeoff_time_str)
     
-    min_wall_clock_time_sec = float(takeoff_ssm)
+    # CRITICAL FIX: Use same time reference as tres_backward transitions
+    estimated_landing_time_str = "2023-04-01 12:00:00"
+    estimated_landing_ssm = datestr_to_seconds_since_midnight(estimated_landing_time_str)
+    max_flight_duration_hours = 5.0  # From test setup
+    min_wall_clock_time_sec = float(estimated_landing_ssm - max_flight_duration_hours * 3600)
     delta_t_wall_clock_sec = 300.0  # 5 minutes, from backward_svi test
 
     # Initial state parameters
