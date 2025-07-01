@@ -594,7 +594,7 @@ def render_likelihood_map(
     print(f"Non-zero cells: {(likelihood_grid > 0).sum()}")
 
     if smoothen:
-        likelihood_grid = gaussian_filter(likelihood_grid, sigma=1.0)
+        likelihood_grid = gaussian_filter(likelihood_grid, sigma=0.1)
         print(f"Smoothed grid. New max likelihood: {likelihood_grid.max():.6f}")
     
     # Exponential scaling for visualization
@@ -752,8 +752,8 @@ if __name__ == "__main__":
                        help="Path to save the likelihood map as PNG file")
     parser.add_argument("--load-existing", action="store_true",
                        help="Load existing likelihood tensor instead of computing")
-    parser.add_argument("--no-smooth", action="store_true", default=True,
-                        help="Disable smoothing of the likelihood map")
+    parser.add_argument("--smooth", action="store_true", default=False,
+                        help="Smooth the likelihood map")
     parser.add_argument("--route-string", type=str, default=None,
                        help="Route string to overlay on the map (space-separated waypoints)")
     parser.add_argument("--origin", type=str, default=None,
@@ -835,7 +835,7 @@ if __name__ == "__main__":
                 graph_file_path=args.graph_file,
                 size_nm=args.cell_size_nm,
                 save_path=args.save_map,
-                smoothen=not args.no_smooth,
+                smoothen=args.smooth,
                 route_string=args.route_string,
                 origin=args.origin,
                 destination=args.destination,

@@ -66,6 +66,14 @@ try:
 except ImportError as e:
     print(f"Warning: Likelihood map functionality not available: {e}")
     LIKELIHOOD_AVAILABLE = False
+
+# Try importing preference map functionality
+try:
+    from preference_map_infer import process_single_flight as process_preference_map
+    PREFERENCE_MAP_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Preference map functionality not available: {e}")
+    PREFERENCE_MAP_AVAILABLE = False
 DATA_DIR = PROJECT_ROOT / "data" / "cases" / CASE_NAME
 RESULTS_DIR = PROJECT_ROOT / "ronbun_experiments" / f"runs_{CASE_NAME}"
 
@@ -438,7 +446,8 @@ class RouteVisualizer:
         
     def plot_flight_routes(self, flight_id: str, preview: bool = True, save_png: bool = False,
                            n_sampled_trajectories: int = 50, show_best_trajectory: bool = False,
-                           render_likelihood_map: bool = False, cell_size_nm: float = 10.0) -> bool:
+                           render_likelihood_map: bool = False, render_preference_map: bool = False, 
+                           cell_size_nm: float = 10.0) -> bool:
         """Plot original route and sampled trajectories for a single flight."""
         
         if not CARTOPY_AVAILABLE:
@@ -678,12 +687,26 @@ class RouteVisualizer:
             )
             if not likelihood_success:
                 print(f"Failed to render likelihood map for {unique_flight_id}")
+        
+        # Render preference map if requested
+        if render_preference_map:
+            if not PREFERENCE_MAP_AVAILABLE:
+                print("Warning: Preference map functionality not available")
+            else:
+                print(f"Computing preference map for {unique_flight_id}...")
+                preference_success = process_preference_map(
+                    unique_flight_id, self.samples_dir, self.trajectories_dir, 
+                    self.csv_file, str(self.graph_file), self.plots_dir, 
+                    cell_size_nm, smoothen=False
+                )
+                if not preference_success:
+                    print(f"Failed to compute preference map for {unique_flight_id}")
             
         return True
         
     def plot_all_flights(self, preview: bool = False, save_png: bool = True, max_flights: Optional[int] = None, 
                          show_best_trajectory: bool = False, render_likelihood_map: bool = False, 
-                         cell_size_nm: float = 10.0):
+                         render_preference_map: bool = False, cell_size_nm: float = 10.0):
         """Plot routes for all flights with trajectory data."""
         
         # Get list of flights with trajectory data (these should now be unique flight IDs)
@@ -705,6 +728,7 @@ class RouteVisualizer:
                 if self.plot_flight_routes(unique_flight_id, preview=preview and i <= 3, save_png=save_png, 
                                           show_best_trajectory=show_best_trajectory, 
                                           render_likelihood_map=render_likelihood_map, 
+                                          render_preference_map=render_preference_map,
                                           cell_size_nm=cell_size_nm):
                     successful_plots += 1
                     
@@ -847,6 +871,7 @@ def main():
     parser.add_argument("--calculate-original-cost", action="store_true", help="Calculate original route costs using cost model")
     parser.add_argument("--show-best-trajectory", action="store_true", help="Highlight the lowest-cost trajectory.")
     parser.add_argument("--render-likelihood-map", action="store_true", help="Render likelihood map for each flight with route overlay", default=True)
+    parser.add_argument("--render-preference-map", action="store_true", help="Compute and render preference map for each flight")
     parser.add_argument("--cell-size-nm", type=float, default=10.0, help="Cell size in nautical miles for likelihood map rendering")
     
     args = parser.parse_args()
@@ -907,6 +932,7 @@ def main():
                 save_png=args.save,
                 show_best_trajectory=args.show_best_trajectory,
                 render_likelihood_map=args.render_likelihood_map,
+                render_preference_map=args.render_preference_map,
                 cell_size_nm=args.cell_size_nm
             )
             if not success:
@@ -921,6 +947,7 @@ def main():
                 max_flights=args.max_flights,
                 show_best_trajectory=args.show_best_trajectory,
                 render_likelihood_map=args.render_likelihood_map,
+                render_preference_map=args.render_preference_map,
                 cell_size_nm=args.cell_size_nm
             )
             
