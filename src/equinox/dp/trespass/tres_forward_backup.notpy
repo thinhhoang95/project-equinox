@@ -13,22 +13,6 @@ from typing import List, Tuple
 
 MPS_TO_KNOTS = 1.9438444924406  # 1.9438444924406 m/s to kts
 
-EPS_BIN_EPS = 1e-9  # small guard against float error
-
-def to_time_bin(ssm_val, min_ssm, dt, max_idx):
-    """Wall-clock bin (k): floor((η - min)/Δt). Returns -1 if out of range."""
-    x = (ssm_val - min_ssm) / dt
-    idx = int(np.floor(x + EPS_BIN_EPS))
-    return idx if 0 <= idx <= max_idx else -1
-
-def to_etto_bin(elapsed_sec, dt_etto, max_idx):
-    """Elapsed-since-TO (ε): floor(elapsed/Δt_etto) clamped to [0, max_idx]."""
-    if dt_etto <= 0:
-        return 0
-    idx = int(np.floor(elapsed_sec / dt_etto + EPS_BIN_EPS))
-    return max(0, min(idx, max_idx))
-
-
 # It's good practice to define default narrow body jet profiles here or pass them
 # For now, assuming they might be part of performance_model_params or loaded similarly
 # from equinox.vnav.vnav_profiles_rev1 import NARROW_BODY_JET_CLIMB_PROFILE, NARROW_BODY_JET_DESCENT_PROFILE, NARROW_BODY_JET_CLIMB_VS_PROFILE, NARROW_BODY_JET_DESCENT_VS_PROFILE
@@ -115,8 +99,14 @@ def tres_forward(
     # Determine the ETTO bin index that corresponds to the actual_max_climb_time_sec
     # This bin and any subsequent bins (due to max_etto_config_sec being larger) effectively represent cruise ETTO.
     if etto_delta_t_seconds > 0:
-        max_climb_etto_bin_idx = int(np.floor(actual_max_climb_time_sec / etto_delta_t_seconds + EPS_BIN_EPS))
-        max_climb_etto_bin_idx = min(max_climb_etto_bin_idx, num_etto_bins - 1)
+        max_climb_etto_bin_idx = int(
+            torch.round(
+                torch.tensor(actual_max_climb_time_sec / etto_delta_t_seconds)
+            ).item()
+        )
+        max_climb_etto_bin_idx = min(
+            max_climb_etto_bin_idx, num_etto_bins - 1
+        )  # Clamp to max defined bins
     else:  # Avoid division by zero if etto_delta_t_seconds is 0
         max_climb_etto_bin_idx = (
             0 if actual_max_climb_time_sec == 0 else num_etto_bins - 1
@@ -302,24 +292,22 @@ def tres_forward(
                 continue
 
             # Clock time bin index k_v for the successor v
-            k_v = to_time_bin(
-                eta_v_new.item(),
-                min_time_overall_seconds,
-                delta_t_seconds,
-                num_time_bins - 1,
-            )
-            if k_v == -1:
-                continue  # outside window
+            clock_time_since_first_bin_sec = eta_v_new.item() - min_time_overall_seconds
+            k_v = int(round(clock_time_since_first_bin_sec / delta_t_seconds))
+            if not (0 <= k_v < num_time_bins):
+                continue
 
             # ETTO bin index eps_v_idx for the successor v
             effective_etto_v_for_bin_idx_calc = min(
                 elapsed_time_v_sec, actual_max_climb_time_sec
             )
-            eps_v_idx = to_etto_bin(
-                effective_etto_v_for_bin_idx_calc,
-                etto_delta_t_seconds,
-                num_etto_bins - 1,
-            )
+            if etto_delta_t_seconds > 0:
+                eps_v_idx = int(
+                    round(effective_etto_v_for_bin_idx_calc / etto_delta_t_seconds)
+                )
+            else:
+                eps_v_idx = 0
+            eps_v_idx = max(0, min(eps_v_idx, num_etto_bins - 1))
 
             # Update reachable state info
             if (
