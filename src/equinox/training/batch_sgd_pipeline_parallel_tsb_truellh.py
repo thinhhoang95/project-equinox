@@ -44,7 +44,7 @@ import time
 import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Mapping
 from pathlib import Path
 import multiprocessing
 from tqdm import tqdm
@@ -77,15 +77,63 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+_WORKER_CONTEXT: Dict[str, Any] = {}
+
+
+def _init_worker(config_path: str, case_dir: str, device_str: str, gamma: float, debug_single_process: bool) -> None:
+    """Initialize per-worker shared context to avoid pickling large objects per task."""
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    torch.set_num_threads(1)
+    try:
+        torch.set_num_interop_threads(1)
+    except Exception:
+        pass
+
+    config = RunConfiguration.load_from_yaml(config_path)
+    graph, node_to_idx, idx_to_node, _ = config.load_graph()
+    dist_matrix = config.load_distance_matrix()
+    ac_matrix = config.load_charges_matrix()
+
+    device = torch.device(device_str)
+    if isinstance(dist_matrix, np.ndarray):
+        dist_matrix = torch.from_numpy(dist_matrix)
+    if isinstance(ac_matrix, np.ndarray):
+        ac_matrix = torch.from_numpy(ac_matrix)
+
+    dist_matrix = dist_matrix.to(device)
+    ac_matrix = ac_matrix.to(device)
+
+    global _WORKER_CONTEXT
+    _WORKER_CONTEXT = {
+        "graph": graph,
+        "node_to_idx": node_to_idx,
+        "idx_to_node": idx_to_node,
+        "dist_matrix": dist_matrix,
+        "ac_matrix": ac_matrix,
+        "num_nodes": len(graph.nodes()),
+        "device": device,
+        "case_dir": case_dir,
+        "cost_model_version": config.cost_model_version,
+        "gamma": gamma,
+        "debug_single_process": debug_single_process,
+    }
+
+
+def _get_worker_context() -> Dict[str, Any]:
+    if not _WORKER_CONTEXT:
+        raise RuntimeError("Worker context is not initialized. Pass _init_worker to ProcessPoolExecutor.")
+    return _WORKER_CONTEXT
+
 
 @dataclass
 class FlightGradientResult:
     """Result of gradient computation for a single flight."""
     flight_id: str
     takeoff_timestamp: int
-    gradient: torch.Tensor
-    empirical_counts: torch.Tensor
-    expected_counts: torch.Tensor
+    # Per-parameter gradients keyed by parameter name. Using names avoids any reliance on
+    # flattened-vector ordering, which can silently break if parameter registration order changes.
+    gradient: Dict[str, torch.Tensor]
     log_likelihood: float
     processing_time: float
     success: bool
@@ -113,11 +161,11 @@ class BatchLearningConfig:
     
     def __post_init__(self):
         if self.num_workers is None:
-            self.num_workers = max(1, multiprocessing.cpu_count() - 1)
+            max_workers = max(1, multiprocessing.cpu_count() - 1)
+            self.num_workers = max(1, min(self.batch_size, max_workers))
 
 
-def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: int, 
-                            components: Dict[str, Any]) -> Tuple[List, List, List, torch.Tensor]:
+def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: int) -> Tuple[List, List, List, torch.Tensor]:
     """
     Load pre-computed TRES results for a specific flight.
     
@@ -125,8 +173,6 @@ def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: i
         case_dir: Directory containing the case data
         flight_id: Flight identifier
         takeoff_timestamp: Takeoff timestamp
-        components: Shared components containing graph and node mappings
-        
     Returns:
         Tuple of (forward_transitions, backward_transitions, thinned_transitions, avg_tailwind_knots)
     """
@@ -214,13 +260,13 @@ def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: i
     return forward_transitions, backward_transitions, thinned_transitions, avg_tailwind_knots
 
 
-def compute_empirical_counts_for_flight(flight_data: pd.Series, node_to_idx: Dict[str, int], 
+def compute_empirical_counts_for_flight(flight_data: Mapping[str, Any], node_to_idx: Dict[str, int],
                                        num_nodes: int) -> torch.Tensor:
     """
     Compute empirical counts (actual route usage) for a single flight.
     
     Args:
-        flight_data: Flight data from the CSV
+        flight_data: Flight data mapping with a 'route' field
         node_to_idx: Mapping from waypoint names to indices
         num_nodes: Total number of waypoints
         
@@ -246,24 +292,104 @@ def compute_empirical_counts_for_flight(flight_data: pd.Series, node_to_idx: Dic
     return empirical_counts
 
 
+def _scalar_from_state_dict(state_dict: Dict[str, torch.Tensor], key: str, default: float) -> float:
+    """Best-effort extraction of a scalar float from a model state_dict."""
+    v = state_dict.get(key, None)
+    if isinstance(v, torch.Tensor) and v.numel() == 1:
+        return float(v.detach().cpu().item())
+    return float(default)
+
+
+def _build_cost_model_from_state_dict(
+    *,
+    cost_model_version: str,
+    num_waypoints: int,
+    device: torch.device,
+    cost_model_state: Dict[str, torch.Tensor],
+) -> torch.nn.Module:
+    """
+    Construct a cost model instance and load weights from `cost_model_state`.
+
+    Note on betas:
+    - The beta coefficients are intentionally kept FIXED (requires_grad=False) to avoid an
+      ill-defined scale ambiguity between beta weights and the learned functionals (PLMs / preferences).
+    - We therefore treat betas as part of the model definition/state and do not thread them through
+      the training pipeline as separate "hyperparameters" that might accidentally drift.
+    """
+    cost_model_class = get_cost_model_class(cost_model_version)
+
+    # Provide placeholder constructor arguments. For cost model versions that register these
+    # as Parameters/Buffers, `load_state_dict` will overwrite them with the authoritative values.
+    # For versions that ignore betas (e.g., CostRev3/4), these are ignored by design.
+    beta0 = _scalar_from_state_dict(cost_model_state, "beta0", 0.0)
+    beta1 = _scalar_from_state_dict(cost_model_state, "beta1", 1.0)
+    beta2 = _scalar_from_state_dict(cost_model_state, "beta2", 1.0)
+    beta3 = _scalar_from_state_dict(cost_model_state, "beta3", 0.0)
+    alpha_pref_reg = _scalar_from_state_dict(cost_model_state, "alpha_pref_reg", 1.0)
+
+    cost_model = cost_model_class(
+        beta0=beta0,
+        beta1=beta1,
+        beta2=beta2,
+        beta3=beta3,
+        num_waypoints=num_waypoints,
+        alpha_pref_reg=alpha_pref_reg,
+        device=device,
+    )
+    cost_model.load_state_dict(cost_model_state)
+    cost_model.to(device)
+    return cost_model
+
+
+def _vector_to_named_grads(
+    grad_vector: torch.Tensor,
+    model: torch.nn.Module,
+) -> Dict[str, torch.Tensor]:
+    """
+    Convert a flattened gradient vector to a name-keyed gradient dict based on the model's
+    current `named_parameters()` order (restricted to `requires_grad=True`).
+
+    This must match the flattening order used by `backward_gradient_pass`, which iterates
+    `cost_model.parameters()`; PyTorch guarantees `parameters()` and `named_parameters()`
+    traverse parameters in the same registration order.
+    """
+    grads: Dict[str, torch.Tensor] = {}
+    idx = 0
+    total = int(grad_vector.numel())
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        n = int(param.numel())
+        if idx + n > total:
+            raise ValueError(
+                f"Gradient vector too short while slicing '{name}': need {idx+n} elems, have {total}"
+            )
+        grads[name] = grad_vector[idx: idx + n].view_as(param).detach()
+        idx += n
+
+    if idx != total:
+        raise ValueError(f"Gradient vector has {total} elems but only consumed {idx} elems from model parameters")
+
+    return grads
+
+
 def _run_forward_svi_wrapper(args):
     """Wrapper function for multiprocessing forward SVI."""
     (state_transitions, avg_tailwind_knots, G, idx_to_node, origin_node_idx, 
      cost_model_state, num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases, 
      distance_matrix_d, airspace_charge_matrix_ac, device_str, gamma,
-     beta0, beta1, beta2, beta3, alpha_pref_reg, cost_model_version) = args
+     cost_model_version) = args
     
     device = torch.device(device_str)
     
     # Reconstruct cost model from state dict
-    cost_model_class = get_cost_model_class(cost_model_version)
-
-    cost_model = cost_model_class(
-        beta0=beta0, beta1=beta1, beta2=beta2, beta3=beta3,
-        num_waypoints=num_nodes, alpha_pref_reg=alpha_pref_reg, device=device
+    cost_model = _build_cost_model_from_state_dict(
+        cost_model_version=cost_model_version,
+        num_waypoints=num_nodes,
+        device=device,
+        cost_model_state=cost_model_state,
     )
-    cost_model.load_state_dict(cost_model_state)
-    cost_model.to(device)
 
     # Convert np.arrays to tensors if needed
     if isinstance(avg_tailwind_knots, np.ndarray):
@@ -304,19 +430,17 @@ def _run_backward_svi_wrapper(args):
     (state_transitions, avg_tailwind_knots, G, idx_to_node, goal_node_idx, 
      cost_model_state, num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases, 
      distance_matrix_d, airspace_charge_matrix_ac, device_str, gamma,
-     beta0, beta1, beta2, beta3, alpha_pref_reg, cost_model_version) = args
+     cost_model_version) = args
     
     device = torch.device(device_str)
     
     # Reconstruct cost model from state dict
-    cost_model_class = get_cost_model_class(cost_model_version)
-
-    cost_model = cost_model_class(
-        beta0=beta0, beta1=beta1, beta2=beta2, beta3=beta3,
-        num_waypoints=num_nodes, alpha_pref_reg=alpha_pref_reg, device=device
+    cost_model = _build_cost_model_from_state_dict(
+        cost_model_version=cost_model_version,
+        num_waypoints=num_nodes,
+        device=device,
+        cost_model_state=cost_model_state,
     )
-    cost_model.load_state_dict(cost_model_state)
-    cost_model.to(device)
 
     # Convert np.arrays to tensors if needed
     if isinstance(avg_tailwind_knots, np.ndarray):
@@ -352,71 +476,54 @@ def _run_backward_svi_wrapper(args):
     return v_b.cpu()
 
 
-def process_single_flight(flight_data: pd.Series,
-                         components: Dict[str, Any], 
-                         batch_config: BatchLearningConfig,
-                         case_dir: str,
-                         cost_model_state: Dict[str, torch.Tensor] = None,
-                         cost_model_params: Dict[str, float] = None,
-                         debug_this_flight: bool = False) -> FlightGradientResult:
+def process_single_flight(
+    flight_data: Mapping[str, Any],
+    cost_model_state: Optional[Dict[str, torch.Tensor]] = None,
+    debug_this_flight: bool = False,
+) -> FlightGradientResult:
     """
     Process a single flight through the complete pipeline.
     
     Args:
-        flight_data: Flight data from CSV
-        config: Run configuration
-        components: Shared components (graph, models, etc.)
-        batch_config: Batch learning configuration
-        case_dir: Case directory path
+        flight_data: Flight data mapping
         cost_model_state: Serialized state of the cost model for multiprocessing
-        cost_model_params: Parameters of the cost model for multiprocessing
         
     Returns:
         FlightGradientResult containing gradients and metadata
     """
     start_time = time.time()
     flight_id = flight_data['flight_id']
-    takeoff_timestamp = int(flight_data['takeoff_time'])
-    
-    device = components['device']
+    takeoff_timestamp = int(flight_data['takeoff_timestamp'])
 
-    # If running in a worker process, reconstruct the cost model
-    if cost_model_state and cost_model_params:
-        cost_model_version = components['cost_model_version']
-        cost_model_class = get_cost_model_class(cost_model_version)
-            
-        cost_model = cost_model_class(
-            beta0=cost_model_params['beta0'],
-            beta1=cost_model_params['beta1'],
-            beta2=cost_model_params['beta2'],
-            beta3=0.0,
-            # beta3=cost_model_params['beta3'],
-            num_waypoints=components['num_nodes'],
-            alpha_pref_reg=cost_model_params['alpha_pref_reg'],
-            device=device
-        )
-        cost_model.load_state_dict(cost_model_state)
-        cost_model.to(device)
-        # make sure the same set of parameters is trainable
-        for p in cost_model.parameters():
-            p.requires_grad = True
-    else:
-        cost_model = components['cost_model']
+    ctx = _get_worker_context()
+    device = ctx['device']
+    gamma = ctx['gamma']
+    case_dir = ctx['case_dir']
+
+    if cost_model_state is None:
+        raise ValueError("cost_model_state is required to process a flight in worker mode.")
+
+    # Reconstruct the cost model from the provided state dict.
+    cost_model_version = ctx['cost_model_version']
+    cost_model = _build_cost_model_from_state_dict(
+        cost_model_version=cost_model_version,
+        num_waypoints=ctx['num_nodes'],
+        device=device,
+        cost_model_state=cost_model_state,
+    )
 
     try:
         # 1. Load TRES results
         logger.info(f"Processing flight {flight_id}")
         forward_transitions, backward_transitions, thinned_transitions, avg_tailwind_knots = load_flight_tres_results(
-            case_dir, flight_id, takeoff_timestamp, components
+            case_dir, flight_id, takeoff_timestamp
         )
         
         if not thinned_transitions:
             return FlightGradientResult(
                 flight_id=flight_id,
                 takeoff_timestamp=takeoff_timestamp,
-                gradient=torch.zeros(1),
-                empirical_counts=torch.zeros(1),
-                expected_counts=torch.zeros(1),
+                gradient={},
                 log_likelihood=0.0,
                 processing_time=time.time() - start_time,
                 success=False,
@@ -431,74 +538,76 @@ def process_single_flight(flight_data: pd.Series,
         num_time_bins_wall_clock = max_k_val + 1
         num_rho_bins = max_rho_val + 1
         num_phases = max_phase_val + 1
-        num_nodes = components['num_nodes']
+        num_nodes = ctx['num_nodes']
         
         # 3. Wind data is now pre-loaded, so this section is simplified.
         logger.debug(f"Flight {flight_id}: Using pre-computed wind for {len(thinned_transitions)} thinned transitions")
         
         # 4. Get origin and goal indices for this flight
-        origin_node_idx = components['node_to_idx'][flight_data['origin']]
-        goal_node_idx = components['node_to_idx'][flight_data['destination']]
-        
-        # 5. Prepare arguments for parallel SVI
-        device_str = str(device)
-        current_cost_model_state = cost_model.state_dict()
-        cost_model_version = components['cost_model_version']
-        
-        forward_args = (
-            thinned_transitions, avg_tailwind_knots, components['graph'], 
-            components['idx_to_node'], origin_node_idx, current_cost_model_state,
-            num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases,
-            components['dist_matrix'], components['ac_matrix'], device_str, batch_config.gamma,
-            0.0, 1.0, 1.0, # beta0, beta1, beta2
-            0.0, cost_model.alpha_pref_reg, cost_model_version
+        origin_node_idx = ctx['node_to_idx'][flight_data['origin']]
+        goal_node_idx = ctx['node_to_idx'][flight_data['destination']]
+
+        # 5. Run forward and backward SVI sequentially within this worker
+        if isinstance(avg_tailwind_knots, np.ndarray):
+            avg_tailwind_knots = torch.from_numpy(avg_tailwind_knots)
+        avg_tailwind_knots = avg_tailwind_knots.to(device)
+
+        v_f = forward_soft_value_iteration(
+            state_transitions=thinned_transitions,
+            avg_tailwind_knots_per_transition=avg_tailwind_knots,
+            G=ctx['graph'],
+            idx_to_node=ctx['idx_to_node'],
+            origin_node_idx=origin_node_idx,
+            cost_model=cost_model,
+            num_nodes=num_nodes,
+            num_time_bins_wall_clock=num_time_bins_wall_clock,
+            num_rho_bins=num_rho_bins,
+            num_phases=num_phases,
+            distance_matrix_d=ctx['dist_matrix'],
+            airspace_charge_matrix_ac=ctx['ac_matrix'],
+            device=device,
+            gamma=gamma,
+            verbose=False
+        )
+
+        v_b, _ = backward_soft_value_iteration(
+            state_transitions=thinned_transitions,
+            avg_tailwind_knots_per_transition=avg_tailwind_knots,
+            G=ctx['graph'],
+            idx_to_node=ctx['idx_to_node'],
+            goal_node_idx=goal_node_idx,
+            cost_model=cost_model,
+            num_nodes=num_nodes,
+            num_time_bins_wall_clock=num_time_bins_wall_clock,
+            num_rho_bins=num_rho_bins,
+            num_phases=num_phases,
+            distance_matrix_d=ctx['dist_matrix'],
+            airspace_charge_matrix_ac=ctx['ac_matrix'],
+            device=device,
+            gamma=gamma,
+            verbose=False
         )
         
-        backward_args = (
-            thinned_transitions, avg_tailwind_knots, components['graph'], 
-            components['idx_to_node'], goal_node_idx, current_cost_model_state,
-            num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases,
-            components['dist_matrix'], components['ac_matrix'], device_str, batch_config.gamma,
-            0.0, 1.0, 1.0, # beta0, beta1, beta2
-            0.0, cost_model.alpha_pref_reg, cost_model_version # replace with cost_model.beta3.item() when necessary
-        )
-        
-        # 6. Run forward and backward SVI
-        if batch_config.debug_single_process:
-            logger.info(f"Running SVI sequentially for flight {flight_id} (debug mode)")
-            v_f = _run_forward_svi_wrapper(forward_args)
-            v_b = _run_backward_svi_wrapper(backward_args)
-        else:
-            with ProcessPoolExecutor(max_workers=2) as executor:
-                future_forward = executor.submit(_run_forward_svi_wrapper, forward_args)
-                future_backward = executor.submit(_run_backward_svi_wrapper, backward_args)
-                
-                v_f = future_forward.result()
-                v_b = future_backward.result()
-        
-        
-        # 7. Move results to device and compute empirical counts
-        v_f = v_f.to(device)
-        v_b = v_b.to(device)
+        # 6. Compute empirical counts
         
         empirical_counts = compute_empirical_counts_for_flight(
-            flight_data, components['node_to_idx'], num_nodes
+            flight_data, ctx['node_to_idx'], num_nodes
         ).to(device)
         
-        # 8. Compute gradients using backward gradient pass
+        # 7. Compute gradients using backward gradient pass
         expected_counts, gradient, log_partition_z_tensor = backward_gradient_pass(
             state_transitions=thinned_transitions,
-            avg_tailwind_knots_per_transition=avg_tailwind_knots.to(device),
+            avg_tailwind_knots_per_transition=avg_tailwind_knots,
             V_f=v_f,
             V_b=v_b,
             cost_model=cost_model,
             empirical_counts=empirical_counts,
             origin_node_idx=origin_node_idx,
             num_nodes=num_nodes,
-            distance_matrix_d=components['dist_matrix'],
-            airspace_charge_matrix_ac=components['ac_matrix'],
+            distance_matrix_d=ctx['dist_matrix'],
+            airspace_charge_matrix_ac=ctx['ac_matrix'],
             device=device,
-            gamma=batch_config.gamma,
+            gamma=gamma,
             verbose=False
         )
 
@@ -530,8 +639,8 @@ def process_single_flight(flight_data: pd.Series,
         #             emp_count = empirical_values[idx].item()
         #             exp_count = expected_values[idx].item()
                     
-        #             from_node = components['idx_to_node'][from_idx]
-        #             to_node = components['idx_to_node'][to_idx]
+        #             from_node = ctx['idx_to_node'][from_idx]
+        #             to_node = ctx['idx_to_node'][to_idx]
                     
         #             # Calculate ratio to see if expected is catching up to empirical
         #             ratio = exp_count / emp_count if emp_count > 0 else 0.0
@@ -553,8 +662,8 @@ def process_single_flight(flight_data: pd.Series,
         #         emp_count = empirical_counts[from_idx, to_idx].item()
         #         exp_count = expected_counts[from_idx, to_idx].item()
                 
-        #         from_node = components['idx_to_node'][from_idx.item()]
-        #         to_node = components['idx_to_node'][to_idx.item()]
+        #         from_node = ctx['idx_to_node'][from_idx.item()]
+        #         to_node = ctx['idx_to_node'][to_idx.item()]
                 
         #         logger.info(f"  {i+1}. {from_node:8s} -> {to_node:8s} | "
         #                    f"Empirical: {emp_count:.3e} | Expected: {exp_count:.3e}")
@@ -562,7 +671,7 @@ def process_single_flight(flight_data: pd.Series,
         #     logger.info(f"=== END DEBUGGING COUNTS FOR FLIGHT {flight_id} ===\n")
 
         # For debugging, save the expected counts and the soft value functions to a file to be inspected externally
-        if batch_config.debug_single_process:
+        if ctx['debug_single_process'] and debug_this_flight:
             import pickle
             with open(f"expected_counts_{flight_id}.pkl", "wb") as f:
                 pickle.dump(expected_counts.cpu().numpy(), f)
@@ -583,9 +692,9 @@ def process_single_flight(flight_data: pd.Series,
         for i in range(len(waypoints) - 1):
             from_wp = waypoints[i]
             to_wp = waypoints[i + 1]
-            if from_wp in components['node_to_idx'] and to_wp in components['node_to_idx']:
-                from_idx = components['node_to_idx'][from_wp]
-                to_idx = components['node_to_idx'][to_wp]
+            if from_wp in ctx['node_to_idx'] and to_wp in ctx['node_to_idx']:
+                from_idx = ctx['node_to_idx'][from_wp]
+                to_idx = ctx['node_to_idx'][to_wp]
                 empirical_route_links.append((from_idx, to_idx))
 
         transitions_by_link = defaultdict(list)
@@ -606,8 +715,8 @@ def process_single_flight(flight_data: pd.Series,
                     
                     link_cost = cost_model(
                         (edge_u_indices, edge_v_indices),
-                        components['dist_matrix'],
-                        components['ac_matrix'],
+                        ctx['dist_matrix'],
+                        ctx['ac_matrix'],
                         avg_tailwind_for_link.to(device).unsqueeze(0)
                     ).item()
                     
@@ -625,22 +734,29 @@ def process_single_flight(flight_data: pd.Series,
         else:
             # log p(xi) = -c(xi) - log Z. Note that log_partition_z is already V, so it's -gamma*logZ.
             # We want log(p(xi)) = -c(xi)/gamma - log(Z). log_partition_z = V_b(origin), and log(Z) = -V_b(origin)/gamma
-            log_likelihood = (-c_xi / batch_config.gamma) - (-log_partition_z / batch_config.gamma)
-            log_likelihood = (-c_xi + log_partition_z) / batch_config.gamma
+            log_likelihood = (-c_xi / gamma) - (-log_partition_z / gamma)
+            log_likelihood = (-c_xi + log_partition_z) / gamma
         
-        # Validate gradient dimensions
-        expected_grad_size = sum(p.numel() for p in components['cost_model'].parameters() if p.requires_grad)
-        if gradient.numel() != expected_grad_size:
-            logger.warning(f"Gradient size mismatch for flight {flight_id}: expected {expected_grad_size}, got {gradient.numel()}")
+        # Convert to name-keyed gradients for robust application in the main process.
+        try:
+            gradient_by_name = _vector_to_named_grads(gradient, cost_model)
+        except Exception as e:
+            return FlightGradientResult(
+                flight_id=flight_id,
+                takeoff_timestamp=takeoff_timestamp,
+                gradient={},
+                log_likelihood=0.0,
+                processing_time=time.time() - start_time,
+                success=False,
+                error_message=f"Gradient vector-to-name mapping failed: {e}"
+            )
         
         processing_time = time.time() - start_time
         
         return FlightGradientResult(
             flight_id=flight_id,
             takeoff_timestamp=takeoff_timestamp,
-            gradient=gradient.cpu(),
-            empirical_counts=empirical_counts.cpu(),
-            expected_counts=expected_counts.cpu(),
+            gradient={k: v.cpu() for k, v in gradient_by_name.items()},
             log_likelihood=log_likelihood,
             processing_time=processing_time,
             success=True
@@ -652,9 +768,7 @@ def process_single_flight(flight_data: pd.Series,
         return FlightGradientResult(
             flight_id=flight_id,
             takeoff_timestamp=takeoff_timestamp,
-            gradient=torch.zeros(1),
-            empirical_counts=torch.zeros(1),
-            expected_counts=torch.zeros(1),
+            gradient={},
             log_likelihood=0.0,
             processing_time=time.time() - start_time,
             success=False,
@@ -817,9 +931,10 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     components['device'] = device
     components['cost_model'] = components['cost_model'].to(device)
     
-    # Ensure cost model parameters require gradients
-    for param in components['cost_model'].parameters():
-        param.requires_grad = True
+    # IMPORTANT: Do NOT blanket-enable gradients for all parameters.
+    # The beta coefficients are intentionally kept fixed to avoid an ill-defined scaling
+    # between betas and the learned functionals. Cost model implementations should mark
+    # betas (and other fixed scalars) with requires_grad=False.
     
     # Setup optimizer
     optimizer = torch.optim.Adam(
@@ -831,6 +946,8 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     logger.info(f"Using device: {device}")
     num_trainable_params = sum(p.numel() for p in components['cost_model'].parameters() if p.requires_grad)
     logger.info(f"Cost model has {num_trainable_params} trainable parameters")
+    if num_trainable_params == 0:
+        logger.warning("Cost model has 0 trainable parameters (requires_grad=True). Training will be a no-op.")
     
     # 2. Load flight data and create batches
     flights_csv = os.path.join(case_dir, "tres_runs", "all_routes_feasibly_snapped.csv")
@@ -843,7 +960,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     logger.info(f"Created {num_batches} batches of flights.")
     
     # 3. Initialize tracking variables and handle checkpoint resumption
-    gradient_queue = []
+    gradient_queue: List[Dict[str, torch.Tensor]] = []
     iteration = 0
     converged = False
     training_history = {
@@ -894,7 +1011,11 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     logger.info("Starting main training loop")
     
     # Create a single pool of workers for parallel flight processing
-    with ProcessPoolExecutor(max_workers=batch_config.num_workers) as executor:
+    with ProcessPoolExecutor(
+        max_workers=batch_config.num_workers,
+        initializer=_init_worker,
+        initargs=(config_path, case_dir, str(device), batch_config.gamma, batch_config.debug_single_process),
+    ) as executor:
         while iteration <= batch_config.max_iterations and not converged:
             iteration_start_time = time.time()
             
@@ -921,15 +1042,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 logger.info(f"Processing sequential batch {batch_idx + 1}/{num_batches} with {len(batch_flights)} flights")
             
             # Get current model state to be used by all flights in this batch
-            cost_model_state = components['cost_model'].state_dict()
-            cost_model_params = {
-                'beta0': 0.0,
-                # 'beta0': components['cost_model'].beta0.item(),
-                'beta1': 1.0,
-                'beta2': 1.0,
-                # 'beta3': components['cost_model'].beta3.item(),
-                'alpha_pref_reg': components['cost_model'].alpha_pref_reg,
-            }
+            cost_model_state = {k: v.detach().cpu() for k, v in components['cost_model'].state_dict().items()}
 
             # Process flights in the batch in parallel
             batch_results = []
@@ -938,13 +1051,16 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             tasks = []
             flight_list = list(batch_flights.iterrows())
             for i, (_, flight_data) in enumerate(flight_list):
-                # Note: 'components' is passed, but the cost_model inside it will be stale.
-                # The correct, up-to-date model is passed via cost_model_state.
                 # Set debug flag for only the last flight in the batch
                 debug_this_flight = (i == len(flight_list) - 1)
-                tasks.append(
-                    (flight_data, components, batch_config, case_dir, cost_model_state, cost_model_params, debug_this_flight)
-                )
+                flight_payload = {
+                    "flight_id": flight_data["flight_id"],
+                    "takeoff_timestamp": int(flight_data["takeoff_time"]),
+                    "origin": flight_data["origin"],
+                    "destination": flight_data["destination"],
+                    "route": flight_data["route"],
+                }
+                tasks.append((flight_payload, cost_model_state, debug_this_flight))
 
             # Use the executor to run flight processing in parallel
             future_results = executor.map(_process_flight_wrapper, tasks)
@@ -967,29 +1083,40 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             # Apply gradient update after the entire batch is processed
             gradient_norm = 0.0
             if gradient_queue:
-                # Average gradients in the queue
-                avg_gradient = (
-                    torch.stack(gradient_queue)
-                         .mean(dim=0)
-                         .to(device=device, dtype=torch.float32)
-                )
-                # gradient_norm = torch.max(torch.abs(avg_gradient)).item()
-                gradient_norm = torch.norm(avg_gradient, p=2).item()
-                
+                # Average gradients by parameter NAME to avoid any dependence on parameter ordering.
+                trainable_named_params = [
+                    (name, param) for name, param in components['cost_model'].named_parameters()
+                    if param.requires_grad
+                ]
+                trainable_names = [n for n, _ in trainable_named_params]
+
+                # Initialize sums on the target device
+                grad_sums: Dict[str, torch.Tensor] = {
+                    name: torch.zeros_like(param, device=device, dtype=torch.float32)
+                    for name, param in trainable_named_params
+                }
+
+                # Accumulate
+                for grad_dict in gradient_queue:
+                    for name, _ in trainable_named_params:
+                        if name not in grad_dict:
+                            raise KeyError(
+                                f"Missing gradient for parameter '{name}'. "
+                                f"Expected keys: {trainable_names}. Got keys: {list(grad_dict.keys())}"
+                            )
+                        grad_sums[name] += grad_dict[name].to(device=device, dtype=torch.float32)
+
+                denom = float(len(gradient_queue))
+                avg_grads: Dict[str, torch.Tensor] = {name: g / denom for name, g in grad_sums.items()}
+
+                # Gradient norm (L2 over concatenated parameters)
+                gradient_norm = float(torch.sqrt(sum((g.float() ** 2).sum() for g in avg_grads.values())).item())
+
                 # Apply gradient update
                 optimizer.zero_grad()
-                
-                # Manually set gradients
-                param_idx = 0
-                for param in components['cost_model'].parameters():
-                    if param.requires_grad:
-                        param_size = param.numel()
-                        param.grad = (
-                            avg_gradient[param_idx: param_idx + param_size]
-                            .view(param.shape)
-                            .to(dtype=param.dtype)
-                        )
-                        param_idx += param_size
+
+                for name, param in trainable_named_params:
+                    param.grad = avg_grads[name].to(dtype=param.dtype)
                 
                 optimizer.step()
                 
@@ -1022,7 +1149,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             if tensorboard_writer is not None and iteration % batch_config.log_interval == 0:
                 # Training metrics
                 tensorboard_writer.add_scalar('Training/Average_Log_Likelihood', avg_log_likelihood, iteration)
-                tensorboard_writer.add_scalar('Training/Gradient_Norm_Linf', gradient_norm, iteration)
+                tensorboard_writer.add_scalar('Training/Gradient_Norm_L2', gradient_norm, iteration)
                 tensorboard_writer.add_scalar('Training/Learning_Rate', batch_config.learning_rate, iteration)
                 
                 # Flight processing metrics
@@ -1244,7 +1371,7 @@ def main():
         "--learning-rate", 
         type=float, 
         default=1e-5,
-        help="Learning rate for SGD (default: 1e-6)"
+        help="Learning rate for SGD (default: 1e-5)"
     )
     parser.add_argument(
         "--max-iterations", 
