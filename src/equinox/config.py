@@ -15,6 +15,7 @@ def get_cost_model_class(cost_model_version: str) -> Type[torch.nn.Module]:
     from equinox.cost.cost_rev4 import CostRev4
     from equinox.cost.cost_rev4_lite import CostRev4Lite
     from equinox.cost.cost_rev4_ronbun1 import CostRev4Ronbun1
+    from equinox.cost.cost_linear_disentangled import CostLinearDisentangled
 
     if cost_model_version == "2reg":
         return CostRev2
@@ -26,6 +27,8 @@ def get_cost_model_class(cost_model_version: str) -> Type[torch.nn.Module]:
         return CostRev4Lite
     elif cost_model_version == '4rb1':
         return CostRev4Ronbun1
+    elif cost_model_version == "lin_disent":
+        return CostLinearDisentangled
     else:
         raise ValueError(f"Unsupported cost model version: {cost_model_version}")
 

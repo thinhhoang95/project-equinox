@@ -65,6 +65,13 @@ from src.equinox.dp.trespass.amorwin.forward_svi_log_temp import forward_soft_va
 from src.equinox.dp.trespass.amorwin.backward_svi_log_cost_temp import backward_soft_value_iteration
 from src.equinox.dp.trespass.amorwin.backward_gradient import backward_gradient_pass
 from src.equinox.wind.batch_wind_model import get_flight_batches
+from src.equinox.preferences.disentanglement import (
+    build_edge_list,
+    build_feature_matrix,
+    compute_empirical_counts_from_routes,
+    d_weighted_normalize_features,
+    PreferenceProjector,
+)
 
 # Setup logging
 logging.basicConfig(
@@ -104,6 +111,14 @@ def _init_worker(config_path: str, case_dir: str, device_str: str, gamma: float,
     dist_matrix = dist_matrix.to(device)
     ac_matrix = ac_matrix.to(device)
 
+    pref_enabled = config.cost_model_version == "lin_disent"
+    edge_u = None
+    edge_v = None
+    if pref_enabled:
+        edge_u, edge_v = build_edge_list(graph, node_to_idx)
+        edge_u = edge_u.to(device)
+        edge_v = edge_v.to(device)
+
     global _WORKER_CONTEXT
     _WORKER_CONTEXT = {
         "graph": graph,
@@ -117,6 +132,9 @@ def _init_worker(config_path: str, case_dir: str, device_str: str, gamma: float,
         "cost_model_version": config.cost_model_version,
         "gamma": gamma,
         "debug_single_process": debug_single_process,
+        "pref_enabled": pref_enabled,
+        "edge_u": edge_u,
+        "edge_v": edge_v,
     }
 
 
@@ -134,6 +152,7 @@ class FlightGradientResult:
     # Per-parameter gradients keyed by parameter name. Using names avoids any reliance on
     # flattened-vector ordering, which can silently break if parameter registration order changes.
     gradient: Dict[str, torch.Tensor]
+    pref_grad_e: Optional[torch.Tensor]
     log_likelihood: float
     processing_time: float
     success: bool
@@ -145,6 +164,8 @@ class BatchLearningConfig:
     """Configuration for batch learning parameters."""
     batch_size: int = 5
     learning_rate: float = 1e-6
+    pref_learning_rate: float = 1e-2
+    pref_projection_ridge: float = 1e-8
     max_iterations: int = 100
     convergence_threshold: float = 1e-4
     checkpoint_interval: int = 10
@@ -524,6 +545,7 @@ def process_single_flight(
                 flight_id=flight_id,
                 takeoff_timestamp=takeoff_timestamp,
                 gradient={},
+                pref_grad_e=None,
                 log_likelihood=0.0,
                 processing_time=time.time() - start_time,
                 success=False,
@@ -610,6 +632,14 @@ def process_single_flight(
             gamma=gamma,
             verbose=False
         )
+
+        pref_grad_e = None
+        if ctx.get("pref_enabled"):
+            edge_u = ctx.get("edge_u")
+            edge_v = ctx.get("edge_v")
+            if edge_u is None or edge_v is None:
+                raise RuntimeError("Preference edges missing in worker context.")
+            pref_grad_e = (empirical_counts[edge_u, edge_v] - expected_counts[edge_u, edge_v]) / gamma
 
         # 8.5 Debugging: Print top links with highest empirical counts and their expected traversals
         # Only print for the designated debug flight to avoid spam
@@ -745,6 +775,7 @@ def process_single_flight(
                 flight_id=flight_id,
                 takeoff_timestamp=takeoff_timestamp,
                 gradient={},
+                pref_grad_e=None,
                 log_likelihood=0.0,
                 processing_time=time.time() - start_time,
                 success=False,
@@ -757,6 +788,7 @@ def process_single_flight(
             flight_id=flight_id,
             takeoff_timestamp=takeoff_timestamp,
             gradient={k: v.cpu() for k, v in gradient_by_name.items()},
+            pref_grad_e=pref_grad_e.detach().cpu() if pref_grad_e is not None else None,
             log_likelihood=log_likelihood,
             processing_time=processing_time,
             success=True
@@ -769,6 +801,7 @@ def process_single_flight(
             flight_id=flight_id,
             takeoff_timestamp=takeoff_timestamp,
             gradient={},
+            pref_grad_e=None,
             log_likelihood=0.0,
             processing_time=time.time() - start_time,
             success=False,
@@ -958,9 +991,61 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         logger.error("No flight batches were created. Please check the routes file and batch size.")
         return
     logger.info(f"Created {num_batches} batches of flights.")
+
+    pref_enabled = components["cost_model_version"] == "lin_disent"
+    pref_projector = None
+    pref_edge_u = None
+    pref_edge_v = None
+    pref_support_mask = None
+    if pref_enabled:
+        routes_df = pd.read_csv(flights_csv)
+        edge_u_cpu, edge_v_cpu = build_edge_list(components["graph"], components["node_to_idx"])
+        pref_edge_u = edge_u_cpu.to(device)
+        pref_edge_v = edge_v_cpu.to(device)
+
+        global_counts = compute_empirical_counts_from_routes(
+            routes_df["route"],
+            components["node_to_idx"],
+            components["num_nodes"],
+        )
+        d_e = global_counts[edge_u_cpu, edge_v_cpu].to(device=device, dtype=torch.float64)
+
+        X_raw = build_feature_matrix(
+            pref_edge_u,
+            pref_edge_v,
+            components["dist_matrix"],
+            components["ac_matrix"],
+            device=device,
+            dtype=torch.float64,
+        )
+        X_norm, feature_means, feature_scales, manual_scales = d_weighted_normalize_features(
+            X_raw,
+            d_e,
+            bias_index=0,
+        )
+        pref_projector = PreferenceProjector(
+            X_norm,
+            d_e,
+            ridge=batch_config.pref_projection_ridge,
+            feature_means=feature_means,
+            feature_scales=feature_scales,
+            manual_scales=manual_scales,
+        )
+        pref_support_mask = d_e > 0
+
+        if pref_projector.condition_number is not None:
+            logger.info(f"Preference projector condition number: {pref_projector.condition_number:.3e}")
+
+        with torch.no_grad():
+            pref_matrix = components["cost_model"].preference_matrix_p
+            p_e = pref_matrix[pref_edge_u, pref_edge_v].to(dtype=X_norm.dtype)
+            p_e = pref_projector.project(p_e)
+            pref_matrix.zero_()
+            pref_matrix[pref_edge_u, pref_edge_v] = p_e.to(dtype=pref_matrix.dtype)
     
     # 3. Initialize tracking variables and handle checkpoint resumption
     gradient_queue: List[Dict[str, torch.Tensor]] = []
+    pref_grad_queue: List[torch.Tensor] = []
     iteration = 0
     converged = False
     training_history = {
@@ -985,6 +1070,13 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                     latest_checkpoint, components['cost_model'], optimizer, device
                 )
                 logger.info(f"✓ Successfully resumed training from checkpoint. Starting at iteration {iteration}")
+                if pref_enabled and pref_projector is not None:
+                    with torch.no_grad():
+                        pref_matrix = components["cost_model"].preference_matrix_p
+                        p_e = pref_matrix[pref_edge_u, pref_edge_v].to(dtype=pref_projector.X.dtype)
+                        p_e = pref_projector.project(p_e)
+                        pref_matrix.zero_()
+                        pref_matrix[pref_edge_u, pref_edge_v] = p_e.to(dtype=pref_matrix.dtype)
             except Exception as e:
                 logger.warning(f"✗ Failed to load checkpoint {latest_checkpoint}: {e}")
                 logger.info("Starting training from scratch")
@@ -1071,11 +1163,14 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             successful_flights = 0
             failed_flights = 0
             gradient_queue.clear() # Clear queue for each new batch
+            pref_grad_queue.clear()
 
             for result in batch_results:
                 if result.success:
                     successful_flights += 1
                     gradient_queue.append(result.gradient)
+                    if pref_enabled and result.pref_grad_e is not None:
+                        pref_grad_queue.append(result.pref_grad_e)
                 else:
                     failed_flights += 1
                     logger.warning(f"Flight {result.flight_id} failed: {result.error_message}")
@@ -1126,6 +1221,63 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 if gradient_norm < batch_config.convergence_threshold:
                     logger.info(f"✓ Convergence achieved! Gradient norm L2: {gradient_norm:.6f} < {batch_config.convergence_threshold}")
                     converged = True
+
+            pref_grad_norm = None
+            pref_violation = None
+            pref_min = None
+            pref_max = None
+            pref_mean = None
+            if pref_enabled and pref_projector is not None and pref_grad_queue:
+                pref_grad_sum = torch.zeros_like(
+                    pref_grad_queue[0],
+                    device=device,
+                    dtype=pref_projector.X.dtype,
+                )
+                for grad in pref_grad_queue:
+                    pref_grad_sum += grad.to(device=device, dtype=pref_projector.X.dtype)
+
+                pref_grad_avg = pref_grad_sum / float(len(pref_grad_queue))
+
+                pref_matrix = components["cost_model"].preference_matrix_p
+                p_e = pref_matrix[pref_edge_u, pref_edge_v].to(
+                    device=device,
+                    dtype=pref_projector.X.dtype,
+                )
+
+                alpha_pref_reg = float(
+                    components["cost_model"].alpha_pref_reg.detach().cpu().item()
+                )
+                if alpha_pref_reg != 0.0:
+                    pref_grad_avg = pref_grad_avg + 2.0 * alpha_pref_reg * p_e
+
+                pref_grad_proj = pref_projector.project(pref_grad_avg)
+                p_e = p_e - batch_config.pref_learning_rate * pref_grad_proj
+                p_e = pref_projector.project(p_e)
+
+                with torch.no_grad():
+                    pref_matrix.zero_()
+                    pref_matrix[pref_edge_u, pref_edge_v] = p_e.to(dtype=pref_matrix.dtype)
+
+                pref_grad_norm = float(torch.linalg.norm(pref_grad_proj).item())
+                pref_violation = float(pref_projector.constraint_violation(p_e).item())
+
+                support_mask = pref_support_mask
+                if support_mask is not None and support_mask.any():
+                    p_support = p_e[support_mask]
+                else:
+                    p_support = p_e
+                pref_min = float(p_support.min().item())
+                pref_max = float(p_support.max().item())
+                pref_mean = float(p_support.mean().item())
+
+                logger.info(
+                    "Preference update: grad_norm=%.6f | constraint=%.3e | min=%.6f max=%.6f mean=%.6f",
+                    pref_grad_norm,
+                    pref_violation,
+                    pref_min,
+                    pref_max,
+                    pref_mean,
+                )
             
             # Compute iteration statistics
             avg_log_likelihood = np.mean([r.log_likelihood for r in batch_results if r.success]) if successful_flights > 0 else 0.0
@@ -1160,6 +1312,13 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 # Performance metrics
                 tensorboard_writer.add_scalar('Performance/Iteration_Time_Seconds', iteration_time, iteration)
                 tensorboard_writer.add_scalar('Performance/Flights_Per_Second', len(batch_flights) / iteration_time, iteration)
+
+                if pref_enabled and pref_grad_norm is not None:
+                    tensorboard_writer.add_scalar('Preferences/Grad_Norm_L2', pref_grad_norm, iteration)
+                    tensorboard_writer.add_scalar('Preferences/Constraint_Violation', pref_violation, iteration)
+                    tensorboard_writer.add_scalar('Preferences/Mean', pref_mean, iteration)
+                    tensorboard_writer.add_scalar('Preferences/Min', pref_min, iteration)
+                    tensorboard_writer.add_scalar('Preferences/Max', pref_max, iteration)
                 
                 # Model parameters statistics
                 for name, param in components['cost_model'].named_parameters():
@@ -1284,6 +1443,8 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         hparams = {
             'batch_size': batch_config.batch_size,
             'learning_rate': batch_config.learning_rate,
+            'pref_learning_rate': batch_config.pref_learning_rate,
+            'pref_projection_ridge': batch_config.pref_projection_ridge,
             'gamma': batch_config.gamma,
             'max_iterations': batch_config.max_iterations,
             'convergence_threshold': batch_config.convergence_threshold
@@ -1374,6 +1535,18 @@ def main():
         help="Learning rate for SGD (default: 1e-5)"
     )
     parser.add_argument(
+        "--pref-learning-rate",
+        type=float,
+        default=1e-2,
+        help="Preference learning rate for SGD updates (default: 1e-2)"
+    )
+    parser.add_argument(
+        "--pref-projection-ridge",
+        type=float,
+        default=1e-8,
+        help="Ridge added to X^T D X for the preference projector (default: 1e-8)"
+    )
+    parser.add_argument(
         "--max-iterations", 
         type=int, 
         default=100,
@@ -1454,6 +1627,8 @@ def main():
     batch_config = BatchLearningConfig(
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
+        pref_learning_rate=args.pref_learning_rate,
+        pref_projection_ridge=args.pref_projection_ridge,
         max_iterations=args.max_iterations,
         convergence_threshold=args.convergence_threshold,
         checkpoint_interval=args.checkpoint_interval,

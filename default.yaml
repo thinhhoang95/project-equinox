@@ -5,6 +5,7 @@ cost_model_beta0: 0.0
 cost_model_beta1: 2.0
 cost_model_beta2: 0.0
 cost_model_beta3: 1.0
+# cost_model_version: lin_disent
 cruise_altitude_ft: 35000.0
 cruise_speed_kts: 450.0
 delta_t_seconds: 600

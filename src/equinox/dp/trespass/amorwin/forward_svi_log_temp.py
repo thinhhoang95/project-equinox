@@ -187,6 +187,10 @@ def forward_soft_value_iteration(
     if gamma <= 0:
         raise ValueError("Gamma must be positive for soft value iteration.")
 
+    distance_matrix_d = distance_matrix_d.to(dtype=torch.float64)
+    airspace_charge_matrix_ac = airspace_charge_matrix_ac.to(dtype=torch.float64)
+    avg_tailwind_knots_per_transition = avg_tailwind_knots_per_transition.to(dtype=torch.float64)
+
     # 1. Create L_val and fill with -∞ (unreachable)
     L_val = torch.full(
         (num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases),
@@ -280,9 +284,9 @@ def forward_soft_value_iteration(
 
         cost_uv_tensor = cost_model(
             (edge_u_indices, edge_v_indices),
-            distance_matrix_d.to(dtype=torch.float64),
-            airspace_charge_matrix_ac.to(dtype=torch.float64),
-            tailwind_knots.to(dtype=torch.float64)
+            distance_matrix_d,
+            airspace_charge_matrix_ac,
+            tailwind_knots
         )
         # cost_uv_tensor.shape == [1], dtype=float64.  Extract as Python float.
         cost_uv = float(cost_uv_tensor.item())
