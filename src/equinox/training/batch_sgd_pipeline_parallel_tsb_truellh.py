@@ -45,6 +45,7 @@ import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Tuple, Optional, Any, Mapping
+import hashlib
 from pathlib import Path
 import multiprocessing
 from tqdm import tqdm
@@ -87,7 +88,26 @@ logger = logging.getLogger(__name__)
 _WORKER_CONTEXT: Dict[str, Any] = {}
 
 
-def _init_worker(config_path: str, case_dir: str, device_str: str, gamma: float, debug_single_process: bool) -> None:
+def _edge_list_fingerprint(edge_u: torch.Tensor, edge_v: torch.Tensor) -> str:
+    if edge_u.numel() != edge_v.numel():
+        raise ValueError("edge_u and edge_v must have the same number of elements.")
+    edge_u_cpu = edge_u.detach().to(device="cpu", dtype=torch.int64).contiguous()
+    edge_v_cpu = edge_v.detach().to(device="cpu", dtype=torch.int64).contiguous()
+    hasher = hashlib.blake2b(digest_size=16)
+    hasher.update(edge_u_cpu.numpy().tobytes())
+    hasher.update(b"|")
+    hasher.update(edge_v_cpu.numpy().tobytes())
+    return f"{edge_u_cpu.numel()}:{hasher.hexdigest()}"
+
+
+def _init_worker(
+    config_path: str,
+    case_dir: str,
+    device_str: str,
+    gamma: float,
+    debug_single_process: bool,
+    pref_edge_signature: Optional[str],
+) -> None:
     """Initialize per-worker shared context to avoid pickling large objects per task."""
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["MKL_NUM_THREADS"] = "1"
@@ -116,6 +136,12 @@ def _init_worker(config_path: str, case_dir: str, device_str: str, gamma: float,
     edge_v = None
     if pref_enabled:
         edge_u, edge_v = build_edge_list(graph, node_to_idx)
+        worker_signature = _edge_list_fingerprint(edge_u, edge_v)
+        if pref_edge_signature is not None and worker_signature != pref_edge_signature:
+            raise RuntimeError(
+                "Preference edge ordering mismatch between main and worker processes. "
+                f"Expected signature {pref_edge_signature}, got {worker_signature}."
+            )
         edge_u = edge_u.to(device)
         edge_v = edge_v.to(device)
 
@@ -997,9 +1023,11 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     pref_edge_u = None
     pref_edge_v = None
     pref_support_mask = None
+    pref_edge_signature = None
     if pref_enabled:
         routes_df = pd.read_csv(flights_csv)
         edge_u_cpu, edge_v_cpu = build_edge_list(components["graph"], components["node_to_idx"])
+        pref_edge_signature = _edge_list_fingerprint(edge_u_cpu, edge_v_cpu)
         pref_edge_u = edge_u_cpu.to(device)
         pref_edge_v = edge_v_cpu.to(device)
 
@@ -1106,7 +1134,14 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     with ProcessPoolExecutor(
         max_workers=batch_config.num_workers,
         initializer=_init_worker,
-        initargs=(config_path, case_dir, str(device), batch_config.gamma, batch_config.debug_single_process),
+        initargs=(
+            config_path,
+            case_dir,
+            str(device),
+            batch_config.gamma,
+            batch_config.debug_single_process,
+            pref_edge_signature,
+        ),
     ) as executor:
         while iteration <= batch_config.max_iterations and not converged:
             iteration_start_time = time.time()
