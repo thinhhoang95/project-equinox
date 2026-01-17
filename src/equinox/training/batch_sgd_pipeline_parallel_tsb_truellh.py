@@ -1,4 +1,4 @@
-# To run: python src/equinox/training/batch_sgd_pipeline_parallel.py --case-dir data/cases/LEMD_EGLL --batch-size 5 --learning-rate 1e-6
+# To run: python src/equinox/training/batch_sgd_pipeline_parallel.py --case-dir data/cases/LEMD_EGLL
 """
 Batch Stochastic Gradient Descent Pipeline for Maximum Entropy Inverse Learning
 
@@ -23,7 +23,7 @@ The pipeline follows these steps for each flight:
 5. Queue gradients and apply batch updates to the cost model
 
 Usage:
-    python batch_sgd_pipeline_parallel_w_tensorboard.py --case-dir data/cases/LEMD_EGLL --batch-size 5 --learning-rate 1e-6
+    python batch_sgd_pipeline_parallel_w_tensorboard.py --case-dir data/cases/LEMD_EGLL
     
     To monitor training with TensorBoard:
     tensorboard --logdir data/cases/LEMD_EGLL/batch_sgd_results/tensorboard_logs
@@ -61,7 +61,7 @@ except ImportError:
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.equinox.config import RunConfiguration, get_cost_model_class
+from src.equinox.config import RunConfiguration
 from src.equinox.dp.trespass.amorwin.forward_svi_log_temp import forward_soft_value_iteration
 from src.equinox.dp.trespass.amorwin.backward_svi_log_cost_temp import backward_soft_value_iteration
 from src.equinox.dp.trespass.amorwin.backward_gradient import backward_gradient_pass
@@ -147,6 +147,7 @@ def _init_worker(
 
     global _WORKER_CONTEXT
     _WORKER_CONTEXT = {
+        "config": config,
         "graph": graph,
         "node_to_idx": node_to_idx,
         "idx_to_node": idx_to_node,
@@ -339,53 +340,32 @@ def compute_empirical_counts_for_flight(flight_data: Mapping[str, Any], node_to_
     return empirical_counts
 
 
-def _scalar_from_state_dict(state_dict: Dict[str, torch.Tensor], key: str, default: float) -> float:
-    """Best-effort extraction of a scalar float from a model state_dict."""
-    v = state_dict.get(key, None)
-    if isinstance(v, torch.Tensor) and v.numel() == 1:
-        return float(v.detach().cpu().item())
-    return float(default)
-
-
 def _build_cost_model_from_state_dict(
     *,
     cost_model_version: str,
     num_waypoints: int,
     device: torch.device,
     cost_model_state: Dict[str, torch.Tensor],
+    config: Optional[RunConfiguration] = None,
 ) -> torch.nn.Module:
-    """
-    Construct a cost model instance and load weights from `cost_model_state`.
+    """Construct a lin_disent cost model instance and load weights from `cost_model_state`."""
+    if cost_model_version != "lin_disent":
+        raise ValueError("Only lin_disent is supported for cost model reconstruction.")
 
-    Note on betas:
-    - The beta coefficients are intentionally kept FIXED (requires_grad=False) to avoid an
-      ill-defined scale ambiguity between beta weights and the learned functionals (PLMs / preferences).
-    - We therefore treat betas as part of the model definition/state and do not thread them through
-      the training pipeline as separate "hyperparameters" that might accidentally drift.
-    """
-    cost_model_class = get_cost_model_class(cost_model_version)
+    if config is None:
+        config = RunConfiguration(
+            cost_model_version="lin_disent",
+            cruise_speed_kts=450.0,
+            common_weights=(0.0, 0.0, 0.0),
+            preference_weight=1.0,
+        )
 
-    # Provide placeholder constructor arguments. For cost model versions that register these
-    # as Parameters/Buffers, `load_state_dict` will overwrite them with the authoritative values.
-    # For versions that ignore betas (e.g., CostRev3/4), these are ignored by design.
-    beta0 = _scalar_from_state_dict(cost_model_state, "beta0", 0.0)
-    beta1 = _scalar_from_state_dict(cost_model_state, "beta1", 1.0)
-    beta2 = _scalar_from_state_dict(cost_model_state, "beta2", 1.0)
-    beta3 = _scalar_from_state_dict(cost_model_state, "beta3", 0.0)
-    alpha_pref_reg = _scalar_from_state_dict(cost_model_state, "alpha_pref_reg", 1.0)
-
-    cost_model = cost_model_class(
-        beta0=beta0,
-        beta1=beta1,
-        beta2=beta2,
-        beta3=beta3,
+    return config.build_cost_model_from_state_dict(
+        cost_model_state=cost_model_state,
         num_waypoints=num_waypoints,
-        alpha_pref_reg=alpha_pref_reg,
         device=device,
+        cost_model_version=cost_model_version,
     )
-    cost_model.load_state_dict(cost_model_state)
-    cost_model.to(device)
-    return cost_model
 
 
 def _vector_to_named_grads(
@@ -546,6 +526,7 @@ def process_single_flight(
     device = ctx['device']
     gamma = ctx['gamma']
     case_dir = ctx['case_dir']
+    config = ctx['config']
 
     if cost_model_state is None:
         raise ValueError("cost_model_state is required to process a flight in worker mode.")
@@ -557,6 +538,7 @@ def process_single_flight(
         num_waypoints=ctx['num_nodes'],
         device=device,
         cost_model_state=cost_model_state,
+        config=config,
     )
 
     try:
@@ -1538,6 +1520,27 @@ def validate_implementation():
     return True
 
 
+def _find_case_yaml(case_dir: str) -> str:
+    case_path = Path(case_dir)
+    if not case_path.exists():
+        raise FileNotFoundError(f"Case directory not found: {case_dir}")
+    default_path = case_path / "default.yaml"
+    if default_path.exists():
+        return str(default_path)
+    yaml_paths = sorted(case_path.glob("*.yaml"))
+    if not yaml_paths:
+        raise FileNotFoundError(
+            f"No YAML configuration file found in case directory: {case_dir}"
+        )
+    return str(yaml_paths[0])
+
+
+def _load_training_params(config_path: str) -> Dict[str, Any]:
+    with open(config_path, "r") as config_file:
+        config_data = yaml.safe_load(config_file) or {}
+    return config_data
+
+
 def main():
     """Command-line interface for the batch SGD pipeline."""
     parser = argparse.ArgumentParser(
@@ -1558,62 +1561,14 @@ def main():
         help="Output directory for results (default: case-dir/batch_sgd_results)"
     )
     parser.add_argument(
-        "--batch-size", 
-        type=int, 
-        default=5,
-        help="Number of flights per batch (default: 5)"
-    )
-    parser.add_argument(
-        "--learning-rate", 
-        type=float, 
-        default=1e-5,
-        help="Learning rate for SGD (default: 1e-5)"
-    )
-    parser.add_argument(
-        "--pref-learning-rate",
-        type=float,
-        default=1e-2,
-        help="Preference learning rate for SGD updates (default: 1e-2)"
-    )
-    parser.add_argument(
-        "--pref-projection-ridge",
-        type=float,
-        default=1e-8,
-        help="Ridge added to X^T D X for the preference projector (default: 1e-8)"
-    )
-    parser.add_argument(
-        "--max-iterations", 
-        type=int, 
-        default=100,
-        help="Maximum number of iterations (default: 100)"
-    )
-    parser.add_argument(
-        "--convergence-threshold", 
-        type=float, 
-        default=1e-4,
-        help="Convergence threshold for gradient norm (default: 1e-4)"
-    )
-    parser.add_argument(
-        "--checkpoint-interval", 
-        type=int, 
-        default=10,
-        help="Interval for saving checkpoints (default: 10)"
-    )
-    parser.add_argument(
         "--num-workers", 
         type=int,
         help="Number of worker processes (default: CPU count - 1)"
     )
     parser.add_argument(
         "--device", 
-        default="cuda",
-        help="Device to use (cuda/cpu, default: cuda)"
-    )
-    parser.add_argument(
-        "--gamma", 
-        type=float, 
-        default=1.0,
-        help="Temperature parameter (default: 1.0)"
+        default="cpu",
+        help="Device to use (only cpu is supported for the moment)"
     )
     parser.add_argument(
         "--debug-single-process",
@@ -1653,23 +1608,34 @@ def main():
     )
     
     args = parser.parse_args()
-    
+
     # Set default config path if not provided
     if args.config is None:
-        args.config = os.path.join(args.case_dir, "default.yaml")
+        args.config = _find_case_yaml(args.case_dir)
+    training_params = _load_training_params(args.config)
+
+    default_batch_config = BatchLearningConfig()
+    batch_size = training_params.get("training_batch_size", default_batch_config.batch_size)
+    learning_rate = training_params.get("common_features_learning_rate", default_batch_config.learning_rate)
+    pref_learning_rate = training_params.get("preference_feature_learning_rate", default_batch_config.pref_learning_rate)
+    pref_projection_ridge = training_params.get("preference_projection_ridge", default_batch_config.pref_projection_ridge)
+    max_iterations = training_params.get("max_iters", default_batch_config.max_iterations)
+    convergence_threshold = training_params.get("convergence_threshold", default_batch_config.convergence_threshold)
+    checkpoint_interval = training_params.get("checkpoint_interval", default_batch_config.checkpoint_interval)
+    gamma = training_params.get("gamma", default_batch_config.gamma)
     
     # Create batch configuration
     batch_config = BatchLearningConfig(
-        batch_size=args.batch_size,
-        learning_rate=args.learning_rate,
-        pref_learning_rate=args.pref_learning_rate,
-        pref_projection_ridge=args.pref_projection_ridge,
-        max_iterations=args.max_iterations,
-        convergence_threshold=args.convergence_threshold,
-        checkpoint_interval=args.checkpoint_interval,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        pref_learning_rate=pref_learning_rate,
+        pref_projection_ridge=pref_projection_ridge,
+        max_iterations=max_iterations,
+        convergence_threshold=convergence_threshold,
+        checkpoint_interval=checkpoint_interval,
         num_workers=args.num_workers,
         device=args.device,
-        gamma=args.gamma,
+        gamma=gamma,
         debug_single_process=args.debug_single_process,
         tensorboard_log_dir=args.tensorboard_log_dir,
         log_interval=args.log_interval,

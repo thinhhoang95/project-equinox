@@ -61,9 +61,6 @@ class RunConfiguration:
     # Cost model version
     cost_model_version: str = None
 
-    # Temperature
-    gamma: float = None
-
     # Regularization parameters
     alpha_pref_reg: float = None
 
@@ -76,6 +73,16 @@ class RunConfiguration:
     # lin-disent cost model specific params
     common_weights: list = None 
     preference_weight: float = None 
+    
+    # training config
+    gamma: float = None
+    training_batch_size: int = None
+    common_features_learning_rate: float = None
+    preference_feature_learning_rate: float = None
+    preference_projection_ridge: float = None
+    max_iters: int = None
+    convergence_threshold: float = None
+    checkpoint_interval: int = None
     
     def get_device(self) -> torch.device:
         """Get the appropriate torch device based on availability and preference."""
@@ -117,6 +124,40 @@ class RunConfiguration:
             raise Exception("At this point, only lin_disent cost model is supported.")
         
         print(f"Cost model version {_cost_model_version} initialized with {num_waypoints} waypoints")
+        return cost_model_instance
+
+    def build_cost_model_from_state_dict(
+        self,
+        cost_model_state: Dict[str, torch.Tensor],
+        num_waypoints: int,
+        device: torch.device,
+        cost_model_version: str = None,
+    ) -> torch.nn.Module:
+        """Reconstruct a lin_disent cost model from a state_dict using config defaults."""
+        _cost_model_version = cost_model_version if cost_model_version is not None else self.cost_model_version
+        if _cost_model_version != "lin_disent":
+            raise ValueError("Only lin_disent is supported for cost model reconstruction.")
+
+        common_weights = self.common_weights
+        if common_weights is None:
+            state_weights = cost_model_state.get("common_weights")
+            if isinstance(state_weights, torch.Tensor):
+                common_weights = tuple(float(v) for v in state_weights.detach().cpu().tolist())
+            else:
+                common_weights = (0.0, 0.0, 0.0)
+
+        preference_weight = self.preference_weight if self.preference_weight is not None else 1.0
+
+        cost_model_instance = CostLinearDisentangled(
+            common_weights=common_weights,
+            preference_weights=preference_weight,
+            alpha_pref_reg=None,
+            cruise_speed_kts=self.cruise_speed_kts,
+            num_waypoints=num_waypoints,
+            device=device,
+        )
+        cost_model_instance.load_state_dict(cost_model_state)
+        cost_model_instance.to(device)
         return cost_model_instance
     
     def initialize_wind_model(self) -> Any:
