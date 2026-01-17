@@ -21,6 +21,10 @@ The key trick is: **we never enumerate routes**. Instead we:
 ### 0) What files are “the pipeline”
 There are two stages in the repo:
 
+#### Pre-Training: deriving the base route graph for a city pair from historical data
+- This would be done in the `prep_all.py` script. You can run it with the chosen city pair.
+- The artifacts required for `prep_all.py` is a separate topic, but in short, it will be taken care of in `hlybokyi-potik` and `project-akrav`. 
+
 #### Stage A — precompute *feasible state transitions* and *wind*
 This is done by `src/equinox/training/tres_batch.py` using:
 - forward TRES: `src/equinox/dp/trespass/tres_forward.py`

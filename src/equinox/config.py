@@ -6,102 +6,76 @@ from dataclasses import dataclass, asdict
 from typing import Dict, Any, Optional, Tuple, Type
 from pathlib import Path
 
-
-def get_cost_model_class(cost_model_version: str) -> Type[torch.nn.Module]:
-    """Returns the cost model class based on the version string."""
-    # Local imports to avoid circular dependencies if cost models import config
-    from equinox.cost.cost_rev2_reg import CostRev2
-    from equinox.cost.cost_rev3 import CostRev3
-    from equinox.cost.cost_rev4 import CostRev4
-    from equinox.cost.cost_rev4_lite import CostRev4Lite
-    from equinox.cost.cost_rev4_ronbun1 import CostRev4Ronbun1
-    from equinox.cost.cost_linear_disentangled import CostLinearDisentangled
-
-    if cost_model_version == "2reg":
-        return CostRev2
-    elif cost_model_version == "3":
-        return CostRev3
-    elif cost_model_version == "4":
-        return CostRev4
-    elif cost_model_version == "4lite":
-        return CostRev4Lite
-    elif cost_model_version == '4rb1':
-        return CostRev4Ronbun1
-    elif cost_model_version == "lin_disent":
-        return CostLinearDisentangled
-    else:
-        raise ValueError(f"Unsupported cost model version: {cost_model_version}")
-
+from equinox.cost.cost_linear_disentangled import CostLinearDisentangled
 
 @dataclass
 class RunConfiguration:
     """Configuration class for storing algorithm parameters."""
     
     # Graph and file paths
-    graph_file_path: str = "data/graph/LEMD_EGLL_2023_04_01.gml"
-    distances_file_path: str = "data/graph/LEMD_EGLL_2023_04_01_distances.npy"
-    charges_file_path: str = "data/graph/LEMD_EGLL_2023_04_01_charges.npy"
-    wind_avg_file_path: str = "data/graph/wind_averages/LEMD_EGLL_2023_04_01_wind_avg.pt"
-    
+    graph_file_path: str = None
+    distances_file_path: str = None
+    charges_file_path: str = None
+    wind_avg_file_path: str = None 
+
     # Wind model parameters
-    wind_date: Optional[str] = "2023-04-01"
+    wind_date: Optional[str] = None
     wind_data_dir: str = "data/era5"
-    
-    # Cost model parameters
-    cost_model_beta0: float = 1.0
-    cost_model_beta1: float = 1.0
-    cost_model_beta2: float = 1.0
-    cost_model_beta3: float = 1.0
+
     
     # Performance model parameters
-    aircraft_model: str = "NARROW_BODY_JET"
-    cruise_altitude_ft: float = 35000.0
-    cruise_speed_kts: float = 450.0
+    aircraft_model: str = None
+    cruise_altitude_ft: float = None
+    cruise_speed_kts: float = None
     
-    # Flight parameters
-    landing_time_str: str = "2023-04-01 12:00:00"
-    takeoff_time_str: str = "2023-04-01 10:15:00"
-    estimated_takeoff_time_str: str = "2023-04-01 10:15:00"
-    estimated_landing_time_str: str = "2023-04-01 12:00:00"
-    source_elevation_ft: float = 0.0
-    goal_elevation_ft: float = 0.0
-    initial_alt_ft: float = 0.0
-    
-    # Time parameters
-    delta_t_seconds: int = 600
-    max_flight_duration_hours: float = 5.0
-    etto_delta_t_seconds: int = 30
-    max_elapsed_time_since_takeoff_hours: float = 0.75
-    climb_phase_switch_allowance_climb_time_bins: int = 10
-    
+    # Flight parameters are not applicable because `RunConfiguration` is 
+    # landing_time_str: Optional[str] = None
+    # takeoff_time_str: Optional[str] = None
+    # estimated_takeoff_time_str: Optional[str] = None
+    # estimated_landing_time_str: Optional[str] = None
+    source_elevation_ft: Optional[float] = None
+    goal_elevation_ft: Optional[float] = None
+    initial_alt_ft: Optional[float] = None
+
+    # Time bin, time limit parameters
+    delta_t_seconds: Optional[int] = None
+    max_flight_duration_hours: Optional[float] = None
+    etto_delta_t_seconds: Optional[int] = None
+    max_elapsed_time_since_takeoff_hours: Optional[float] = None
+    climb_phase_switch_allowance_climb_time_bins: Optional[int] = None
+
     # Route parameters
-    origin_node: str = "LEMD"
-    goal_node: str = "EGLL"
+    origin_node: Optional[str] = None
+    goal_node: Optional[str] = None
     
     # Output parameters
-    output_dir: str = "data/graph/transitions"
-    file_prefix: str = "LEMD_EGLL_2023_04_01"
-    tres_forward_output_file_name: str = file_prefix + "_CLB_WIND"
-    tres_backward_output_file_name: str = file_prefix + "_CLSR_WIND"
-    thinning_output_file_name: str = file_prefix + "_REACHABLE_WIND"
+    output_dir: str = None
+    file_prefix: str = None
+    tres_forward_output_file_name: Optional[str] = None
+    tres_backward_output_file_name: Optional[str] = None
+    thinning_output_file_name: Optional[str] = None
     
     # Device configuration
-    device_preference: str = "cuda"  # "cuda" or "cpu"
+    device_preference: str = "cpu"  # "cuda" or "cpu"
 
     # Cost model version
-    cost_model_version: str = "3"
+    cost_model_version: str = None
 
     # Temperature
-    gamma: float = 0.01
+    gamma: float = None
 
     # Regularization parameters
-    alpha_pref_reg: float = 1.0
+    alpha_pref_reg: float = None
 
     # Wind model configuration
     disable_config_wind_model: bool = False
 
     # Checkpoint path
     checkpoint_path: str = None
+
+    # lin-disent cost model specific params
+    common_weights: list = None 
+    preference_weight: float = None 
     
     def get_device(self) -> torch.device:
         """Get the appropriate torch device based on availability and preference."""
@@ -129,17 +103,18 @@ class RunConfiguration:
     def initialize_cost_model(self, num_waypoints: int, cost_model_version: str = None) -> torch.nn.Module:
         """Initialize the cost model with configuration parameters."""
         _cost_model_version = cost_model_version if cost_model_version is not None else self.cost_model_version
-        cost_model_class = get_cost_model_class(_cost_model_version)
-
-        cost_model_instance = cost_model_class(
-            beta0=self.cost_model_beta0,
-            beta1=self.cost_model_beta1,
-            beta2=self.cost_model_beta2,
-            beta3=self.cost_model_beta3,
-            num_waypoints=num_waypoints,
-            alpha_pref_reg=self.alpha_pref_reg,
-            device=self.get_device()
-        )
+        
+        if _cost_model_version == "lin_disent":
+            # The configured cost model is linear disentangled: `cost_linear_disentangled.py`
+            cost_model_instance = CostLinearDisentangled(
+                common_weights = self.common_weights,
+                preference_weights = self.preference_weight,
+                alpha_pref_reg = None, # regularization of preference params not supported at this stage yet 
+                cruise_speed_kts = self.cruise_speed_kts,
+                num_waypoints=num_waypoints
+            )
+        else:
+            raise Exception("At this point, only lin_disent cost model is supported.")
         
         print(f"Cost model version {_cost_model_version} initialized with {num_waypoints} waypoints")
         return cost_model_instance
@@ -304,6 +279,11 @@ def demo_configuration_usage():
     
     # Load from YAML
     loaded_config = RunConfiguration.load_from_yaml("data/profiles/demo_config.yaml")
+    # Set default values for dependent paths
+    config.tres_forward_output_file_name: str = config.file_prefix + "_CLB_WIND"
+    config.tres_backward_output_file_name: str = config.file_prefix + "_CLSR_WIND"
+    config.thinning_output_file_name: str = config.file_prefix + "_REACHABLE_WIND"
+    
     print(f"Loaded configuration - Origin: {loaded_config.origin_node}, Goal: {loaded_config.goal_node}")
     print(f"Cruise altitude: {loaded_config.cruise_altitude_ft} ft")
     

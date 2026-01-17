@@ -25,6 +25,182 @@ from equinox.training.prep.resculpt_viterbi import viterbi_match, haversine_nm
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+"""
+TRES Batch Processing Pipeline
+==============================
+
+This module implements a batch processing pipeline for running TRES (Trespass) forward and 
+backward dynamic programming passes on multiple flights in parallel. The TRES algorithm 
+computes optimal flight paths through an airspace graph by considering wind conditions, 
+aircraft performance, and airspace charges.
+
+Overview
+--------
+The pipeline processes flights in batches, where each flight undergoes:
+1. Forward TRES pass: Computes optimal paths from origin to destination
+2. Backward TRES pass: Computes optimal paths from destination to origin
+3. Thinning: Reduces the state space by filtering feasible transitions
+4. Route snapping: Maps original routes to feasible graph edges using Viterbi matching
+5. Wind amortization: Pre-computes average tailwind values for each transition
+
+The processing uses multiprocessing to handle multiple flights in parallel, with each 
+worker process handling one flight at a time.
+
+Input Format
+------------
+The script expects a CSV file with flight data containing the following columns:
+
+Required columns:
+- flight_id: Unique identifier for the flight (string)
+- route: Space-separated waypoint names (e.g., "LEMD NAREX EGLL")
+- takeoff_time: Unix timestamp of takeoff (integer)
+- landing_time: Unix timestamp of landing (integer)
+- cruise_altitude: Cruise altitude in feet (float)
+- origin: Origin airport ICAO code (e.g., "LEMD")
+- destination: Destination airport ICAO code (e.g., "EGLL")
+
+Optional columns:
+- flight_time_s: Flight duration in seconds (integer, can be calculated if missing)
+
+Example input CSV (all_routes_sculpted.csv):
+    flight_id,route,takeoff_time,landing_time,cruise_altitude,origin,destination,flight_time_s
+    FL001,LEMD NAREX EGLL,1680393600,1680404400,35000,LEMD,EGLL,10800
+    FL002,LEMD BILBA EGLL,1680397200,1680408000,37000,LEMD,EGLL,10800
+    FL003,LEMD NAREX LONON EGLL,1680400800,1680411600,35000,LEMD,EGLL,10800
+
+Configuration File
+------------------
+A YAML configuration file specifies the base parameters for all flights. Key settings include:
+- graph_file_path: Path to the airspace graph (GML format)
+- distances_file_path: Path to distance matrix (NPY format)
+- charges_file_path: Path to airspace charges matrix (NPY format)
+- wind_data_dir: Directory containing ERA5 wind data
+- aircraft_model: Aircraft type (e.g., NARROW_BODY_JET)
+- delta_t_seconds: Time step for wall-clock time (default: 600 seconds)
+- max_flight_duration_hours: Maximum flight duration (default: 5.0 hours)
+
+Example configuration file (default.yaml):
+    aircraft_model: NARROW_BODY_JET
+    graph_file_path: data/cases/LEMD_EGLL/graphs/routes.gml
+    distances_file_path: data/cases/LEMD_EGLL/graphs/routes_distances.npy
+    charges_file_path: data/cases/LEMD_EGLL/graphs/routes_charges.npy
+    wind_data_dir: /path/to/era5/data
+    delta_t_seconds: 600
+    max_flight_duration_hours: 5.0
+    cruise_altitude_ft: 35000.0
+    cruise_speed_kts: 450.0
+
+Output Structure
+---------------
+The script creates the following output structure:
+
+output_dir/
+├── all_routes_feasibly_snapped.csv          # Snapped routes for all flights
+├── batch0/
+│   ├── flights.csv                          # Metadata for flights in this batch
+│   ├── FW_FL001_1680393600.pkl             # Forward pass transitions
+│   ├── BW_FL001_1680393600.pkl             # Backward pass closures
+│   ├── CLSR_FL001_1680393600.pkl           # Thinned closures
+│   ├── WIND_FL001_1680393600.pt            # Wind amortization data
+│   ├── FW_FL002_1680397200.pkl
+│   └── ...
+├── batch1/
+│   └── ...
+└── ...
+
+Output Files Description:
+- FW_{flight_id}_{takeoff_ts}.pkl: Forward pass transitions (list of transition tuples)
+- BW_{flight_id}_{takeoff_ts}.pkl: Backward pass state closures (list of closure tuples)
+- CLSR_{flight_id}_{takeoff_ts}.pkl: Thinned transitions after filtering (list of tuples)
+- WIND_{flight_id}_{takeoff_ts}.pt: Average tailwind values per transition (torch.Tensor)
+- all_routes_feasibly_snapped.csv: CSV with snapped routes matching feasible graph edges
+
+Example Output CSV (all_routes_feasibly_snapped.csv):
+    flight_id,route,takeoff_time,landing_time,cruise_altitude,origin,destination,flight_time_s
+    FL001,LEMD NAREX EGLL,1680393600,1680404400,35000,LEMD,EGLL,10800
+    FL002,LEMD BILBA EGLL,1680397200,1680408000,37000,LEMD,EGLL,10800
+
+Usage Example
+-------------
+Command-line usage:
+
+    python src/equinox/training/tres_batch.py \
+        --routes-csv "data/cases/LEMD_EGLL/all_routes_sculpted.csv" \
+        --case-name "LEMD_EGLL" \
+        --batch-size 50 \
+        --config "data/cases/LEMD_EGLL/default.yaml" \
+        --output-dir "data/cases/LEMD_EGLL/tres_runs" \
+        --num-workers 4
+
+Programmatic usage:
+
+    from equinox.training.tres_batch import run_tres_batch_processing
+    
+    run_tres_batch_processing(
+        routes_csv_path="data/cases/LEMD_EGLL/all_routes_sculpted.csv",
+        case_name="LEMD_EGLL",
+        batch_size=50,
+        config_path="data/cases/LEMD_EGLL/default.yaml",
+        output_dir_base="data/cases/LEMD_EGLL/tres_runs",
+        num_workers=4
+    )
+
+Processing Flow
+--------------
+For each flight in the batch:
+
+1. Forward Pass (tres_forward):
+   - Starts from origin node at takeoff time
+   - Propagates forward through the graph considering wind, performance, and costs
+   - Generates transitions: (u_idx, k_u, rho_u, alt_u, phase_u, v_idx, k_v, rho_v, alt_v, phase_v)
+   - Saves to FW_{flight_id}_{takeoff_ts}.pkl
+
+2. Backward Pass (tres_backward):
+   - Starts from destination node at estimated landing time
+   - Propagates backward to find feasible paths
+   - Generates state closures matching forward transitions
+   - Saves to BW_{flight_id}_{takeoff_ts}.pkl
+
+3. Thinning (thin_closures):
+   - Filters transitions to keep only those that appear in both forward and backward passes
+   - Reduces state space to feasible paths
+   - Uses max_rho parameter (default: 36) to limit climb time bins
+   - Saves to CLSR_{flight_id}_{takeoff_ts}.pkl
+
+4. Route Snapping:
+   - Extracts feasible waypoint transitions from thinned results
+   - Creates a subgraph containing only feasible edges
+   - Uses Viterbi matching to snap original route to feasible graph
+   - Writes snapped route to all_routes_feasibly_snapped.csv
+
+5. Wind Amortization:
+   - Computes average tailwind for each transition in thinned results
+   - Uses time reference from backward pass (estimated_landing_ssm - max_flight_duration_hours * 3600)
+   - Saves as torch.Tensor to WIND_{flight_id}_{takeoff_ts}.pt
+
+Error Handling
+--------------
+- Individual flight failures are logged but don't stop batch processing
+- Failed flights are skipped and processing continues
+- Already processed flights (all output files exist) are automatically skipped
+- CSV writes use retry logic to handle concurrent access in multiprocessing
+
+Multiprocessing Notes
+---------------------
+- Uses 'spawn' context for cross-platform compatibility (Windows/macOS)
+- Each worker process creates its own WindDate model for the flight's date
+- Shared components (graph, cost_model, performance_model) are copied per process
+- CSV writes are synchronized using retry logic with random backoff
+
+Dependencies
+------------
+- pandas: For CSV reading and DataFrame operations
+- torch: For tensor operations and wind data storage
+- networkx: For graph operations
+- tqdm: For progress bars
+- multiprocessing: For parallel processing
+"""
+
 
 def initialize_csv_file(csv_path, fieldnames):
     """Initialize the CSV file with headers."""
@@ -472,15 +648,19 @@ def run_tres_batch_processing(routes_csv_path, case_name, batch_size, config_pat
 
 
 if __name__ == '__main__':
+    # City pair info
+    origin_arpt = 'LGAV'
+    destination_arpt = 'LFPG'
+
     parser = argparse.ArgumentParser(description="Run TRES passes for a batch of flights using multiprocessing.")
     # parser.add_argument("--routes-csv", required=False, default="D:\\project-equinox\\data\\cases\\LEMD_EGLL\\all_routes_sculpted.csv", help="Path to the flight routes CSV file.")
-    parser.add_argument("--routes-csv", required=False, default="/Volumes/CrucialX/project-equinox/data/cases/LEMD_EGLL/all_routes_sculpted.csv", help="Path to the flight routes CSV file.")
-    parser.add_argument("--case-name", required=False, default="LEMD_EGLL", help="A unique name for the city pair case (e.g., LEMD_EGLL).")
-    parser.add_argument("--batch-size", type=int, default=25, help="Number of flights per processing batch.")
+    parser.add_argument("--routes-csv", required=False, default=f"/Volumes/CrucialX/project-equinox/data/cases/{origin_arpt}_{destination_arpt}/all_routes_sculpted.csv", help="Path to the flight routes CSV file.")
+    parser.add_argument("--case-name", required=False, default=f"{origin_arpt}_{destination_arpt}", help="A unique name for the city pair case (e.g., LEMD_EGLL).")
+    parser.add_argument("--batch-size", type=int, default=50, help="Number of flights per processing batch.")
     # parser.add_argument("--config", required=False, default="D:\\project-equinox\\data\\cases\\LEMD_EGLL\\default.yaml", help="Path to the base YAML configuration file.")
-    parser.add_argument("--config", required=False, default="/Volumes/CrucialX/project-equinox/data/cases/LEMD_EGLL/default.yaml", help="Path to the base YAML configuration file.")
+    parser.add_argument("--config", required=False, default=f"/Volumes/CrucialX/project-equinox/data/cases/{origin_arpt}_{destination_arpt}/default.yaml", help="Path to the base YAML configuration file.")
     # parser.add_argument("--output-dir", default="D:\\project-equinox\\data\\cases\\LEMD_EGLL\\tres_runs", help="Base directory to save the output files.")
-    parser.add_argument("--output-dir", default="/Volumes/CrucialX/project-equinox/data/cases/LEMD_EGLL/tres_runs", help="Base directory to save the output files.")
+    parser.add_argument("--output-dir", default=f"/Volumes/CrucialX/project-equinox/data/cases/{origin_arpt}_{destination_arpt}/tres_runs", help="Base directory to save the output files.")
     parser.add_argument("--num-workers", type=int, default=os.cpu_count() - 1, help="Number of worker processes to use.")
     
     args = parser.parse_args()

@@ -300,10 +300,6 @@ def prep_default_yaml():
     yaml_content = f"""aircraft_model: NARROW_BODY_JET
 charges_file_path: {relative_charges_path}
 climb_phase_switch_allowance_climb_time_bins: 10
-cost_model_beta0: 0.0
-cost_model_beta1: 1.0
-cost_model_beta2: 1.0
-cost_model_beta3: 1.0
 cruise_altitude_ft: 35000.0
 cruise_speed_kts: 450.0
 delta_t_seconds: 600
@@ -323,8 +319,7 @@ source_elevation_ft: 0.0
 wind_data_dir: {wind_data_dir_path.replace('\\', '\\\\')}
 disable_config_wind_model: true
 gamma: 1.0
-alpha_pref_reg: 1.0
-cost_model_version: "4"
+cost_model_version: lin_disent
 """
 
     output_yaml_path = os.path.join(case_dir, "default.yaml")
