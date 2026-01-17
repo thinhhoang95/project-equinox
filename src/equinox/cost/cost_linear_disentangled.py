@@ -47,6 +47,7 @@ class CostLinearDisentangled(nn.Module):
         else:
             if device.type != "cpu":
                 raise ValueError("device must be None to force cpu. We do not support GPU for training.")
+            self.device = device
 
         if len(feature_names) != 3:
             raise ValueError("feature_names must have length 3 to match the built-in feature map.")
@@ -64,6 +65,12 @@ class CostLinearDisentangled(nn.Module):
         init_weights = torch.tensor(common_weights, dtype=torch.float32)
         self.common_weights = nn.Parameter(init_weights, requires_grad=True)
         self.preference_weights = preference_weights
+        alpha_pref_value = 0.0 if alpha_pref_reg is None else alpha_pref_reg
+        if isinstance(alpha_pref_value, torch.Tensor):
+            alpha_pref_value = alpha_pref_value.detach().clone().to(dtype=torch.float32)
+        else:
+            alpha_pref_value = torch.tensor(alpha_pref_value, dtype=torch.float32)
+        self.alpha_pref_reg = nn.Parameter(alpha_pref_value, requires_grad=False)
         self.feature_names = feature_names
 
         # Preferences live as a buffer so they are saved in the state_dict but not optimized by autograd.
@@ -193,7 +200,7 @@ class CostLinearDisentangled(nn.Module):
             tailwind_values_w,
         )
 
-        common_cost = features @ self.common_weights
+        common_cost = features @ self.common_weights.to(dtype=features.dtype)
         pref_cost = self.get_preference_score_batched(u_indices, v_indices)
         total_cost = common_cost + pref_cost
 

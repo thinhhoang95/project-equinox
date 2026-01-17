@@ -1538,6 +1538,24 @@ def _find_case_yaml(case_dir: str) -> str:
 def _load_training_params(config_path: str) -> Dict[str, Any]:
     with open(config_path, "r") as config_file:
         config_data = yaml.safe_load(config_file) or {}
+    training_casts = {
+        "training_batch_size": int,
+        "max_iters": int,
+        "checkpoint_interval": int,
+        "common_features_learning_rate": float,
+        "preference_feature_learning_rate": float,
+        "preference_projection_ridge": float,
+        "convergence_threshold": float,
+        "gamma": float,
+    }
+    for key, caster in training_casts.items():
+        if key in config_data and isinstance(config_data[key], str):
+            try:
+                config_data[key] = caster(config_data[key])
+            except ValueError as exc:
+                raise ValueError(
+                    f"Training param '{key}' must be {caster.__name__}, got {config_data[key]!r}."
+                ) from exc
     return config_data
 
 

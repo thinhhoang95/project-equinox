@@ -33767,3 +33767,1221 @@ Check the documentation of torch.load to learn more about types accepted by defa
 2025-06-23 13:17:35,841 - INFO - Processing flight 346303IBE3180
 2025-06-23 13:17:35,853 - INFO - Processing flight 346499IBE31ZF
 2025-06-23 13:17:35,869 - INFO - Processing flight 347287IBE3170
+2026-01-17 11:29:52,826 - INFO - Validating batch SGD pipeline implementation...
+2026-01-17 11:29:52,829 - INFO - ✓ All required imports are available
+2026-01-17 11:29:52,829 - INFO - ✓ thin_closures function signature is correct
+2026-01-17 11:29:52,829 - INFO - ✓ backward_gradient_pass function is available
+2026-01-17 11:29:52,829 - INFO - ✓ Implementation validation passed
+2026-01-17 11:29:52,829 - INFO - Starting Batch SGD Pipeline for Maximum Entropy Inverse Learning
+2026-01-17 11:29:52,856 - INFO - TensorBoard logging enabled. Log directory: data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 11:29:52,856 - INFO - To view logs, run: tensorboard --logdir data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 11:29:52,856 - INFO - Loading configuration from data/cases/LGAV_LFPG/default.yaml
+2026-01-17 11:29:52,857 - ERROR - Pipeline failed with error: RunConfiguration.__init__() got an unexpected keyword argument 'gamma'
+2026-01-17 11:30:01,619 - INFO - Validating batch SGD pipeline implementation...
+2026-01-17 11:30:01,620 - INFO - ✓ All required imports are available
+2026-01-17 11:30:01,620 - INFO - ✓ thin_closures function signature is correct
+2026-01-17 11:30:01,620 - INFO - ✓ backward_gradient_pass function is available
+2026-01-17 11:30:01,620 - INFO - ✓ Implementation validation passed
+2026-01-17 11:30:01,621 - INFO - Starting Batch SGD Pipeline for Maximum Entropy Inverse Learning
+2026-01-17 11:30:01,631 - INFO - TensorBoard logging enabled. Log directory: data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 11:30:01,631 - INFO - To view logs, run: tensorboard --logdir data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 11:30:01,631 - INFO - Loading configuration from data/cases/LGAV_LFPG/default.yaml
+2026-01-17 11:30:01,633 - ERROR - Pipeline failed with error: RunConfiguration.__init__() got an unexpected keyword argument 'gamma'
+2026-01-17 11:34:42,136 - INFO - Validating batch SGD pipeline implementation...
+2026-01-17 11:34:42,138 - INFO - ✓ All required imports are available
+2026-01-17 11:34:42,138 - INFO - ✓ thin_closures function signature is correct
+2026-01-17 11:34:42,138 - INFO - ✓ backward_gradient_pass function is available
+2026-01-17 11:34:42,138 - INFO - ✓ Implementation validation passed
+2026-01-17 11:34:42,139 - INFO - Starting Batch SGD Pipeline for Maximum Entropy Inverse Learning
+2026-01-17 11:34:42,147 - INFO - TensorBoard logging enabled. Log directory: data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 11:34:42,148 - INFO - To view logs, run: tensorboard --logdir data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 11:34:42,148 - INFO - Loading configuration from data/cases/LGAV_LFPG/default.yaml
+2026-01-17 11:34:42,243 - WARNING - Using CPU for training because device is None.
+2026-01-17 11:34:42,394 - ERROR - Pipeline failed with error: '<=' not supported between instances of 'float' and 'str'
+2026-01-17 12:06:50,740 - INFO - Validating batch SGD pipeline implementation...
+2026-01-17 12:06:50,741 - INFO - ✓ All required imports are available
+2026-01-17 12:06:50,741 - INFO - ✓ thin_closures function signature is correct
+2026-01-17 12:06:50,741 - INFO - ✓ backward_gradient_pass function is available
+2026-01-17 12:06:50,741 - INFO - ✓ Implementation validation passed
+2026-01-17 12:06:50,741 - INFO - Starting Batch SGD Pipeline for Maximum Entropy Inverse Learning
+2026-01-17 12:06:50,746 - INFO - TensorBoard logging enabled. Log directory: data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 12:06:50,746 - INFO - To view logs, run: tensorboard --logdir data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 12:06:50,746 - INFO - Loading configuration from data/cases/LGAV_LFPG/default.yaml
+2026-01-17 12:06:50,831 - WARNING - Using CPU for training because device is None.
+2026-01-17 12:06:50,976 - ERROR - Pipeline failed with error: '<=' not supported between instances of 'float' and 'str'
+2026-01-17 12:08:55,221 - INFO - Validating batch SGD pipeline implementation...
+2026-01-17 12:08:55,222 - INFO - ✓ All required imports are available
+2026-01-17 12:08:55,222 - INFO - ✓ thin_closures function signature is correct
+2026-01-17 12:08:55,222 - INFO - ✓ backward_gradient_pass function is available
+2026-01-17 12:08:55,222 - INFO - ✓ Implementation validation passed
+2026-01-17 12:08:55,222 - INFO - Starting Batch SGD Pipeline for Maximum Entropy Inverse Learning
+2026-01-17 12:08:55,228 - INFO - TensorBoard logging enabled. Log directory: data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 12:08:55,228 - INFO - To view logs, run: tensorboard --logdir data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 12:08:55,228 - INFO - Loading configuration from data/cases/LGAV_LFPG/default.yaml
+2026-01-17 12:08:55,317 - WARNING - Using CPU for training because device is None.
+2026-01-17 12:08:56,242 - INFO - Using device: cpu
+2026-01-17 12:08:56,242 - INFO - Cost model has 3 trainable parameters
+2026-01-17 12:08:56,242 - INFO - Loading flights from data/cases/LGAV_LFPG/tres_runs/all_routes_feasibly_snapped.csv and creating batches...
+2026-01-17 12:08:56,250 - INFO - Created 16 batches of flights.
+2026-01-17 12:08:56,275 - INFO - Preference projector condition number: 4.216e+01
+2026-01-17 12:08:56,278 - INFO - Checkpoint resumption is enabled. Searching for existing checkpoints...
+2026-01-17 12:08:56,278 - INFO - Checkpoint search directory: data/cases/LGAV_LFPG/batch_sgd_results
+2026-01-17 12:08:56,278 - INFO - Expected checkpoint pattern: checkpoint_iter_<number>.pt
+2026-01-17 12:08:56,278 - INFO - No existing checkpoints found. Starting training from scratch
+2026-01-17 12:08:56,279 - INFO - Note: Checkpoints will be saved to data/cases/LGAV_LFPG/batch_sgd_results
+2026-01-17 12:08:56,279 - INFO - Starting main training loop
+2026-01-17 12:08:56,300 - INFO - 
+--- Iteration 1/100 ---
+2026-01-17 12:08:56,300 - INFO - Processing sequential batch 1/16 with 5 flights
+2026-01-17 12:08:59,252 - ERROR - Pipeline failed with error: 'CostLinearDisentangled' object has no attribute 'device'
+2026-01-17 12:09:20,431 - INFO - Validating batch SGD pipeline implementation...
+2026-01-17 12:09:20,432 - INFO - ✓ All required imports are available
+2026-01-17 12:09:20,432 - INFO - ✓ thin_closures function signature is correct
+2026-01-17 12:09:20,432 - INFO - ✓ backward_gradient_pass function is available
+2026-01-17 12:09:20,432 - INFO - ✓ Implementation validation passed
+2026-01-17 12:09:20,432 - INFO - Starting Batch SGD Pipeline for Maximum Entropy Inverse Learning
+2026-01-17 12:09:20,436 - INFO - TensorBoard logging enabled. Log directory: data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 12:09:20,436 - INFO - To view logs, run: tensorboard --logdir data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 12:09:20,436 - INFO - Loading configuration from data/cases/LGAV_LFPG/default.yaml
+2026-01-17 12:09:20,516 - WARNING - Using CPU for training because device is None.
+2026-01-17 12:09:21,331 - INFO - Using device: cpu
+2026-01-17 12:09:21,331 - INFO - Cost model has 3 trainable parameters
+2026-01-17 12:09:21,331 - INFO - Loading flights from data/cases/LGAV_LFPG/tres_runs/all_routes_feasibly_snapped.csv and creating batches...
+2026-01-17 12:09:21,334 - INFO - Created 16 batches of flights.
+2026-01-17 12:09:21,340 - INFO - Preference projector condition number: 4.216e+01
+2026-01-17 12:09:21,340 - INFO - Checkpoint resumption is enabled. Searching for existing checkpoints...
+2026-01-17 12:09:21,340 - INFO - Checkpoint search directory: data/cases/LGAV_LFPG/batch_sgd_results
+2026-01-17 12:09:21,341 - INFO - Expected checkpoint pattern: checkpoint_iter_<number>.pt
+2026-01-17 12:09:21,341 - INFO - No existing checkpoints found. Starting training from scratch
+2026-01-17 12:09:21,342 - INFO - Note: Checkpoints will be saved to data/cases/LGAV_LFPG/batch_sgd_results
+2026-01-17 12:09:21,342 - INFO - Starting main training loop
+2026-01-17 12:09:21,355 - INFO - 
+--- Iteration 1/100 ---
+2026-01-17 12:09:21,356 - INFO - Processing sequential batch 1/16 with 5 flights
+2026-01-17 12:09:23,816 - INFO - Processing flight 468E45SEH9AP
+2026-01-17 12:09:23,852 - ERROR - Error processing flight 468E45SEH9AP: expected scalar type Double but found Float
+2026-01-17 12:09:23,858 - INFO - Processing flight 46B821AEE61CG
+2026-01-17 12:09:23,875 - ERROR - Error processing flight 46B821AEE61CG: expected scalar type Double but found Float
+2026-01-17 12:09:23,877 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:09:23,878 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:09:23,900 - ERROR - Error processing flight 46B82BAEE61CG: expected scalar type Double but found Float
+2026-01-17 12:09:23,902 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:09:23,904 - ERROR - Error processing flight 45CAB5AFR36HN: expected scalar type Double but found Float
+2026-01-17 12:09:23,919 - ERROR - Error processing flight 45CAB5AFR53PR: expected scalar type Double but found Float
+2026-01-17 12:09:24,677 - ERROR - Pipeline failed with error: Error processing flight 468E45SEH9AP: expected scalar type Double but found Float
+2026-01-17 12:11:01,797 - INFO - Validating batch SGD pipeline implementation...
+2026-01-17 12:11:01,800 - INFO - ✓ All required imports are available
+2026-01-17 12:11:01,801 - INFO - ✓ thin_closures function signature is correct
+2026-01-17 12:11:01,801 - INFO - ✓ backward_gradient_pass function is available
+2026-01-17 12:11:01,801 - INFO - ✓ Implementation validation passed
+2026-01-17 12:11:01,801 - INFO - Starting Batch SGD Pipeline for Maximum Entropy Inverse Learning
+2026-01-17 12:11:01,807 - INFO - TensorBoard logging enabled. Log directory: data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 12:11:01,807 - INFO - To view logs, run: tensorboard --logdir data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 12:11:01,807 - INFO - Loading configuration from data/cases/LGAV_LFPG/default.yaml
+2026-01-17 12:11:01,920 - WARNING - Using CPU for training because device is None.
+2026-01-17 12:11:03,081 - INFO - Using device: cpu
+2026-01-17 12:11:03,081 - INFO - Cost model has 3 trainable parameters
+2026-01-17 12:11:03,082 - INFO - Loading flights from data/cases/LGAV_LFPG/tres_runs/all_routes_feasibly_snapped.csv and creating batches...
+2026-01-17 12:11:03,088 - INFO - Created 16 batches of flights.
+2026-01-17 12:11:03,117 - INFO - Preference projector condition number: 4.216e+01
+2026-01-17 12:11:03,120 - INFO - Checkpoint resumption is enabled. Searching for existing checkpoints...
+2026-01-17 12:11:03,120 - INFO - Checkpoint search directory: data/cases/LGAV_LFPG/batch_sgd_results
+2026-01-17 12:11:03,120 - INFO - Expected checkpoint pattern: checkpoint_iter_<number>.pt
+2026-01-17 12:11:03,121 - INFO - No existing checkpoints found. Starting training from scratch
+2026-01-17 12:11:03,121 - INFO - Note: Checkpoints will be saved to data/cases/LGAV_LFPG/batch_sgd_results
+2026-01-17 12:11:03,121 - INFO - Starting main training loop
+2026-01-17 12:11:03,136 - INFO - 
+--- Iteration 1/100 ---
+2026-01-17 12:11:03,137 - INFO - Processing sequential batch 1/16 with 5 flights
+2026-01-17 12:11:06,051 - INFO - Processing flight 46B821AEE61CG
+2026-01-17 12:11:06,051 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:06,051 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:11:06,051 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:11:06,051 - INFO - Processing flight 468E45SEH9AP
+2026-01-17 12:11:07,550 - INFO - ✓ Applied gradient update with norm L2: 981.307861
+2026-01-17 12:11:08,309 - ERROR - Pipeline failed with error: 'CostLinearDisentangled' object has no attribute 'alpha_pref_reg'
+2026-01-17 12:11:37,014 - INFO - Validating batch SGD pipeline implementation...
+2026-01-17 12:11:37,015 - INFO - ✓ All required imports are available
+2026-01-17 12:11:37,016 - INFO - ✓ thin_closures function signature is correct
+2026-01-17 12:11:37,016 - INFO - ✓ backward_gradient_pass function is available
+2026-01-17 12:11:37,016 - INFO - ✓ Implementation validation passed
+2026-01-17 12:11:37,016 - INFO - Starting Batch SGD Pipeline for Maximum Entropy Inverse Learning
+2026-01-17 12:11:37,021 - INFO - TensorBoard logging enabled. Log directory: data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 12:11:37,021 - INFO - To view logs, run: tensorboard --logdir data/cases/LGAV_LFPG/batch_sgd_results/tensorboard_logs
+2026-01-17 12:11:37,021 - INFO - Loading configuration from data/cases/LGAV_LFPG/default.yaml
+2026-01-17 12:11:37,122 - WARNING - Using CPU for training because device is None.
+2026-01-17 12:11:38,031 - INFO - Using device: cpu
+2026-01-17 12:11:38,031 - INFO - Cost model has 3 trainable parameters
+2026-01-17 12:11:38,031 - INFO - Loading flights from data/cases/LGAV_LFPG/tres_runs/all_routes_feasibly_snapped.csv and creating batches...
+2026-01-17 12:11:38,036 - INFO - Created 16 batches of flights.
+2026-01-17 12:11:38,057 - INFO - Preference projector condition number: 4.216e+01
+2026-01-17 12:11:38,059 - INFO - Checkpoint resumption is enabled. Searching for existing checkpoints...
+2026-01-17 12:11:38,059 - INFO - Checkpoint search directory: data/cases/LGAV_LFPG/batch_sgd_results
+2026-01-17 12:11:38,059 - INFO - Expected checkpoint pattern: checkpoint_iter_<number>.pt
+2026-01-17 12:11:38,060 - INFO - No existing checkpoints found. Starting training from scratch
+2026-01-17 12:11:38,060 - INFO - Note: Checkpoints will be saved to data/cases/LGAV_LFPG/batch_sgd_results
+2026-01-17 12:11:38,060 - INFO - Starting main training loop
+2026-01-17 12:11:38,077 - INFO - 
+--- Iteration 1/100 ---
+2026-01-17 12:11:38,077 - INFO - Processing sequential batch 1/16 with 5 flights
+2026-01-17 12:11:40,383 - INFO - Processing flight 468E45SEH9AP
+2026-01-17 12:11:40,584 - INFO - Processing flight 46B821AEE61CG
+2026-01-17 12:11:40,592 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:11:40,637 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:11:40,669 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:42,173 - INFO - ✓ Applied gradient update with norm L2: 981.307861
+2026-01-17 12:11:42,176 - INFO - Preference update: grad_norm=35.549192 | constraint=6.456e-16 | min=-0.071054 max=0.042116 mean=0.004357
+2026-01-17 12:11:42,177 - INFO - Iteration 1 completed:
+2026-01-17 12:11:42,177 - INFO -   - Successful flights: 5/5
+2026-01-17 12:11:42,178 - INFO -   - Average log likelihood: -107.199966
+2026-01-17 12:11:42,178 - INFO -   - Gradient norm: 981.307861
+2026-01-17 12:11:42,178 - INFO -   - Processing time: 4.10s
+2026-01-17 12:11:42,199 - INFO - 
+--- Iteration 2/100 ---
+2026-01-17 12:11:42,199 - INFO - Processing sequential batch 2/16 with 5 flights
+2026-01-17 12:11:42,204 - INFO - Processing flight 46B82AAEE4CA
+2026-01-17 12:11:42,204 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:11:42,205 - INFO - Processing flight 46B825AEE61CG
+2026-01-17 12:11:42,205 - INFO - Processing flight 46B827AEE61CG
+2026-01-17 12:11:42,205 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:11:43,497 - INFO - ✓ Applied gradient update with norm L2: 1063.293823
+2026-01-17 12:11:43,498 - INFO - Preference update: grad_norm=31.768538 | constraint=2.676e-15 | min=-0.102684 max=0.100847 mean=0.008187
+2026-01-17 12:11:43,498 - INFO - Iteration 2 completed:
+2026-01-17 12:11:43,498 - INFO -   - Successful flights: 5/5
+2026-01-17 12:11:43,498 - INFO -   - Average log likelihood: -107.358172
+2026-01-17 12:11:43,498 - INFO -   - Gradient norm: 1063.293823
+2026-01-17 12:11:43,498 - INFO -   - Processing time: 1.30s
+2026-01-17 12:11:43,518 - INFO - 
+--- Iteration 3/100 ---
+2026-01-17 12:11:43,519 - INFO - Processing sequential batch 3/16 with 5 flights
+2026-01-17 12:11:43,521 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:11:43,521 - INFO - Processing flight 392AF5AFR98CQ
+2026-01-17 12:11:43,521 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:11:43,521 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:43,521 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:11:45,060 - INFO - ✓ Applied gradient update with norm L2: 439.590088
+2026-01-17 12:11:45,061 - INFO - Preference update: grad_norm=30.206077 | constraint=1.794e-15 | min=-0.114274 max=0.109076 mean=0.011255
+2026-01-17 12:11:45,062 - INFO - Iteration 3 completed:
+2026-01-17 12:11:45,062 - INFO -   - Successful flights: 5/5
+2026-01-17 12:11:45,063 - INFO -   - Average log likelihood: -73.637926
+2026-01-17 12:11:45,063 - INFO -   - Gradient norm: 439.590088
+2026-01-17 12:11:45,063 - INFO -   - Processing time: 1.54s
+2026-01-17 12:11:45,084 - INFO - 
+--- Iteration 4/100 ---
+2026-01-17 12:11:45,084 - INFO - Processing sequential batch 4/16 with 5 flights
+2026-01-17 12:11:45,092 - INFO - Processing flight 46B825AEE4CA
+2026-01-17 12:11:45,092 - INFO - Processing flight 46B8A3AEE61CG
+2026-01-17 12:11:45,094 - INFO - Processing flight 4690E2AEE4CA
+2026-01-17 12:11:45,094 - INFO - Processing flight 46B82DAEE612
+2026-01-17 12:11:45,094 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:11:46,647 - INFO - ✓ Applied gradient update with norm L2: 672.034058
+2026-01-17 12:11:46,648 - INFO - Preference update: grad_norm=27.107237 | constraint=4.172e-15 | min=-0.147568 max=0.134255 mean=0.013706
+2026-01-17 12:11:46,648 - INFO - Iteration 4 completed:
+2026-01-17 12:11:46,648 - INFO -   - Successful flights: 5/5
+2026-01-17 12:11:46,648 - INFO -   - Average log likelihood: -79.338024
+2026-01-17 12:11:46,649 - INFO -   - Gradient norm: 672.034058
+2026-01-17 12:11:46,649 - INFO -   - Processing time: 1.56s
+2026-01-17 12:11:46,671 - INFO - 
+--- Iteration 5/100 ---
+2026-01-17 12:11:46,671 - INFO - Processing sequential batch 5/16 with 5 flights
+2026-01-17 12:11:46,674 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:46,674 - INFO - Processing flight 46B822AEE4CA
+2026-01-17 12:11:46,674 - INFO - Processing flight 392AEEAFR98CQ
+2026-01-17 12:11:46,674 - INFO - Processing flight 4692DAAEE61CG
+2026-01-17 12:11:46,674 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:11:47,908 - INFO - ✓ Applied gradient update with norm L2: 1057.486572
+2026-01-17 12:11:47,909 - INFO - Preference update: grad_norm=34.217008 | constraint=1.404e-15 | min=-0.177843 max=0.143705 mean=0.017734
+2026-01-17 12:11:47,909 - INFO - Iteration 5 completed:
+2026-01-17 12:11:47,909 - INFO -   - Successful flights: 5/5
+2026-01-17 12:11:47,909 - INFO -   - Average log likelihood: -92.768937
+2026-01-17 12:11:47,909 - INFO -   - Gradient norm: 1057.486572
+2026-01-17 12:11:47,909 - INFO -   - Processing time: 1.24s
+2026-01-17 12:11:47,936 - INFO - 
+--- Iteration 6/100 ---
+2026-01-17 12:11:47,936 - INFO - Processing sequential batch 6/16 with 5 flights
+2026-01-17 12:11:47,938 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:11:47,938 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:47,938 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:11:47,939 - INFO - Processing flight 46B8A6AEE4CA
+2026-01-17 12:11:47,939 - INFO - Processing flight 46DCA2SEH902
+2026-01-17 12:11:49,144 - INFO - ✓ Applied gradient update with norm L2: 1027.854858
+2026-01-17 12:11:49,145 - INFO - Preference update: grad_norm=33.313347 | constraint=4.742e-15 | min=-0.189031 max=0.152435 mean=0.021780
+2026-01-17 12:11:49,145 - INFO - Iteration 6 completed:
+2026-01-17 12:11:49,145 - INFO -   - Successful flights: 5/5
+2026-01-17 12:11:49,145 - INFO -   - Average log likelihood: -62.542358
+2026-01-17 12:11:49,145 - INFO -   - Gradient norm: 1027.854858
+2026-01-17 12:11:49,145 - INFO -   - Processing time: 1.21s
+2026-01-17 12:11:49,165 - INFO - 
+--- Iteration 7/100 ---
+2026-01-17 12:11:49,165 - INFO - Processing sequential batch 7/16 with 5 flights
+2026-01-17 12:11:49,167 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:49,167 - INFO - Processing flight 468D07SEH902
+2026-01-17 12:11:49,167 - INFO - Processing flight 46B8AFAEE61CG
+2026-01-17 12:11:49,168 - INFO - Processing flight 46B825AEE61CG
+2026-01-17 12:11:49,168 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:50,229 - INFO - ✓ Applied gradient update with norm L2: 680.852417
+2026-01-17 12:11:50,230 - INFO - Preference update: grad_norm=41.816433 | constraint=8.882e-16 | min=-0.197244 max=0.164376 mean=0.026963
+2026-01-17 12:11:50,230 - INFO - Iteration 7 completed:
+2026-01-17 12:11:50,230 - INFO -   - Successful flights: 5/5
+2026-01-17 12:11:50,230 - INFO -   - Average log likelihood: -68.388574
+2026-01-17 12:11:50,230 - INFO -   - Gradient norm: 680.852417
+2026-01-17 12:11:50,230 - INFO -   - Processing time: 1.06s
+2026-01-17 12:11:50,248 - INFO - 
+--- Iteration 8/100 ---
+2026-01-17 12:11:50,248 - INFO - Processing sequential batch 8/16 with 5 flights
+2026-01-17 12:11:50,251 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:11:50,251 - INFO - Processing flight 4691C4AEE612
+2026-01-17 12:11:50,251 - INFO - Processing flight 46B823AEE4CA
+2026-01-17 12:11:50,251 - INFO - Processing flight 46A5E7SEH902
+2026-01-17 12:11:50,251 - INFO - Processing flight 398E49AFR98CQ
+2026-01-17 12:11:51,552 - INFO - ✓ Applied gradient update with norm L2: 713.790588
+2026-01-17 12:11:51,553 - INFO - Preference update: grad_norm=25.323722 | constraint=1.986e-15 | min=-0.190920 max=0.170699 mean=0.029227
+2026-01-17 12:11:51,553 - INFO - Iteration 8 completed:
+2026-01-17 12:11:51,553 - INFO -   - Successful flights: 5/5
+2026-01-17 12:11:51,553 - INFO -   - Average log likelihood: -59.618613
+2026-01-17 12:11:51,553 - INFO -   - Gradient norm: 713.790588
+2026-01-17 12:11:51,553 - INFO -   - Processing time: 1.30s
+2026-01-17 12:11:51,573 - INFO - 
+--- Iteration 9/100 ---
+2026-01-17 12:11:51,574 - INFO - Processing sequential batch 9/16 with 5 flights
+2026-01-17 12:11:51,576 - INFO - Processing flight 39CEAATVF91VP
+2026-01-17 12:11:51,576 - INFO - Processing flight 46B824AEE61CG
+2026-01-17 12:11:51,576 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:11:51,577 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:11:51,577 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:53,208 - INFO - ✓ Applied gradient update with norm L2: 832.679138
+2026-01-17 12:11:53,209 - INFO - Preference update: grad_norm=29.793656 | constraint=9.069e-15 | min=-0.223244 max=0.179685 mean=0.032272
+2026-01-17 12:11:53,209 - INFO - Iteration 9 completed:
+2026-01-17 12:11:53,209 - INFO -   - Successful flights: 5/5
+2026-01-17 12:11:53,209 - INFO -   - Average log likelihood: -44.025719
+2026-01-17 12:11:53,209 - INFO -   - Gradient norm: 832.679138
+2026-01-17 12:11:53,210 - INFO -   - Processing time: 1.64s
+2026-01-17 12:11:53,230 - INFO - 
+--- Iteration 10/100 ---
+2026-01-17 12:11:53,230 - INFO - Processing sequential batch 10/16 with 5 flights
+2026-01-17 12:11:53,232 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:11:53,232 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:53,232 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:11:53,233 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:11:53,233 - INFO - Processing flight 46B827AEE61CG
+2026-01-17 12:11:54,861 - INFO - ✓ Applied gradient update with norm L2: 630.435974
+2026-01-17 12:11:54,862 - INFO - Preference update: grad_norm=15.815916 | constraint=5.198e-15 | min=-0.222077 max=0.181091 mean=0.032255
+2026-01-17 12:11:54,862 - INFO - Iteration 10 completed:
+2026-01-17 12:11:54,862 - INFO -   - Successful flights: 5/5
+2026-01-17 12:11:54,863 - INFO -   - Average log likelihood: -36.174508
+2026-01-17 12:11:54,863 - INFO -   - Gradient norm: 630.435974
+2026-01-17 12:11:54,863 - INFO -   - Processing time: 1.63s
+2026-01-17 12:11:54,935 - INFO - ✓ Checkpoint saved successfully to data/cases/LGAV_LFPG/batch_sgd_results/checkpoint_iter_10.pt (size: 1,444,825 bytes)
+2026-01-17 12:11:54,935 - INFO - 
+--- Iteration 11/100 ---
+2026-01-17 12:11:54,936 - INFO - Processing sequential batch 11/16 with 5 flights
+2026-01-17 12:11:54,938 - INFO - Processing flight 46B821AEE4CA
+2026-01-17 12:11:54,938 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:54,938 - INFO - Processing flight 46B82AAEE61CG
+2026-01-17 12:11:54,938 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:11:54,938 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:56,528 - INFO - ✓ Applied gradient update with norm L2: 322.418030
+2026-01-17 12:11:56,529 - INFO - Preference update: grad_norm=14.545304 | constraint=5.366e-15 | min=-0.236225 max=0.162638 mean=0.031515
+2026-01-17 12:11:56,529 - INFO - Iteration 11 completed:
+2026-01-17 12:11:56,529 - INFO -   - Successful flights: 5/5
+2026-01-17 12:11:56,529 - INFO -   - Average log likelihood: -29.416279
+2026-01-17 12:11:56,529 - INFO -   - Gradient norm: 322.418030
+2026-01-17 12:11:56,529 - INFO -   - Processing time: 1.59s
+2026-01-17 12:11:56,555 - INFO - 
+--- Iteration 12/100 ---
+2026-01-17 12:11:56,556 - INFO - Processing sequential batch 12/16 with 5 flights
+2026-01-17 12:11:56,558 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:11:56,558 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:11:56,558 - INFO - Processing flight 46B82BAEE4CA
+2026-01-17 12:11:56,558 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:56,559 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:11:58,046 - INFO - ✓ Applied gradient update with norm L2: 320.819366
+2026-01-17 12:11:58,047 - INFO - Preference update: grad_norm=24.135058 | constraint=1.041e-14 | min=-0.249260 max=0.174045 mean=0.034123
+2026-01-17 12:11:58,047 - INFO - Iteration 12 completed:
+2026-01-17 12:11:58,047 - INFO -   - Successful flights: 5/5
+2026-01-17 12:11:58,047 - INFO -   - Average log likelihood: -38.844975
+2026-01-17 12:11:58,047 - INFO -   - Gradient norm: 320.819366
+2026-01-17 12:11:58,047 - INFO -   - Processing time: 1.49s
+2026-01-17 12:11:58,068 - INFO - 
+--- Iteration 13/100 ---
+2026-01-17 12:11:58,068 - INFO - Processing sequential batch 13/16 with 5 flights
+2026-01-17 12:11:58,070 - INFO - Processing flight 46B822AEE612
+2026-01-17 12:11:58,070 - INFO - Processing flight 392AF8AFR98CQ
+2026-01-17 12:11:58,070 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:58,071 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:11:58,071 - INFO - Processing flight 46B82DAEE61CG
+2026-01-17 12:11:59,599 - INFO - ✓ Applied gradient update with norm L2: 45.312492
+2026-01-17 12:11:59,600 - INFO - Preference update: grad_norm=13.856660 | constraint=1.601e-15 | min=-0.257138 max=0.181240 mean=0.033847
+2026-01-17 12:11:59,600 - INFO - Iteration 13 completed:
+2026-01-17 12:11:59,600 - INFO -   - Successful flights: 5/5
+2026-01-17 12:11:59,600 - INFO -   - Average log likelihood: -24.769577
+2026-01-17 12:11:59,600 - INFO -   - Gradient norm: 45.312492
+2026-01-17 12:11:59,600 - INFO -   - Processing time: 1.53s
+2026-01-17 12:11:59,620 - INFO - 
+--- Iteration 14/100 ---
+2026-01-17 12:11:59,620 - INFO - Processing sequential batch 14/16 with 5 flights
+2026-01-17 12:11:59,622 - INFO - Processing flight 392AECAFR98CQ
+2026-01-17 12:11:59,623 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:11:59,623 - INFO - Processing flight 46B82CAEE4CA
+2026-01-17 12:11:59,623 - INFO - Processing flight 46B827AEE61CG
+2026-01-17 12:11:59,623 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:01,125 - INFO - ✓ Applied gradient update with norm L2: 126.333000
+2026-01-17 12:12:01,126 - INFO - Preference update: grad_norm=16.626251 | constraint=4.213e-15 | min=-0.296159 max=0.181770 mean=0.034023
+2026-01-17 12:12:01,126 - INFO - Iteration 14 completed:
+2026-01-17 12:12:01,126 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:01,126 - INFO -   - Average log likelihood: -22.912718
+2026-01-17 12:12:01,127 - INFO -   - Gradient norm: 126.333000
+2026-01-17 12:12:01,127 - INFO -   - Processing time: 1.51s
+2026-01-17 12:12:01,147 - INFO - 
+--- Iteration 15/100 ---
+2026-01-17 12:12:01,147 - INFO - Processing sequential batch 15/16 with 5 flights
+2026-01-17 12:12:01,149 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:12:01,150 - INFO - Processing flight 46B825AEE612
+2026-01-17 12:12:01,150 - INFO - Processing flight 46B82BAEE4CA
+2026-01-17 12:12:01,150 - INFO - Processing flight 46B82CAEE61CG
+2026-01-17 12:12:01,151 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:12:02,774 - INFO - ✓ Applied gradient update with norm L2: 678.401794
+2026-01-17 12:12:02,775 - INFO - Preference update: grad_norm=16.474156 | constraint=4.636e-15 | min=-0.312793 max=0.184664 mean=0.035157
+2026-01-17 12:12:02,775 - INFO - Iteration 15 completed:
+2026-01-17 12:12:02,775 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:02,775 - INFO -   - Average log likelihood: -42.644429
+2026-01-17 12:12:02,775 - INFO -   - Gradient norm: 678.401794
+2026-01-17 12:12:02,776 - INFO -   - Processing time: 1.63s
+2026-01-17 12:12:02,804 - INFO - 
+--- Iteration 16/100 ---
+2026-01-17 12:12:02,804 - INFO - Processing sequential batch 16/16 with 1 flights
+2026-01-17 12:12:02,806 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:03,785 - INFO - ✓ Applied gradient update with norm L2: 292.116150
+2026-01-17 12:12:03,788 - INFO - Preference update: grad_norm=51.865819 | constraint=3.553e-15 | min=-0.297947 max=0.199324 mean=0.042367
+2026-01-17 12:12:03,788 - INFO - Iteration 16 completed:
+2026-01-17 12:12:03,788 - INFO -   - Successful flights: 1/1
+2026-01-17 12:12:03,789 - INFO -   - Average log likelihood: -29.970541
+2026-01-17 12:12:03,789 - INFO -   - Gradient norm: 292.116150
+2026-01-17 12:12:03,789 - INFO -   - Processing time: 0.98s
+2026-01-17 12:12:03,814 - INFO - 
+--- Iteration 17/100 ---
+2026-01-17 12:12:03,814 - INFO - Processing sequential batch 1/16 with 5 flights
+2026-01-17 12:12:03,817 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:03,817 - INFO - Processing flight 46B821AEE61CG
+2026-01-17 12:12:03,817 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:03,817 - INFO - Processing flight 468E45SEH9AP
+2026-01-17 12:12:03,817 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:12:05,327 - INFO - ✓ Applied gradient update with norm L2: 601.876831
+2026-01-17 12:12:05,327 - INFO - Preference update: grad_norm=29.628376 | constraint=6.233e-15 | min=-0.369540 max=0.225420 mean=0.046128
+2026-01-17 12:12:05,327 - INFO - Iteration 17 completed:
+2026-01-17 12:12:05,327 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:05,327 - INFO -   - Average log likelihood: -52.501327
+2026-01-17 12:12:05,328 - INFO -   - Gradient norm: 601.876831
+2026-01-17 12:12:05,328 - INFO -   - Processing time: 1.51s
+2026-01-17 12:12:05,353 - INFO - 
+--- Iteration 18/100 ---
+2026-01-17 12:12:05,353 - INFO - Processing sequential batch 2/16 with 5 flights
+2026-01-17 12:12:05,357 - INFO - Processing flight 46B827AEE61CG
+2026-01-17 12:12:05,357 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:05,357 - INFO - Processing flight 46B82AAEE4CA
+2026-01-17 12:12:05,357 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:05,357 - INFO - Processing flight 46B825AEE61CG
+2026-01-17 12:12:07,024 - INFO - ✓ Applied gradient update with norm L2: 562.635864
+2026-01-17 12:12:07,026 - INFO - Preference update: grad_norm=22.997085 | constraint=7.602e-15 | min=-0.403090 max=0.247433 mean=0.048842
+2026-01-17 12:12:07,026 - INFO - Iteration 18 completed:
+2026-01-17 12:12:07,027 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:07,027 - INFO -   - Average log likelihood: -40.524076
+2026-01-17 12:12:07,027 - INFO -   - Gradient norm: 562.635864
+2026-01-17 12:12:07,027 - INFO -   - Processing time: 1.67s
+2026-01-17 12:12:07,170 - INFO - 
+--- Iteration 19/100 ---
+2026-01-17 12:12:07,170 - INFO - Processing sequential batch 3/16 with 5 flights
+2026-01-17 12:12:07,192 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:12:07,192 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:12:07,193 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:07,193 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:07,197 - INFO - Processing flight 392AF5AFR98CQ
+2026-01-17 12:12:10,173 - INFO - ✓ Applied gradient update with norm L2: 1119.847168
+2026-01-17 12:12:10,175 - INFO - Preference update: grad_norm=21.868881 | constraint=9.155e-15 | min=-0.417307 max=0.253418 mean=0.050460
+2026-01-17 12:12:10,176 - INFO - Iteration 19 completed:
+2026-01-17 12:12:10,176 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:10,177 - INFO -   - Average log likelihood: -74.675163
+2026-01-17 12:12:10,177 - INFO -   - Gradient norm: 1119.847168
+2026-01-17 12:12:10,177 - INFO -   - Processing time: 3.01s
+2026-01-17 12:12:10,206 - INFO - 
+--- Iteration 20/100 ---
+2026-01-17 12:12:10,207 - INFO - Processing sequential batch 4/16 with 5 flights
+2026-01-17 12:12:10,212 - INFO - Processing flight 46B8A3AEE61CG
+2026-01-17 12:12:10,214 - INFO - Processing flight 46B825AEE4CA
+2026-01-17 12:12:10,215 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:12:10,215 - INFO - Processing flight 46B82DAEE612
+2026-01-17 12:12:10,215 - INFO - Processing flight 4690E2AEE4CA
+2026-01-17 12:12:12,571 - INFO - ✓ Applied gradient update with norm L2: 824.845886
+2026-01-17 12:12:12,574 - INFO - Preference update: grad_norm=23.055146 | constraint=3.353e-15 | min=-0.445687 max=0.259943 mean=0.052551
+2026-01-17 12:12:12,574 - INFO - Iteration 20 completed:
+2026-01-17 12:12:12,574 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:12,575 - INFO -   - Average log likelihood: -58.684274
+2026-01-17 12:12:12,575 - INFO -   - Gradient norm: 824.845886
+2026-01-17 12:12:12,575 - INFO -   - Processing time: 2.37s
+2026-01-17 12:12:12,642 - INFO - ✓ Checkpoint saved successfully to data/cases/LGAV_LFPG/batch_sgd_results/checkpoint_iter_20.pt (size: 1,445,465 bytes)
+2026-01-17 12:12:12,642 - INFO - 
+--- Iteration 21/100 ---
+2026-01-17 12:12:12,643 - INFO - Processing sequential batch 5/16 with 5 flights
+2026-01-17 12:12:12,660 - INFO - Processing flight 4692DAAEE61CG
+2026-01-17 12:12:12,660 - INFO - Processing flight 46B822AEE4CA
+2026-01-17 12:12:12,661 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:12,663 - INFO - Processing flight 392AEEAFR98CQ
+2026-01-17 12:12:12,666 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:14,620 - INFO - ✓ Applied gradient update with norm L2: 172.499222
+2026-01-17 12:12:14,622 - INFO - Preference update: grad_norm=29.170604 | constraint=1.986e-15 | min=-0.472140 max=0.268392 mean=0.055897
+2026-01-17 12:12:14,622 - INFO - Iteration 21 completed:
+2026-01-17 12:12:14,622 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:14,623 - INFO -   - Average log likelihood: -32.786406
+2026-01-17 12:12:14,623 - INFO -   - Gradient norm: 172.499222
+2026-01-17 12:12:14,623 - INFO -   - Processing time: 1.98s
+2026-01-17 12:12:14,647 - INFO - 
+--- Iteration 22/100 ---
+2026-01-17 12:12:14,647 - INFO - Processing sequential batch 6/16 with 5 flights
+2026-01-17 12:12:14,662 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:14,663 - INFO - Processing flight 46DCA2SEH902
+2026-01-17 12:12:14,667 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:12:14,669 - INFO - Processing flight 46B8A6AEE4CA
+2026-01-17 12:12:14,671 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:15,845 - INFO - ✓ Applied gradient update with norm L2: 589.397583
+2026-01-17 12:12:15,846 - INFO - Preference update: grad_norm=29.111747 | constraint=1.798e-14 | min=-0.481949 max=0.305206 mean=0.059332
+2026-01-17 12:12:15,847 - INFO - Iteration 22 completed:
+2026-01-17 12:12:15,847 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:15,847 - INFO -   - Average log likelihood: -24.078867
+2026-01-17 12:12:15,847 - INFO -   - Gradient norm: 589.397583
+2026-01-17 12:12:15,847 - INFO -   - Processing time: 1.20s
+2026-01-17 12:12:15,871 - INFO - 
+--- Iteration 23/100 ---
+2026-01-17 12:12:15,871 - INFO - Processing sequential batch 7/16 with 5 flights
+2026-01-17 12:12:15,874 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:15,875 - INFO - Processing flight 468D07SEH902
+2026-01-17 12:12:15,875 - INFO - Processing flight 46B825AEE61CG
+2026-01-17 12:12:15,875 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:15,875 - INFO - Processing flight 46B8AFAEE61CG
+2026-01-17 12:12:17,060 - INFO - ✓ Applied gradient update with norm L2: 528.742859
+2026-01-17 12:12:17,061 - INFO - Preference update: grad_norm=33.774716 | constraint=1.259e-14 | min=-0.454964 max=0.343316 mean=0.063070
+2026-01-17 12:12:17,061 - INFO - Iteration 23 completed:
+2026-01-17 12:12:17,061 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:17,061 - INFO -   - Average log likelihood: -51.705428
+2026-01-17 12:12:17,061 - INFO -   - Gradient norm: 528.742859
+2026-01-17 12:12:17,061 - INFO -   - Processing time: 1.19s
+2026-01-17 12:12:17,091 - INFO - 
+--- Iteration 24/100 ---
+2026-01-17 12:12:17,091 - INFO - Processing sequential batch 8/16 with 5 flights
+2026-01-17 12:12:17,094 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:17,094 - INFO - Processing flight 46A5E7SEH902
+2026-01-17 12:12:17,094 - INFO - Processing flight 4691C4AEE612
+2026-01-17 12:12:17,095 - INFO - Processing flight 46B823AEE4CA
+2026-01-17 12:12:17,095 - INFO - Processing flight 398E49AFR98CQ
+2026-01-17 12:12:18,920 - INFO - ✓ Applied gradient update with norm L2: 523.459229
+2026-01-17 12:12:18,921 - INFO - Preference update: grad_norm=18.799272 | constraint=3.662e-15 | min=-0.449163 max=0.347962 mean=0.064450
+2026-01-17 12:12:18,921 - INFO - Iteration 24 completed:
+2026-01-17 12:12:18,921 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:18,921 - INFO -   - Average log likelihood: -49.257909
+2026-01-17 12:12:18,922 - INFO -   - Gradient norm: 523.459229
+2026-01-17 12:12:18,922 - INFO -   - Processing time: 1.83s
+2026-01-17 12:12:18,948 - INFO - 
+--- Iteration 25/100 ---
+2026-01-17 12:12:18,948 - INFO - Processing sequential batch 9/16 with 5 flights
+2026-01-17 12:12:18,950 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:18,950 - INFO - Processing flight 39CEAATVF91VP
+2026-01-17 12:12:18,951 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:12:18,951 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:18,951 - INFO - Processing flight 46B824AEE61CG
+2026-01-17 12:12:20,681 - INFO - ✓ Applied gradient update with norm L2: 364.500671
+2026-01-17 12:12:20,682 - INFO - Preference update: grad_norm=14.191364 | constraint=1.994e-14 | min=-0.475654 max=0.350217 mean=0.064931
+2026-01-17 12:12:20,682 - INFO - Iteration 25 completed:
+2026-01-17 12:12:20,682 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:20,682 - INFO -   - Average log likelihood: -31.330230
+2026-01-17 12:12:20,682 - INFO -   - Gradient norm: 364.500671
+2026-01-17 12:12:20,682 - INFO -   - Processing time: 1.73s
+2026-01-17 12:12:20,720 - INFO - 
+--- Iteration 26/100 ---
+2026-01-17 12:12:20,720 - INFO - Processing sequential batch 10/16 with 5 flights
+2026-01-17 12:12:20,722 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:20,722 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:12:20,722 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:20,723 - INFO - Processing flight 46B827AEE61CG
+2026-01-17 12:12:20,723 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:12:22,212 - INFO - ✓ Applied gradient update with norm L2: 133.426224
+2026-01-17 12:12:22,213 - INFO - Preference update: grad_norm=21.283748 | constraint=9.483e-15 | min=-0.474781 max=0.326999 mean=0.062569
+2026-01-17 12:12:22,213 - INFO - Iteration 26 completed:
+2026-01-17 12:12:22,213 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:22,213 - INFO -   - Average log likelihood: -30.225112
+2026-01-17 12:12:22,213 - INFO -   - Gradient norm: 133.426224
+2026-01-17 12:12:22,214 - INFO -   - Processing time: 1.49s
+2026-01-17 12:12:22,236 - INFO - 
+--- Iteration 27/100 ---
+2026-01-17 12:12:22,236 - INFO - Processing sequential batch 11/16 with 5 flights
+2026-01-17 12:12:22,238 - INFO - Processing flight 46B82AAEE61CG
+2026-01-17 12:12:22,238 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:22,238 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:12:22,238 - INFO - Processing flight 46B821AEE4CA
+2026-01-17 12:12:22,238 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:23,985 - INFO - ✓ Applied gradient update with norm L2: 416.178162
+2026-01-17 12:12:23,986 - INFO - Preference update: grad_norm=19.684833 | constraint=9.970e-15 | min=-0.470591 max=0.323642 mean=0.060287
+2026-01-17 12:12:23,986 - INFO - Iteration 27 completed:
+2026-01-17 12:12:23,986 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:23,986 - INFO -   - Average log likelihood: -26.018711
+2026-01-17 12:12:23,986 - INFO -   - Gradient norm: 416.178162
+2026-01-17 12:12:23,987 - INFO -   - Processing time: 1.75s
+2026-01-17 12:12:24,005 - INFO - 
+--- Iteration 28/100 ---
+2026-01-17 12:12:24,005 - INFO - Processing sequential batch 12/16 with 5 flights
+2026-01-17 12:12:24,008 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:24,008 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:12:24,008 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:24,008 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:24,008 - INFO - Processing flight 46B82BAEE4CA
+2026-01-17 12:12:25,625 - INFO - ✓ Applied gradient update with norm L2: 68.352936
+2026-01-17 12:12:25,626 - INFO - Preference update: grad_norm=22.165845 | constraint=6.466e-15 | min=-0.477970 max=0.342096 mean=0.062490
+2026-01-17 12:12:25,626 - INFO - Iteration 28 completed:
+2026-01-17 12:12:25,627 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:25,627 - INFO -   - Average log likelihood: -29.182181
+2026-01-17 12:12:25,627 - INFO -   - Gradient norm: 68.352936
+2026-01-17 12:12:25,627 - INFO -   - Processing time: 1.62s
+2026-01-17 12:12:25,649 - INFO - 
+--- Iteration 29/100 ---
+2026-01-17 12:12:25,649 - INFO - Processing sequential batch 13/16 with 5 flights
+2026-01-17 12:12:25,653 - INFO - Processing flight 46B82DAEE61CG
+2026-01-17 12:12:25,654 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:25,654 - INFO - Processing flight 392AF8AFR98CQ
+2026-01-17 12:12:25,654 - INFO - Processing flight 46B822AEE612
+2026-01-17 12:12:25,656 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:27,419 - INFO - ✓ Applied gradient update with norm L2: 445.883209
+2026-01-17 12:12:27,420 - INFO - Preference update: grad_norm=15.450540 | constraint=1.370e-14 | min=-0.477727 max=0.346834 mean=0.063593
+2026-01-17 12:12:27,420 - INFO - Iteration 29 completed:
+2026-01-17 12:12:27,420 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:27,420 - INFO -   - Average log likelihood: -22.773486
+2026-01-17 12:12:27,420 - INFO -   - Gradient norm: 445.883209
+2026-01-17 12:12:27,420 - INFO -   - Processing time: 1.77s
+2026-01-17 12:12:27,441 - INFO - 
+--- Iteration 30/100 ---
+2026-01-17 12:12:27,441 - INFO - Processing sequential batch 14/16 with 5 flights
+2026-01-17 12:12:27,443 - INFO - Processing flight 392AECAFR98CQ
+2026-01-17 12:12:27,443 - INFO - Processing flight 46B82CAEE4CA
+2026-01-17 12:12:27,444 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:27,444 - INFO - Processing flight 46B827AEE61CG
+2026-01-17 12:12:27,445 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:29,207 - INFO - ✓ Applied gradient update with norm L2: 781.020935
+2026-01-17 12:12:29,207 - INFO - Preference update: grad_norm=18.110895 | constraint=8.926e-15 | min=-0.505441 max=0.350578 mean=0.065483
+2026-01-17 12:12:29,208 - INFO - Iteration 30 completed:
+2026-01-17 12:12:29,208 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:29,208 - INFO -   - Average log likelihood: -19.850493
+2026-01-17 12:12:29,208 - INFO -   - Gradient norm: 781.020935
+2026-01-17 12:12:29,208 - INFO -   - Processing time: 1.77s
+2026-01-17 12:12:29,275 - INFO - ✓ Checkpoint saved successfully to data/cases/LGAV_LFPG/batch_sgd_results/checkpoint_iter_30.pt (size: 1,446,105 bytes)
+2026-01-17 12:12:29,275 - INFO - 
+--- Iteration 31/100 ---
+2026-01-17 12:12:29,275 - INFO - Processing sequential batch 15/16 with 5 flights
+2026-01-17 12:12:29,278 - INFO - Processing flight 46B825AEE612
+2026-01-17 12:12:29,278 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:12:29,279 - INFO - Processing flight 46B82CAEE61CG
+2026-01-17 12:12:29,279 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:12:29,279 - INFO - Processing flight 46B82BAEE4CA
+2026-01-17 12:12:30,920 - INFO - ✓ Applied gradient update with norm L2: 406.476929
+2026-01-17 12:12:30,921 - INFO - Preference update: grad_norm=16.078043 | constraint=8.623e-15 | min=-0.510056 max=0.352995 mean=0.066372
+2026-01-17 12:12:30,921 - INFO - Iteration 31 completed:
+2026-01-17 12:12:30,921 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:30,921 - INFO -   - Average log likelihood: -20.761339
+2026-01-17 12:12:30,921 - INFO -   - Gradient norm: 406.476929
+2026-01-17 12:12:30,921 - INFO -   - Processing time: 1.65s
+2026-01-17 12:12:30,943 - INFO - 
+--- Iteration 32/100 ---
+2026-01-17 12:12:30,943 - INFO - Processing sequential batch 16/16 with 1 flights
+2026-01-17 12:12:30,945 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:31,881 - INFO - ✓ Applied gradient update with norm L2: 869.509644
+2026-01-17 12:12:31,882 - INFO - Preference update: grad_norm=48.434413 | constraint=1.561e-14 | min=-0.523276 max=0.366437 mean=0.072884
+2026-01-17 12:12:31,882 - INFO - Iteration 32 completed:
+2026-01-17 12:12:31,882 - INFO -   - Successful flights: 1/1
+2026-01-17 12:12:31,882 - INFO -   - Average log likelihood: -18.034669
+2026-01-17 12:12:31,882 - INFO -   - Gradient norm: 869.509644
+2026-01-17 12:12:31,883 - INFO -   - Processing time: 0.94s
+2026-01-17 12:12:31,908 - INFO - 
+--- Iteration 33/100 ---
+2026-01-17 12:12:31,908 - INFO - Processing sequential batch 1/16 with 5 flights
+2026-01-17 12:12:31,910 - INFO - Processing flight 468E45SEH9AP
+2026-01-17 12:12:31,910 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:12:31,910 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:31,910 - INFO - Processing flight 46B821AEE61CG
+2026-01-17 12:12:31,911 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:33,275 - INFO - ✓ Applied gradient update with norm L2: 421.114380
+2026-01-17 12:12:33,277 - INFO - Preference update: grad_norm=23.735953 | constraint=7.589e-15 | min=-0.547381 max=0.372793 mean=0.075429
+2026-01-17 12:12:33,277 - INFO - Iteration 33 completed:
+2026-01-17 12:12:33,277 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:33,277 - INFO -   - Average log likelihood: -26.012483
+2026-01-17 12:12:33,277 - INFO -   - Gradient norm: 421.114380
+2026-01-17 12:12:33,277 - INFO -   - Processing time: 1.37s
+2026-01-17 12:12:33,300 - INFO - 
+--- Iteration 34/100 ---
+2026-01-17 12:12:33,300 - INFO - Processing sequential batch 2/16 with 5 flights
+2026-01-17 12:12:33,302 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:33,302 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:33,302 - INFO - Processing flight 46B827AEE61CG
+2026-01-17 12:12:33,303 - INFO - Processing flight 46B825AEE61CG
+2026-01-17 12:12:33,303 - INFO - Processing flight 46B82AAEE4CA
+2026-01-17 12:12:34,702 - INFO - ✓ Applied gradient update with norm L2: 447.512146
+2026-01-17 12:12:34,703 - INFO - Preference update: grad_norm=23.915755 | constraint=9.930e-15 | min=-0.574657 max=0.379348 mean=0.078104
+2026-01-17 12:12:34,704 - INFO - Iteration 34 completed:
+2026-01-17 12:12:34,704 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:34,704 - INFO -   - Average log likelihood: -21.757803
+2026-01-17 12:12:34,704 - INFO -   - Gradient norm: 447.512146
+2026-01-17 12:12:34,705 - INFO -   - Processing time: 1.40s
+2026-01-17 12:12:34,736 - INFO - 
+--- Iteration 35/100 ---
+2026-01-17 12:12:34,736 - INFO - Processing sequential batch 3/16 with 5 flights
+2026-01-17 12:12:34,743 - INFO - Processing flight 392AF5AFR98CQ
+2026-01-17 12:12:34,743 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:12:34,743 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:34,743 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:12:34,744 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:36,051 - INFO - ✓ Applied gradient update with norm L2: 309.519714
+2026-01-17 12:12:36,052 - INFO - Preference update: grad_norm=19.174689 | constraint=1.305e-14 | min=-0.573630 max=0.384485 mean=0.079343
+2026-01-17 12:12:36,052 - INFO - Iteration 35 completed:
+2026-01-17 12:12:36,052 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:36,052 - INFO -   - Average log likelihood: -33.330739
+2026-01-17 12:12:36,052 - INFO -   - Gradient norm: 309.519714
+2026-01-17 12:12:36,053 - INFO -   - Processing time: 1.32s
+2026-01-17 12:12:36,088 - INFO - 
+--- Iteration 36/100 ---
+2026-01-17 12:12:36,088 - INFO - Processing sequential batch 4/16 with 5 flights
+2026-01-17 12:12:36,090 - INFO - Processing flight 46B8A3AEE61CG
+2026-01-17 12:12:36,090 - INFO - Processing flight 46B82DAEE612
+2026-01-17 12:12:36,091 - INFO - Processing flight 4690E2AEE4CA
+2026-01-17 12:12:36,092 - INFO - Processing flight 46B825AEE4CA
+2026-01-17 12:12:36,092 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:12:37,549 - INFO - ✓ Applied gradient update with norm L2: 189.512939
+2026-01-17 12:12:37,551 - INFO - Preference update: grad_norm=16.057019 | constraint=1.099e-14 | min=-0.575613 max=0.387791 mean=0.079696
+2026-01-17 12:12:37,551 - INFO - Iteration 36 completed:
+2026-01-17 12:12:37,551 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:37,551 - INFO -   - Average log likelihood: -30.616246
+2026-01-17 12:12:37,551 - INFO -   - Gradient norm: 189.512939
+2026-01-17 12:12:37,552 - INFO -   - Processing time: 1.46s
+2026-01-17 12:12:37,576 - INFO - 
+--- Iteration 37/100 ---
+2026-01-17 12:12:37,576 - INFO - Processing sequential batch 5/16 with 5 flights
+2026-01-17 12:12:37,580 - INFO - Processing flight 392AEEAFR98CQ
+2026-01-17 12:12:37,580 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:37,580 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:37,580 - INFO - Processing flight 46B822AEE4CA
+2026-01-17 12:12:37,580 - INFO - Processing flight 4692DAAEE61CG
+2026-01-17 12:12:39,116 - INFO - ✓ Applied gradient update with norm L2: 487.658600
+2026-01-17 12:12:39,118 - INFO - Preference update: grad_norm=19.049046 | constraint=4.529e-15 | min=-0.588350 max=0.392534 mean=0.081205
+2026-01-17 12:12:39,118 - INFO - Iteration 37 completed:
+2026-01-17 12:12:39,118 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:39,118 - INFO -   - Average log likelihood: -27.511922
+2026-01-17 12:12:39,118 - INFO -   - Gradient norm: 487.658600
+2026-01-17 12:12:39,118 - INFO -   - Processing time: 1.54s
+2026-01-17 12:12:39,147 - INFO - 
+--- Iteration 38/100 ---
+2026-01-17 12:12:39,147 - INFO - Processing sequential batch 6/16 with 5 flights
+2026-01-17 12:12:39,150 - INFO - Processing flight 46B8A6AEE4CA
+2026-01-17 12:12:39,150 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:39,150 - INFO - Processing flight 46DCA2SEH902
+2026-01-17 12:12:39,150 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:12:39,150 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:40,281 - INFO - ✓ Applied gradient update with norm L2: 541.333740
+2026-01-17 12:12:40,282 - INFO - Preference update: grad_norm=20.715812 | constraint=7.324e-15 | min=-0.560859 max=0.398868 mean=0.082636
+2026-01-17 12:12:40,282 - INFO - Iteration 38 completed:
+2026-01-17 12:12:40,282 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:40,282 - INFO -   - Average log likelihood: -15.962433
+2026-01-17 12:12:40,282 - INFO -   - Gradient norm: 541.333740
+2026-01-17 12:12:40,282 - INFO -   - Processing time: 1.13s
+2026-01-17 12:12:40,307 - INFO - 
+--- Iteration 39/100 ---
+2026-01-17 12:12:40,307 - INFO - Processing sequential batch 7/16 with 5 flights
+2026-01-17 12:12:40,309 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:40,309 - INFO - Processing flight 46B8AFAEE61CG
+2026-01-17 12:12:40,309 - INFO - Processing flight 46B825AEE61CG
+2026-01-17 12:12:40,310 - INFO - Processing flight 468D07SEH902
+2026-01-17 12:12:40,310 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:41,456 - INFO - ✓ Applied gradient update with norm L2: 224.299011
+2026-01-17 12:12:41,456 - INFO - Preference update: grad_norm=26.620784 | constraint=8.702e-15 | min=-0.539031 max=0.418984 mean=0.084755
+2026-01-17 12:12:41,457 - INFO - Iteration 39 completed:
+2026-01-17 12:12:41,457 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:41,457 - INFO -   - Average log likelihood: -32.346273
+2026-01-17 12:12:41,457 - INFO -   - Gradient norm: 224.299011
+2026-01-17 12:12:41,457 - INFO -   - Processing time: 1.15s
+2026-01-17 12:12:41,480 - INFO - 
+--- Iteration 40/100 ---
+2026-01-17 12:12:41,480 - INFO - Processing sequential batch 8/16 with 5 flights
+2026-01-17 12:12:41,482 - INFO - Processing flight 46A5E7SEH902
+2026-01-17 12:12:41,482 - INFO - Processing flight 398E49AFR98CQ
+2026-01-17 12:12:41,482 - INFO - Processing flight 46B823AEE4CA
+2026-01-17 12:12:41,482 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:41,482 - INFO - Processing flight 4691C4AEE612
+2026-01-17 12:12:43,038 - INFO - ✓ Applied gradient update with norm L2: 446.805756
+2026-01-17 12:12:43,039 - INFO - Preference update: grad_norm=16.386527 | constraint=1.379e-14 | min=-0.563766 max=0.422357 mean=0.085474
+2026-01-17 12:12:43,039 - INFO - Iteration 40 completed:
+2026-01-17 12:12:43,039 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:43,039 - INFO -   - Average log likelihood: -32.796845
+2026-01-17 12:12:43,039 - INFO -   - Gradient norm: 446.805756
+2026-01-17 12:12:43,039 - INFO -   - Processing time: 1.56s
+2026-01-17 12:12:43,101 - INFO - ✓ Checkpoint saved successfully to data/cases/LGAV_LFPG/batch_sgd_results/checkpoint_iter_40.pt (size: 1,446,937 bytes)
+2026-01-17 12:12:43,101 - INFO - 
+--- Iteration 41/100 ---
+2026-01-17 12:12:43,101 - INFO - Processing sequential batch 9/16 with 5 flights
+2026-01-17 12:12:43,105 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:43,105 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:43,106 - INFO - Processing flight 39CEAATVF91VP
+2026-01-17 12:12:43,106 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:12:43,106 - INFO - Processing flight 46B824AEE61CG
+2026-01-17 12:12:45,187 - INFO - ✓ Applied gradient update with norm L2: 249.784088
+2026-01-17 12:12:45,192 - INFO - Preference update: grad_norm=13.313014 | constraint=1.986e-15 | min=-0.555334 max=0.421780 mean=0.084428
+2026-01-17 12:12:45,193 - INFO - Iteration 41 completed:
+2026-01-17 12:12:45,193 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:45,193 - INFO -   - Average log likelihood: -23.543602
+2026-01-17 12:12:45,193 - INFO -   - Gradient norm: 249.784088
+2026-01-17 12:12:45,193 - INFO -   - Processing time: 2.09s
+2026-01-17 12:12:45,220 - INFO - 
+--- Iteration 42/100 ---
+2026-01-17 12:12:45,220 - INFO - Processing sequential batch 10/16 with 5 flights
+2026-01-17 12:12:45,224 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:45,224 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:45,224 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:12:45,225 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:12:45,225 - INFO - Processing flight 46B827AEE61CG
+2026-01-17 12:12:46,839 - INFO - ✓ Applied gradient update with norm L2: 112.352104
+2026-01-17 12:12:46,839 - INFO - Preference update: grad_norm=23.892150 | constraint=8.611e-15 | min=-0.545173 max=0.397344 mean=0.081422
+2026-01-17 12:12:46,840 - INFO - Iteration 42 completed:
+2026-01-17 12:12:46,840 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:46,840 - INFO -   - Average log likelihood: -24.315933
+2026-01-17 12:12:46,840 - INFO -   - Gradient norm: 112.352104
+2026-01-17 12:12:46,840 - INFO -   - Processing time: 1.62s
+2026-01-17 12:12:46,856 - INFO - 
+--- Iteration 43/100 ---
+2026-01-17 12:12:46,856 - INFO - Processing sequential batch 11/16 with 5 flights
+2026-01-17 12:12:46,858 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:46,858 - INFO - Processing flight 46B821AEE4CA
+2026-01-17 12:12:46,858 - INFO - Processing flight 46B82AAEE61CG
+2026-01-17 12:12:46,859 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:46,859 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:12:49,515 - INFO - ✓ Applied gradient update with norm L2: 403.441406
+2026-01-17 12:12:49,524 - INFO - Preference update: grad_norm=23.980700 | constraint=4.070e-15 | min=-0.520761 max=0.392211 mean=0.078254
+2026-01-17 12:12:49,525 - INFO - Iteration 43 completed:
+2026-01-17 12:12:49,525 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:49,526 - INFO -   - Average log likelihood: -21.379457
+2026-01-17 12:12:49,526 - INFO -   - Gradient norm: 403.441406
+2026-01-17 12:12:49,526 - INFO -   - Processing time: 2.67s
+2026-01-17 12:12:49,567 - INFO - 
+--- Iteration 44/100 ---
+2026-01-17 12:12:49,567 - INFO - Processing sequential batch 12/16 with 5 flights
+2026-01-17 12:12:49,581 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:49,582 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:12:49,583 - INFO - Processing flight 46B82BAEE4CA
+2026-01-17 12:12:49,582 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:49,587 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:51,656 - INFO - ✓ Applied gradient update with norm L2: 247.816452
+2026-01-17 12:12:51,659 - INFO - Preference update: grad_norm=13.748537 | constraint=4.190e-15 | min=-0.511621 max=0.404066 mean=0.078422
+2026-01-17 12:12:51,662 - INFO - Iteration 44 completed:
+2026-01-17 12:12:51,662 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:51,662 - INFO -   - Average log likelihood: -23.784717
+2026-01-17 12:12:51,662 - INFO -   - Gradient norm: 247.816452
+2026-01-17 12:12:51,662 - INFO -   - Processing time: 2.09s
+2026-01-17 12:12:51,692 - INFO - 
+--- Iteration 45/100 ---
+2026-01-17 12:12:51,692 - INFO - Processing sequential batch 13/16 with 5 flights
+2026-01-17 12:12:51,697 - INFO - Processing flight 46B82DAEE61CG
+2026-01-17 12:12:51,697 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:51,698 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:51,698 - INFO - Processing flight 46B822AEE612
+2026-01-17 12:12:51,699 - INFO - Processing flight 392AF8AFR98CQ
+2026-01-17 12:12:54,707 - INFO - ✓ Applied gradient update with norm L2: 88.382774
+2026-01-17 12:12:54,710 - INFO - Preference update: grad_norm=15.870139 | constraint=1.288e-14 | min=-0.499098 max=0.408127 mean=0.076956
+2026-01-17 12:12:54,710 - INFO - Iteration 45 completed:
+2026-01-17 12:12:54,710 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:54,711 - INFO -   - Average log likelihood: -18.129438
+2026-01-17 12:12:54,711 - INFO -   - Gradient norm: 88.382774
+2026-01-17 12:12:54,711 - INFO -   - Processing time: 3.02s
+2026-01-17 12:12:54,767 - INFO - 
+--- Iteration 46/100 ---
+2026-01-17 12:12:54,767 - INFO - Processing sequential batch 14/16 with 5 flights
+2026-01-17 12:12:54,788 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:12:54,789 - INFO - Processing flight 46B827AEE61CG
+2026-01-17 12:12:54,789 - INFO - Processing flight 46B82CAEE4CA
+2026-01-17 12:12:54,798 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:12:54,805 - INFO - Processing flight 392AECAFR98CQ
+2026-01-17 12:12:57,641 - INFO - ✓ Applied gradient update with norm L2: 60.240398
+2026-01-17 12:12:57,645 - INFO - Preference update: grad_norm=14.427067 | constraint=1.897e-15 | min=-0.513337 max=0.407797 mean=0.076636
+2026-01-17 12:12:57,646 - INFO - Iteration 46 completed:
+2026-01-17 12:12:57,646 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:57,646 - INFO -   - Average log likelihood: -12.497936
+2026-01-17 12:12:57,646 - INFO -   - Gradient norm: 60.240398
+2026-01-17 12:12:57,646 - INFO -   - Processing time: 2.88s
+2026-01-17 12:12:57,676 - INFO - 
+--- Iteration 47/100 ---
+2026-01-17 12:12:57,676 - INFO - Processing sequential batch 15/16 with 5 flights
+2026-01-17 12:12:57,685 - INFO - Processing flight 46B825AEE612
+2026-01-17 12:12:57,684 - INFO - Processing flight 46B82BAEE4CA
+2026-01-17 12:12:57,686 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:12:57,687 - INFO - Processing flight 46B82CAEE61CG
+2026-01-17 12:12:57,688 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:12:59,456 - INFO - ✓ Applied gradient update with norm L2: 402.252289
+2026-01-17 12:12:59,457 - INFO - Preference update: grad_norm=13.001173 | constraint=5.533e-15 | min=-0.496709 max=0.407629 mean=0.076070
+2026-01-17 12:12:59,457 - INFO - Iteration 47 completed:
+2026-01-17 12:12:59,457 - INFO -   - Successful flights: 5/5
+2026-01-17 12:12:59,458 - INFO -   - Average log likelihood: -16.129224
+2026-01-17 12:12:59,458 - INFO -   - Gradient norm: 402.252289
+2026-01-17 12:12:59,458 - INFO -   - Processing time: 1.78s
+2026-01-17 12:12:59,486 - INFO - 
+--- Iteration 48/100 ---
+2026-01-17 12:12:59,486 - INFO - Processing sequential batch 16/16 with 1 flights
+2026-01-17 12:12:59,489 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:00,457 - INFO - ✓ Applied gradient update with norm L2: 154.146591
+2026-01-17 12:13:00,458 - INFO - Preference update: grad_norm=42.614181 | constraint=7.497e-15 | min=-0.530185 max=0.419383 mean=0.081581
+2026-01-17 12:13:00,458 - INFO - Iteration 48 completed:
+2026-01-17 12:13:00,458 - INFO -   - Successful flights: 1/1
+2026-01-17 12:13:00,458 - INFO -   - Average log likelihood: -5.451898
+2026-01-17 12:13:00,458 - INFO -   - Gradient norm: 154.146591
+2026-01-17 12:13:00,458 - INFO -   - Processing time: 0.97s
+2026-01-17 12:13:00,486 - INFO - 
+--- Iteration 49/100 ---
+2026-01-17 12:13:00,486 - INFO - Processing sequential batch 1/16 with 5 flights
+2026-01-17 12:13:00,488 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:13:00,488 - INFO - Processing flight 468E45SEH9AP
+2026-01-17 12:13:00,488 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:00,489 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:00,489 - INFO - Processing flight 46B821AEE61CG
+2026-01-17 12:13:01,854 - INFO - ✓ Applied gradient update with norm L2: 126.304825
+2026-01-17 12:13:01,855 - INFO - Preference update: grad_norm=15.862533 | constraint=2.844e-15 | min=-0.510592 max=0.422092 mean=0.082205
+2026-01-17 12:13:01,855 - INFO - Iteration 49 completed:
+2026-01-17 12:13:01,856 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:01,856 - INFO -   - Average log likelihood: -19.034408
+2026-01-17 12:13:01,856 - INFO -   - Gradient norm: 126.304825
+2026-01-17 12:13:01,856 - INFO -   - Processing time: 1.37s
+2026-01-17 12:13:01,875 - INFO - 
+--- Iteration 50/100 ---
+2026-01-17 12:13:01,875 - INFO - Processing sequential batch 2/16 with 5 flights
+2026-01-17 12:13:01,878 - INFO - Processing flight 46B827AEE61CG
+2026-01-17 12:13:01,878 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:01,878 - INFO - Processing flight 46B82AAEE4CA
+2026-01-17 12:13:01,879 - INFO - Processing flight 46B825AEE61CG
+2026-01-17 12:13:01,879 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:03,178 - INFO - ✓ Applied gradient update with norm L2: 139.993210
+2026-01-17 12:13:03,179 - INFO - Preference update: grad_norm=13.584868 | constraint=8.926e-15 | min=-0.529433 max=0.422298 mean=0.081814
+2026-01-17 12:13:03,179 - INFO - Iteration 50 completed:
+2026-01-17 12:13:03,179 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:03,179 - INFO -   - Average log likelihood: -17.172731
+2026-01-17 12:13:03,180 - INFO -   - Gradient norm: 139.993210
+2026-01-17 12:13:03,180 - INFO -   - Processing time: 1.30s
+2026-01-17 12:13:03,248 - INFO - ✓ Checkpoint saved successfully to data/cases/LGAV_LFPG/batch_sgd_results/checkpoint_iter_50.pt (size: 1,447,705 bytes)
+2026-01-17 12:13:03,248 - INFO - 
+--- Iteration 51/100 ---
+2026-01-17 12:13:03,248 - INFO - Processing sequential batch 3/16 with 5 flights
+2026-01-17 12:13:03,250 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:03,250 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:13:03,251 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:13:03,251 - INFO - Processing flight 392AF5AFR98CQ
+2026-01-17 12:13:03,251 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:04,597 - INFO - ✓ Applied gradient update with norm L2: 433.579498
+2026-01-17 12:13:04,598 - INFO - Preference update: grad_norm=13.546940 | constraint=1.077e-14 | min=-0.517255 max=0.424083 mean=0.081393
+2026-01-17 12:13:04,598 - INFO - Iteration 51 completed:
+2026-01-17 12:13:04,598 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:04,599 - INFO -   - Average log likelihood: -27.097713
+2026-01-17 12:13:04,599 - INFO -   - Gradient norm: 433.579498
+2026-01-17 12:13:04,599 - INFO -   - Processing time: 1.35s
+2026-01-17 12:13:04,624 - INFO - 
+--- Iteration 52/100 ---
+2026-01-17 12:13:04,624 - INFO - Processing sequential batch 4/16 with 5 flights
+2026-01-17 12:13:04,627 - INFO - Processing flight 4690E2AEE4CA
+2026-01-17 12:13:04,627 - INFO - Processing flight 46B82DAEE612
+2026-01-17 12:13:04,627 - INFO - Processing flight 46B825AEE4CA
+2026-01-17 12:13:04,627 - INFO - Processing flight 46B8A3AEE61CG
+2026-01-17 12:13:04,628 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:13:06,173 - INFO - ✓ Applied gradient update with norm L2: 42.650299
+2026-01-17 12:13:06,173 - INFO - Preference update: grad_norm=14.354452 | constraint=6.647e-15 | min=-0.522443 max=0.424908 mean=0.080579
+2026-01-17 12:13:06,174 - INFO - Iteration 52 completed:
+2026-01-17 12:13:06,174 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:06,174 - INFO -   - Average log likelihood: -23.746713
+2026-01-17 12:13:06,174 - INFO -   - Gradient norm: 42.650299
+2026-01-17 12:13:06,174 - INFO -   - Processing time: 1.55s
+2026-01-17 12:13:06,193 - INFO - 
+--- Iteration 53/100 ---
+2026-01-17 12:13:06,193 - INFO - Processing sequential batch 5/16 with 5 flights
+2026-01-17 12:13:06,195 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:06,196 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:06,196 - INFO - Processing flight 46B822AEE4CA
+2026-01-17 12:13:06,196 - INFO - Processing flight 4692DAAEE61CG
+2026-01-17 12:13:06,196 - INFO - Processing flight 392AEEAFR98CQ
+2026-01-17 12:13:07,501 - INFO - ✓ Applied gradient update with norm L2: 740.125610
+2026-01-17 12:13:07,501 - INFO - Preference update: grad_norm=16.256742 | constraint=8.565e-15 | min=-0.526809 max=0.428307 mean=0.081429
+2026-01-17 12:13:07,501 - INFO - Iteration 53 completed:
+2026-01-17 12:13:07,501 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:07,501 - INFO -   - Average log likelihood: -25.253878
+2026-01-17 12:13:07,502 - INFO -   - Gradient norm: 740.125610
+2026-01-17 12:13:07,502 - INFO -   - Processing time: 1.31s
+2026-01-17 12:13:07,521 - INFO - 
+--- Iteration 54/100 ---
+2026-01-17 12:13:07,521 - INFO - Processing sequential batch 6/16 with 5 flights
+2026-01-17 12:13:07,523 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:07,523 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:13:07,523 - INFO - Processing flight 46B8A6AEE4CA
+2026-01-17 12:13:07,524 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:07,524 - INFO - Processing flight 46DCA2SEH902
+2026-01-17 12:13:08,799 - INFO - ✓ Applied gradient update with norm L2: 649.695740
+2026-01-17 12:13:08,800 - INFO - Preference update: grad_norm=17.165046 | constraint=9.930e-15 | min=-0.496304 max=0.433494 mean=0.082127
+2026-01-17 12:13:08,800 - INFO - Iteration 54 completed:
+2026-01-17 12:13:08,800 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:08,801 - INFO -   - Average log likelihood: -14.744361
+2026-01-17 12:13:08,801 - INFO -   - Gradient norm: 649.695740
+2026-01-17 12:13:08,801 - INFO -   - Processing time: 1.28s
+2026-01-17 12:13:08,819 - INFO - 
+--- Iteration 55/100 ---
+2026-01-17 12:13:08,819 - INFO - Processing sequential batch 7/16 with 5 flights
+2026-01-17 12:13:08,821 - INFO - Processing flight 46B825AEE61CG
+2026-01-17 12:13:08,821 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:08,821 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:08,822 - INFO - Processing flight 468D07SEH902
+2026-01-17 12:13:08,822 - INFO - Processing flight 46B8AFAEE61CG
+2026-01-17 12:13:10,191 - INFO - ✓ Applied gradient update with norm L2: 199.165283
+2026-01-17 12:13:10,192 - INFO - Preference update: grad_norm=24.106382 | constraint=9.620e-15 | min=-0.472627 max=0.453240 mean=0.083668
+2026-01-17 12:13:10,192 - INFO - Iteration 55 completed:
+2026-01-17 12:13:10,193 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:10,193 - INFO -   - Average log likelihood: -22.447778
+2026-01-17 12:13:10,193 - INFO -   - Gradient norm: 199.165283
+2026-01-17 12:13:10,193 - INFO -   - Processing time: 1.37s
+2026-01-17 12:13:10,219 - INFO - 
+--- Iteration 56/100 ---
+2026-01-17 12:13:10,219 - INFO - Processing sequential batch 8/16 with 5 flights
+2026-01-17 12:13:10,222 - INFO - Processing flight 46A5E7SEH902
+2026-01-17 12:13:10,222 - INFO - Processing flight 4691C4AEE612
+2026-01-17 12:13:10,222 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:10,222 - INFO - Processing flight 398E49AFR98CQ
+2026-01-17 12:13:10,222 - INFO - Processing flight 46B823AEE4CA
+2026-01-17 12:13:11,680 - INFO - ✓ Applied gradient update with norm L2: 168.284363
+2026-01-17 12:13:11,681 - INFO - Preference update: grad_norm=14.173480 | constraint=4.804e-15 | min=-0.456679 max=0.453239 mean=0.082787
+2026-01-17 12:13:11,681 - INFO - Iteration 56 completed:
+2026-01-17 12:13:11,681 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:11,681 - INFO -   - Average log likelihood: -23.242102
+2026-01-17 12:13:11,681 - INFO -   - Gradient norm: 168.284363
+2026-01-17 12:13:11,681 - INFO -   - Processing time: 1.46s
+2026-01-17 12:13:11,704 - INFO - 
+--- Iteration 57/100 ---
+2026-01-17 12:13:11,704 - INFO - Processing sequential batch 9/16 with 5 flights
+2026-01-17 12:13:11,706 - INFO - Processing flight 46B824AEE61CG
+2026-01-17 12:13:11,706 - INFO - Processing flight 39CEAATVF91VP
+2026-01-17 12:13:11,706 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:11,706 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:11,707 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:13:13,436 - INFO - ✓ Applied gradient update with norm L2: 280.552490
+2026-01-17 12:13:13,437 - INFO - Preference update: grad_norm=15.339928 | constraint=9.810e-15 | min=-0.457420 max=0.451029 mean=0.081005
+2026-01-17 12:13:13,437 - INFO - Iteration 57 completed:
+2026-01-17 12:13:13,437 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:13,437 - INFO -   - Average log likelihood: -18.878019
+2026-01-17 12:13:13,438 - INFO -   - Gradient norm: 280.552490
+2026-01-17 12:13:13,438 - INFO -   - Processing time: 1.73s
+2026-01-17 12:13:13,463 - INFO - 
+--- Iteration 58/100 ---
+2026-01-17 12:13:13,464 - INFO - Processing sequential batch 10/16 with 5 flights
+2026-01-17 12:13:13,467 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:13:13,467 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:13,467 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:13:13,467 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:13,467 - INFO - Processing flight 46B827AEE61CG
+2026-01-17 12:13:14,929 - INFO - ✓ Applied gradient update with norm L2: 321.624298
+2026-01-17 12:13:14,931 - INFO - Preference update: grad_norm=22.480668 | constraint=6.040e-15 | min=-0.442942 max=0.426445 mean=0.078080
+2026-01-17 12:13:14,931 - INFO - Iteration 58 completed:
+2026-01-17 12:13:14,931 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:14,931 - INFO -   - Average log likelihood: -18.290652
+2026-01-17 12:13:14,931 - INFO -   - Gradient norm: 321.624298
+2026-01-17 12:13:14,931 - INFO -   - Processing time: 1.47s
+2026-01-17 12:13:14,961 - INFO - 
+--- Iteration 59/100 ---
+2026-01-17 12:13:14,961 - INFO - Processing sequential batch 11/16 with 5 flights
+2026-01-17 12:13:14,963 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:14,963 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:13:14,963 - INFO - Processing flight 46B82AAEE61CG
+2026-01-17 12:13:14,963 - INFO - Processing flight 46B821AEE4CA
+2026-01-17 12:13:14,963 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:16,577 - INFO - ✓ Applied gradient update with norm L2: 269.540771
+2026-01-17 12:13:16,578 - INFO - Preference update: grad_norm=25.315936 | constraint=4.529e-15 | min=-0.430455 max=0.420373 mean=0.074546
+2026-01-17 12:13:16,578 - INFO - Iteration 59 completed:
+2026-01-17 12:13:16,578 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:16,578 - INFO -   - Average log likelihood: -15.722745
+2026-01-17 12:13:16,578 - INFO -   - Gradient norm: 269.540771
+2026-01-17 12:13:16,578 - INFO -   - Processing time: 1.62s
+2026-01-17 12:13:16,598 - INFO - 
+--- Iteration 60/100 ---
+2026-01-17 12:13:16,598 - INFO - Processing sequential batch 12/16 with 5 flights
+2026-01-17 12:13:16,600 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:16,600 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:16,600 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:16,601 - INFO - Processing flight 46B82BAEE4CA
+2026-01-17 12:13:16,602 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:13:18,082 - INFO - ✓ Applied gradient update with norm L2: 238.613770
+2026-01-17 12:13:18,083 - INFO - Preference update: grad_norm=12.791103 | constraint=4.046e-15 | min=-0.420473 max=0.421628 mean=0.073541
+2026-01-17 12:13:18,083 - INFO - Iteration 60 completed:
+2026-01-17 12:13:18,084 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:18,084 - INFO -   - Average log likelihood: -18.748607
+2026-01-17 12:13:18,084 - INFO -   - Gradient norm: 238.613770
+2026-01-17 12:13:18,084 - INFO -   - Processing time: 1.49s
+2026-01-17 12:13:18,146 - INFO - ✓ Checkpoint saved successfully to data/cases/LGAV_LFPG/batch_sgd_results/checkpoint_iter_60.pt (size: 1,448,473 bytes)
+2026-01-17 12:13:18,146 - INFO - 
+--- Iteration 61/100 ---
+2026-01-17 12:13:18,146 - INFO - Processing sequential batch 13/16 with 5 flights
+2026-01-17 12:13:18,148 - INFO - Processing flight 392AF8AFR98CQ
+2026-01-17 12:13:18,148 - INFO - Processing flight 46B82DAEE61CG
+2026-01-17 12:13:18,148 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:18,149 - INFO - Processing flight 46B822AEE612
+2026-01-17 12:13:18,149 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:19,700 - INFO - ✓ Applied gradient update with norm L2: 85.099655
+2026-01-17 12:13:19,700 - INFO - Preference update: grad_norm=18.218209 | constraint=6.371e-15 | min=-0.402738 max=0.421767 mean=0.071380
+2026-01-17 12:13:19,700 - INFO - Iteration 61 completed:
+2026-01-17 12:13:19,700 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:19,701 - INFO -   - Average log likelihood: -13.954801
+2026-01-17 12:13:19,701 - INFO -   - Gradient norm: 85.099655
+2026-01-17 12:13:19,701 - INFO -   - Processing time: 1.55s
+2026-01-17 12:13:19,720 - INFO - 
+--- Iteration 62/100 ---
+2026-01-17 12:13:19,720 - INFO - Processing sequential batch 14/16 with 5 flights
+2026-01-17 12:13:19,722 - INFO - Processing flight 46B827AEE61CG
+2026-01-17 12:13:19,723 - INFO - Processing flight 46B82CAEE4CA
+2026-01-17 12:13:19,723 - INFO - Processing flight 392AECAFR98CQ
+2026-01-17 12:13:19,723 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:19,723 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:21,310 - INFO - ✓ Applied gradient update with norm L2: 31.421970
+2026-01-17 12:13:21,312 - INFO - Preference update: grad_norm=14.157436 | constraint=3.150e-15 | min=-0.405324 max=0.420611 mean=0.070776
+2026-01-17 12:13:21,312 - INFO - Iteration 62 completed:
+2026-01-17 12:13:21,312 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:21,312 - INFO -   - Average log likelihood: -9.061467
+2026-01-17 12:13:21,312 - INFO -   - Gradient norm: 31.421970
+2026-01-17 12:13:21,312 - INFO -   - Processing time: 1.59s
+2026-01-17 12:13:21,330 - INFO - 
+--- Iteration 63/100 ---
+2026-01-17 12:13:21,330 - INFO - Processing sequential batch 15/16 with 5 flights
+2026-01-17 12:13:21,332 - INFO - Processing flight 46B82BAEE4CA
+2026-01-17 12:13:21,332 - INFO - Processing flight 46B825AEE612
+2026-01-17 12:13:21,333 - INFO - Processing flight 46B82CAEE61CG
+2026-01-17 12:13:21,333 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:13:21,333 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:13:23,071 - INFO - ✓ Applied gradient update with norm L2: 501.067139
+2026-01-17 12:13:23,072 - INFO - Preference update: grad_norm=12.981689 | constraint=3.598e-15 | min=-0.391723 max=0.419546 mean=0.069835
+2026-01-17 12:13:23,072 - INFO - Iteration 63 completed:
+2026-01-17 12:13:23,072 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:23,072 - INFO -   - Average log likelihood: -14.725508
+2026-01-17 12:13:23,072 - INFO -   - Gradient norm: 501.067139
+2026-01-17 12:13:23,073 - INFO -   - Processing time: 1.74s
+2026-01-17 12:13:23,091 - INFO - 
+--- Iteration 64/100 ---
+2026-01-17 12:13:23,091 - INFO - Processing sequential batch 16/16 with 1 flights
+2026-01-17 12:13:23,093 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:24,080 - INFO - ✓ Applied gradient update with norm L2: 49.122459
+2026-01-17 12:13:24,081 - INFO - Preference update: grad_norm=38.470689 | constraint=7.001e-15 | min=-0.446901 max=0.429543 mean=0.074627
+2026-01-17 12:13:24,081 - INFO - Iteration 64 completed:
+2026-01-17 12:13:24,081 - INFO -   - Successful flights: 1/1
+2026-01-17 12:13:24,081 - INFO -   - Average log likelihood: -2.942058
+2026-01-17 12:13:24,081 - INFO -   - Gradient norm: 49.122459
+2026-01-17 12:13:24,081 - INFO -   - Processing time: 0.99s
+2026-01-17 12:13:24,100 - INFO - 
+--- Iteration 65/100 ---
+2026-01-17 12:13:24,100 - INFO - Processing sequential batch 1/16 with 5 flights
+2026-01-17 12:13:24,102 - INFO - Processing flight 46B821AEE61CG
+2026-01-17 12:13:24,102 - INFO - Processing flight 468E45SEH9AP
+2026-01-17 12:13:24,103 - INFO - Processing flight 46B82BAEE61CG
+2026-01-17 12:13:24,103 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:24,103 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:25,691 - INFO - ✓ Applied gradient update with norm L2: 451.005035
+2026-01-17 12:13:25,692 - INFO - Preference update: grad_norm=15.863765 | constraint=4.890e-15 | min=-0.413347 max=0.432447 mean=0.075387
+2026-01-17 12:13:25,692 - INFO - Iteration 65 completed:
+2026-01-17 12:13:25,693 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:25,693 - INFO -   - Average log likelihood: -16.749648
+2026-01-17 12:13:25,693 - INFO -   - Gradient norm: 451.005035
+2026-01-17 12:13:25,693 - INFO -   - Processing time: 1.59s
+2026-01-17 12:13:25,720 - INFO - 
+--- Iteration 66/100 ---
+2026-01-17 12:13:25,720 - INFO - Processing sequential batch 2/16 with 5 flights
+2026-01-17 12:13:25,723 - INFO - Processing flight 46B827AEE61CG
+2026-01-17 12:13:25,723 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:25,723 - INFO - Processing flight 46B82AAEE4CA
+2026-01-17 12:13:25,724 - INFO - Processing flight 46B825AEE61CG
+2026-01-17 12:13:25,725 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:27,355 - INFO - ✓ Applied gradient update with norm L2: 273.887848
+2026-01-17 12:13:27,356 - INFO - Preference update: grad_norm=16.286811 | constraint=5.273e-15 | min=-0.432014 max=0.430640 mean=0.074141
+2026-01-17 12:13:27,356 - INFO - Iteration 66 completed:
+2026-01-17 12:13:27,356 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:27,356 - INFO -   - Average log likelihood: -15.673430
+2026-01-17 12:13:27,357 - INFO -   - Gradient norm: 273.887848
+2026-01-17 12:13:27,357 - INFO -   - Processing time: 1.64s
+2026-01-17 12:13:27,374 - INFO - 
+--- Iteration 67/100 ---
+2026-01-17 12:13:27,374 - INFO - Processing sequential batch 3/16 with 5 flights
+2026-01-17 12:13:27,376 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:13:27,376 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:27,376 - INFO - Processing flight 46B82DAEE4CA
+2026-01-17 12:13:27,377 - INFO - Processing flight 392AF5AFR98CQ
+2026-01-17 12:13:27,377 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:28,640 - INFO - ✓ Applied gradient update with norm L2: 762.079285
+2026-01-17 12:13:28,641 - INFO - Preference update: grad_norm=14.432254 | constraint=6.028e-15 | min=-0.429711 max=0.430319 mean=0.072850
+2026-01-17 12:13:28,641 - INFO - Iteration 67 completed:
+2026-01-17 12:13:28,641 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:28,641 - INFO -   - Average log likelihood: -24.909817
+2026-01-17 12:13:28,641 - INFO -   - Gradient norm: 762.079285
+2026-01-17 12:13:28,642 - INFO -   - Processing time: 1.27s
+2026-01-17 12:13:28,663 - INFO - 
+--- Iteration 68/100 ---
+2026-01-17 12:13:28,663 - INFO - Processing sequential batch 4/16 with 5 flights
+2026-01-17 12:13:28,665 - INFO - Processing flight 46B82DAEE612
+2026-01-17 12:13:28,665 - INFO - Processing flight 46B8A3AEE61CG
+2026-01-17 12:13:28,665 - INFO - Processing flight 4690E2AEE4CA
+2026-01-17 12:13:28,666 - INFO - Processing flight 46B825AEE4CA
+2026-01-17 12:13:28,666 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:13:30,123 - INFO - ✓ Applied gradient update with norm L2: 363.995850
+2026-01-17 12:13:30,124 - INFO - Preference update: grad_norm=16.099517 | constraint=4.190e-15 | min=-0.429097 max=0.428642 mean=0.070833
+2026-01-17 12:13:30,124 - INFO - Iteration 68 completed:
+2026-01-17 12:13:30,124 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:30,124 - INFO -   - Average log likelihood: -19.455284
+2026-01-17 12:13:30,124 - INFO -   - Gradient norm: 363.995850
+2026-01-17 12:13:30,124 - INFO -   - Processing time: 1.46s
+2026-01-17 12:13:30,144 - INFO - 
+--- Iteration 69/100 ---
+2026-01-17 12:13:30,145 - INFO - Processing sequential batch 5/16 with 5 flights
+2026-01-17 12:13:30,146 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:30,147 - INFO - Processing flight 392AEEAFR98CQ
+2026-01-17 12:13:30,147 - INFO - Processing flight 46B822AEE4CA
+2026-01-17 12:13:30,147 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:30,148 - INFO - Processing flight 4692DAAEE61CG
+2026-01-17 12:13:31,808 - INFO - ✓ Applied gradient update with norm L2: 612.662354
+2026-01-17 12:13:31,810 - INFO - Preference update: grad_norm=15.021732 | constraint=8.403e-15 | min=-0.434595 max=0.431206 mean=0.071329
+2026-01-17 12:13:31,811 - INFO - Iteration 69 completed:
+2026-01-17 12:13:31,811 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:31,811 - INFO -   - Average log likelihood: -18.040741
+2026-01-17 12:13:31,811 - INFO -   - Gradient norm: 612.662354
+2026-01-17 12:13:31,811 - INFO -   - Processing time: 1.67s
+2026-01-17 12:13:31,838 - INFO - 
+--- Iteration 70/100 ---
+2026-01-17 12:13:31,838 - INFO - Processing sequential batch 6/16 with 5 flights
+2026-01-17 12:13:31,843 - INFO - Processing flight 469E41SEH9AP
+2026-01-17 12:13:31,843 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:31,844 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:31,845 - INFO - Processing flight 46B8A6AEE4CA
+2026-01-17 12:13:31,845 - INFO - Processing flight 46DCA2SEH902
+2026-01-17 12:13:33,216 - INFO - ✓ Applied gradient update with norm L2: 627.364807
+2026-01-17 12:13:33,217 - INFO - Preference update: grad_norm=14.346943 | constraint=1.844e-15 | min=-0.405673 max=0.437413 mean=0.071571
+2026-01-17 12:13:33,217 - INFO - Iteration 70 completed:
+2026-01-17 12:13:33,217 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:33,217 - INFO -   - Average log likelihood: -9.897621
+2026-01-17 12:13:33,217 - INFO -   - Gradient norm: 627.364807
+2026-01-17 12:13:33,217 - INFO -   - Processing time: 1.38s
+2026-01-17 12:13:33,284 - INFO - ✓ Checkpoint saved successfully to data/cases/LGAV_LFPG/batch_sgd_results/checkpoint_iter_70.pt (size: 1,449,241 bytes)
+2026-01-17 12:13:33,285 - INFO - 
+--- Iteration 71/100 ---
+2026-01-17 12:13:33,285 - INFO - Processing sequential batch 7/16 with 5 flights
+2026-01-17 12:13:33,287 - INFO - Processing flight 468D07SEH902
+2026-01-17 12:13:33,287 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:33,287 - INFO - Processing flight 46B8AFAEE61CG
+2026-01-17 12:13:33,287 - INFO - Processing flight 46B825AEE61CG
+2026-01-17 12:13:33,288 - INFO - Processing flight 45CAB5AFR53PR
+2026-01-17 12:13:34,427 - INFO - ✓ Applied gradient update with norm L2: 237.261215
+2026-01-17 12:13:34,428 - INFO - Preference update: grad_norm=21.006345 | constraint=5.163e-15 | min=-0.405561 max=0.448684 mean=0.072041
+2026-01-17 12:13:34,428 - INFO - Iteration 71 completed:
+2026-01-17 12:13:34,428 - INFO -   - Successful flights: 5/5
+2026-01-17 12:13:34,428 - INFO -   - Average log likelihood: -16.049075
+2026-01-17 12:13:34,429 - INFO -   - Gradient norm: 237.261215
+2026-01-17 12:13:34,429 - INFO -   - Processing time: 1.14s
+2026-01-17 12:13:34,452 - INFO - 
+--- Iteration 72/100 ---
+2026-01-17 12:13:34,452 - INFO - Processing sequential batch 8/16 with 5 flights
+2026-01-17 12:13:34,454 - INFO - Processing flight 4691C4AEE612
+2026-01-17 12:13:34,454 - INFO - Processing flight 45CAB5AFR36HN
+2026-01-17 12:13:34,454 - INFO - Processing flight 46A5E7SEH902
+2026-01-17 12:13:34,455 - INFO - Processing flight 46B823AEE4CA
+2026-01-17 12:13:34,457 - INFO - Processing flight 398E49AFR98CQ
