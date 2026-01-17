@@ -28,6 +28,14 @@ Usage:
     To monitor training with TensorBoard:
     tensorboard --logdir data/cases/LEMD_EGLL/batch_sgd_results/tensorboard_logs
     
+    To keep runs separate, set a run name (default uses a timestamp):
+    python batch_sgd_pipeline_parallel_w_tensorboard.py --case-dir data/cases/LEMD_EGLL \
+        --tensorboard-run-name run_01
+    
+    To clear existing TensorBoard logs (optional):
+    python batch_sgd_pipeline_parallel_w_tensorboard.py --case-dir data/cases/LEMD_EGLL \
+        --clear-tensorboard-logs
+    
     To start fresh training without resuming from checkpoint:
     python batch_sgd_pipeline_parallel_w_tensorboard.py --case-dir data/cases/LEMD_EGLL --no-resume
 """
@@ -201,6 +209,8 @@ class BatchLearningConfig:
     gamma: float = 1.0
     debug_single_process: bool = False
     tensorboard_log_dir: str = None
+    tensorboard_run_name: Optional[str] = None
+    clear_tensorboard_logs: bool = False
     log_interval: int = 1  # Log every iteration by default
     resume_from_checkpoint: bool = True  # Resume from last checkpoint by default
     randomized: bool = False
@@ -950,14 +960,19 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     tensorboard_writer = None
     if TENSORBOARD_AVAILABLE:
         if batch_config.tensorboard_log_dir is not None:
-            tb_log_dir = batch_config.tensorboard_log_dir
+            tb_log_base_dir = batch_config.tensorboard_log_dir
         else:
-            tb_log_dir = os.path.join(output_dir, "tensorboard_logs")
-        
-        os.makedirs(tb_log_dir, exist_ok=True)
-        tensorboard_writer = SummaryWriter(log_dir=tb_log_dir)
-        logger.info(f"TensorBoard logging enabled. Log directory: {tb_log_dir}")
-        logger.info(f"To view logs, run: tensorboard --logdir {tb_log_dir}")
+            tb_log_base_dir = os.path.join(output_dir, "tensorboard_logs")
+
+        if batch_config.tensorboard_run_name:
+            tb_run_dir = os.path.join(tb_log_base_dir, batch_config.tensorboard_run_name)
+        else:
+            tb_run_dir = os.path.join(tb_log_base_dir, time.strftime("%Y%m%d_%H%M%S"))
+
+        os.makedirs(tb_run_dir, exist_ok=True)
+        tensorboard_writer = SummaryWriter(log_dir=tb_run_dir)
+        logger.info(f"TensorBoard logging enabled. Log directory: {tb_run_dir}")
+        logger.info(f"To view logs, run: tensorboard --logdir {tb_log_base_dir}")
     else:
         logger.warning("TensorBoard not available. Training will proceed without TensorBoard logging.")
     
@@ -1476,7 +1491,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         
         tensorboard_writer.add_hparams(hparams, metrics)
         tensorboard_writer.close()
-        logger.info(f"TensorBoard logs saved to {tb_log_dir}")
+        logger.info(f"TensorBoard logs saved to {tb_run_dir}")
     
     logger.info(f"Training completed after {iteration} iterations")
     logger.info(f"Final results saved to {results_path}")
@@ -1598,6 +1613,15 @@ def main():
         help="Directory for TensorBoard logs (default: output-dir/tensorboard_logs)"
     )
     parser.add_argument(
+        "--tensorboard-run-name",
+        help="Run subdirectory name for TensorBoard logs (default: timestamp)"
+    )
+    parser.add_argument(
+        "--clear-tensorboard-logs",
+        action="store_true",
+        help="Delete existing TensorBoard log directory before starting"
+    )
+    parser.add_argument(
         "--log-interval",
         type=int,
         default=1,
@@ -1656,6 +1680,8 @@ def main():
         gamma=gamma,
         debug_single_process=args.debug_single_process,
         tensorboard_log_dir=args.tensorboard_log_dir,
+        tensorboard_run_name=args.tensorboard_run_name,
+        clear_tensorboard_logs=args.clear_tensorboard_logs,
         log_interval=args.log_interval,
         resume_from_checkpoint=not args.no_resume,  # Resume by default unless --no-resume is specified
         randomized=args.randomize,
@@ -1668,26 +1694,26 @@ def main():
         logger.error("Implementation validation failed. Exiting.")
         return
     
-    # Delete tensorboard log directory if it exists
-    # Remove existing TensorBoard log directory
-    if batch_config.tensorboard_log_dir:
-        tensorboard_dir = batch_config.tensorboard_log_dir
-    elif args.output_dir:
-        tensorboard_dir = os.path.join(args.output_dir, "tensorboard_logs")
-    else:
-        tensorboard_dir = None
-    
-    import shutil
-    if tensorboard_dir:
-        try:
-            if os.path.exists(tensorboard_dir):
-                logger.info(f"Removing existing TensorBoard log directory: {tensorboard_dir}")
-                shutil.rmtree(tensorboard_dir)
-        except FileNotFoundError:
-            logger.warning(f"TensorBoard log directory {tensorboard_dir} was not found when attempting to remove it. Skipping deletion.")
-        except Exception as e:
-            logger.error(f"Error while removing TensorBoard log directory {tensorboard_dir}: {e}")
-            raise
+    # Optionally delete TensorBoard log directory if requested
+    if batch_config.clear_tensorboard_logs:
+        if batch_config.tensorboard_log_dir:
+            tensorboard_dir = batch_config.tensorboard_log_dir
+        elif args.output_dir:
+            tensorboard_dir = os.path.join(args.output_dir, "tensorboard_logs")
+        else:
+            tensorboard_dir = None
+
+        import shutil
+        if tensorboard_dir:
+            try:
+                if os.path.exists(tensorboard_dir):
+                    logger.info(f"Removing existing TensorBoard log directory: {tensorboard_dir}")
+                    shutil.rmtree(tensorboard_dir)
+            except FileNotFoundError:
+                logger.warning(f"TensorBoard log directory {tensorboard_dir} was not found when attempting to remove it. Skipping deletion.")
+            except Exception as e:
+                logger.error(f"Error while removing TensorBoard log directory {tensorboard_dir}: {e}")
+                raise
     
     # Run the pipeline
     try:
