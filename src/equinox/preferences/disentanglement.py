@@ -74,9 +74,11 @@ def build_feature_matrix(
     Notes:
       - The cost model defines time as:
           time = dist / (60 * (cruise_speed_kts + tailwind))
-      - For disentanglement/projection, `tailwind_values_w` must be a fixed per-edge statistic
-        (e.g., climatology mean tailwind per edge). If omitted, tailwind is assumed to be 0,
-        making time proportional to distance.
+      - If you want a *static* projector, `tailwind_values_w` must be a fixed per-edge statistic
+        (e.g., climatology mean tailwind per edge) so that X is time-invariant.
+      - If your workflow rebuilds the projector over time, prefer supplying a precomputed per-edge
+        time column via `build_feature_matrix_from_time(...)`.
+      - If omitted, tailwind is assumed to be 0, making time proportional to distance.
     """
     dist = _ensure_tensor(distance_matrix_d, device=device, dtype=dtype)[edge_u, edge_v]
     ac = _ensure_tensor(airspace_charge_matrix_ac, device=device, dtype=dtype)[edge_u, edge_v]
@@ -105,6 +107,48 @@ def build_feature_matrix(
             raise ValueError("tailwind_values_w must be a scalar, 1D, or 2D tensor/array.")
 
     time_e = dist / (60.0 * (cruise_speed_kts + tailwind_e))
+    ones = torch.ones_like(dist)
+    return torch.stack([ones, ac_dist, time_e], dim=1)
+
+
+def build_feature_matrix_from_time(
+    edge_u: torch.Tensor,
+    edge_v: torch.Tensor,
+    distance_matrix_d: Union[torch.Tensor, np.ndarray],
+    airspace_charge_matrix_ac: Union[torch.Tensor, np.ndarray],
+    *,
+    time_values: Union[torch.Tensor, np.ndarray, float],
+    device: torch.device,
+    dtype: torch.dtype = torch.float64,
+) -> torch.Tensor:
+    """
+    Build per-edge feature matrix X when the time column is already computed per edge.
+
+    Feature order matches CostLinearDisentangled:
+      [bias, ac_dist, time]
+    """
+    dist = _ensure_tensor(distance_matrix_d, device=device, dtype=dtype)[edge_u, edge_v]
+    ac = _ensure_tensor(airspace_charge_matrix_ac, device=device, dtype=dtype)[edge_u, edge_v]
+    ac_dist = ac * dist / 100.0
+
+    if isinstance(time_values, (float, int)):
+        time_e = torch.full_like(dist, float(time_values))
+    else:
+        time_tensor = _ensure_tensor(time_values, device=device, dtype=dtype)
+        if time_tensor.ndim == 2:
+            time_e = time_tensor[edge_u, edge_v]
+        elif time_tensor.ndim == 1:
+            if time_tensor.shape[0] != edge_u.shape[0]:
+                raise ValueError(
+                    "time_values must be 1D with length matching the edge list, "
+                    "or 2D with shape (num_nodes, num_nodes)."
+                )
+            time_e = time_tensor
+        elif time_tensor.ndim == 0:
+            time_e = time_tensor.expand_as(dist)
+        else:
+            raise ValueError("time_values must be a scalar, 1D, or 2D tensor/array.")
+
     ones = torch.ones_like(dist)
     return torch.stack([ones, ac_dist, time_e], dim=1)
 

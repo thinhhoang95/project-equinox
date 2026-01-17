@@ -1,5 +1,5 @@
 import torch
-from typing import Union, Tuple
+from typing import Optional, Tuple, Union
 import os
 import numpy as np
 from collections import defaultdict
@@ -19,7 +19,9 @@ def backward_gradient_pass(
     device: torch.device,
     gamma: float = 1.0,
     verbose: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    return_edge_time_sums: bool = False,
+    cruise_speed_kts: Optional[float] = None,
+) -> tuple[torch.Tensor, ...]:
     """
     Performs a memory-efficient backward pass to compute gradients for Maximum Entropy Inverse Learning.
 
@@ -58,6 +60,10 @@ def backward_gradient_pass(
         - total_log_likelihood_grad (torch.Tensor): The final gradient of the log-likelihood
           with respect to the cost model parameters.
         - log_partition_z (torch.Tensor): The log of the partition function Z.
+        - edge_time_sums (torch.Tensor, optional): If `return_edge_time_sums=True`, returns an
+          additional dense tensor of shape (num_nodes, num_nodes) where each entry is:
+            sum_{transitions u->v} p_transition * time(transition),
+          with time computed as dist / (60 * (cruise_speed_kts + tailwind_knots)).
     """
     cost_model.train()
     num_cost_params = sum(p.numel() for p in cost_model.parameters() if p.requires_grad)
@@ -70,10 +76,29 @@ def backward_gradient_pass(
 
     link_traversal_likelihoods = torch.zeros((num_nodes, num_nodes), dtype=torch.float64, device=device)
 
+    edge_time_sums = None
+    if return_edge_time_sums:
+        if cruise_speed_kts is None:
+            cruise_speed_kts = float(getattr(cost_model, "cruise_speed_kts", 0.0))
+        if cruise_speed_kts <= 0:
+            raise ValueError("cruise_speed_kts must be positive to compute edge_time_sums.")
+        edge_time_sums = torch.zeros((num_nodes, num_nodes), dtype=torch.float64, device=device)
+
     if torch.isinf(log_partition_z):
         if verbose:
             print("Warning: Partition function is infinite. No paths from start to goal. Gradients will be zero.")
-        return link_traversal_likelihoods, torch.zeros(num_cost_params, dtype=torch.float64, device=device), log_partition_z
+        if return_edge_time_sums:
+            return (
+                link_traversal_likelihoods,
+                torch.zeros(num_cost_params, dtype=torch.float64, device=device),
+                log_partition_z,
+                edge_time_sums,
+            )
+        return (
+            link_traversal_likelihoods,
+            torch.zeros(num_cost_params, dtype=torch.float64, device=device),
+            log_partition_z,
+        )
 
     # --- Pass 1: Compute Link Traversal Likelihoods (N_expected) ---
     if verbose:
@@ -102,6 +127,12 @@ def backward_gradient_pass(
             if p_transition.item() == torch.inf:
                 print(f"Warning: p_transition is infinite for transition {u_idx} -> {v_idx}")
             link_traversal_likelihoods[u_idx, v_idx] += p_transition #.item() not needed to prevent CPU/GPU sync
+
+            if edge_time_sums is not None:
+                dist_uv = distance_matrix_d[u_idx, v_idx].to(dtype=torch.float64)
+                tailwind_knots_f = tailwind_knots.to(dtype=torch.float64)
+                time_transition = dist_uv / (60.0 * (float(cruise_speed_kts) + tailwind_knots_f))
+                edge_time_sums[u_idx, v_idx] += p_transition * time_transition
     
     if verbose:
         print("Pass 1 complete.")
@@ -215,6 +246,8 @@ def backward_gradient_pass(
     if verbose:
         print("\nPass 2 complete. Final gradient computed.")
 
+    if return_edge_time_sums:
+        return link_traversal_likelihoods, total_log_likelihood_grad, log_partition_z, edge_time_sums
     return link_traversal_likelihoods, total_log_likelihood_grad, log_partition_z
 
 

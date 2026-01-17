@@ -113,7 +113,7 @@ def _index_tres_batch_files(tres_dir: Path) -> dict[tuple[str, int], tuple[Optio
     """
     Build an index from (flight_id, takeoff_timestamp) to (CLSR_path, WIND_path).
     """
-    pattern = re.compile(r"^(?P<prefix>CLSR|WIND)_(?P<flight_id>.+)_(?P<ts>\\d+)\\.(?P<ext>pkl|pt)$")
+    pattern = re.compile(r"^(?P<prefix>CLSR|WIND)_(?P<flight_id>.+)_(?P<ts>\d+)\.(?P<ext>pkl|pt)$")
     index: dict[tuple[str, int], tuple[Optional[Path], Optional[Path]]] = {}
     for batch_dir in tres_dir.glob("batch*"):
         if not batch_dir.is_dir():
@@ -150,10 +150,22 @@ def _compute_mean_tailwind_per_edge(
     if routes_df.empty:
         raise RuntimeError("Routes CSV is empty; cannot compute mean tailwind per edge for projector features.")
 
-    required_cols = {"flight_id", "takeoff_timestamp"}
-    if not required_cols.issubset(set(routes_df.columns)):
+    if "flight_id" not in routes_df.columns:
         raise RuntimeError(
-            f"Routes CSV missing columns {sorted(required_cols)}; cannot compute mean tailwind per edge."
+            "Routes CSV missing column 'flight_id'; cannot compute mean tailwind per edge."
+        )
+
+    # Timestamp column naming has drifted across datasets/pipelines.
+    # Accept common aliases and treat values as unix seconds.
+    ts_col = None
+    for candidate in ("takeoff_timestamp", "takeoff_time", "takeoff"):
+        if candidate in routes_df.columns:
+            ts_col = candidate
+            break
+    if ts_col is None:
+        raise RuntimeError(
+            "Routes CSV missing a takeoff time column (expected one of "
+            "['takeoff_timestamp', 'takeoff_time', 'takeoff']); cannot compute mean tailwind per edge."
         )
 
     tres_dir = Path(case_dir) / "tres_runs"
@@ -177,7 +189,7 @@ def _compute_mean_tailwind_per_edge(
 
     for row in routes_df.itertuples(index=False):
         flight_id = getattr(row, "flight_id")
-        takeoff_timestamp = int(getattr(row, "takeoff_timestamp"))
+        takeoff_timestamp = int(getattr(row, ts_col))
         clsr_path, wind_path = file_index.get((flight_id, takeoff_timestamp), (None, None))
         if clsr_path is None or wind_path is None:
             missing_flights += 1
@@ -318,6 +330,8 @@ class FlightGradientResult:
     log_likelihood: float
     processing_time: float
     success: bool
+    n_expected_e: Optional[torch.Tensor] = None
+    t_expected_e: Optional[torch.Tensor] = None
     error_message: Optional[str] = None
 
 
@@ -762,29 +776,56 @@ def process_single_flight(
         ).to(device)
         
         # 7. Compute gradients using backward gradient pass
-        expected_counts, gradient, log_partition_z_tensor = backward_gradient_pass(
-            state_transitions=thinned_transitions,
-            avg_tailwind_knots_per_transition=avg_tailwind_knots,
-            V_f=v_f,
-            V_b=v_b,
-            cost_model=cost_model,
-            empirical_counts=empirical_counts,
-            origin_node_idx=origin_node_idx,
-            num_nodes=num_nodes,
-            distance_matrix_d=ctx['dist_matrix'],
-            airspace_charge_matrix_ac=ctx['ac_matrix'],
-            device=device,
-            gamma=gamma,
-            verbose=False
-        )
+        edge_time_sums = None
+        if ctx.get("pref_enabled"):
+            expected_counts, gradient, log_partition_z_tensor, edge_time_sums = backward_gradient_pass(
+                state_transitions=thinned_transitions,
+                avg_tailwind_knots_per_transition=avg_tailwind_knots,
+                V_f=v_f,
+                V_b=v_b,
+                cost_model=cost_model,
+                empirical_counts=empirical_counts,
+                origin_node_idx=origin_node_idx,
+                num_nodes=num_nodes,
+                distance_matrix_d=ctx['dist_matrix'],
+                airspace_charge_matrix_ac=ctx['ac_matrix'],
+                device=device,
+                gamma=gamma,
+                verbose=False,
+                return_edge_time_sums=True,
+                cruise_speed_kts=float(cost_model.cruise_speed_kts),
+            )
+        else:
+            expected_counts, gradient, log_partition_z_tensor = backward_gradient_pass(
+                state_transitions=thinned_transitions,
+                avg_tailwind_knots_per_transition=avg_tailwind_knots,
+                V_f=v_f,
+                V_b=v_b,
+                cost_model=cost_model,
+                empirical_counts=empirical_counts,
+                origin_node_idx=origin_node_idx,
+                num_nodes=num_nodes,
+                distance_matrix_d=ctx['dist_matrix'],
+                airspace_charge_matrix_ac=ctx['ac_matrix'],
+                device=device,
+                gamma=gamma,
+                verbose=False
+            )
 
         pref_grad_e = None
+        n_expected_e = None
+        t_expected_e = None
         if ctx.get("pref_enabled"):
             edge_u = ctx.get("edge_u")
             edge_v = ctx.get("edge_v")
             if edge_u is None or edge_v is None:
                 raise RuntimeError("Preference edges missing in worker context.")
-            pref_grad_e = (empirical_counts[edge_u, edge_v] - expected_counts[edge_u, edge_v]) / gamma
+            expected_e = expected_counts[edge_u, edge_v]
+            pref_grad_e = (empirical_counts[edge_u, edge_v] - expected_e) / gamma
+            n_expected_e = expected_e.detach()
+            if edge_time_sums is None:
+                raise RuntimeError("edge_time_sums was requested but missing from backward_gradient_pass.")
+            t_expected_e = edge_time_sums[edge_u, edge_v].detach()
 
         # 8.5 Debugging: Print top links with highest empirical counts and their expected traversals
         # Only print for the designated debug flight to avoid spam
@@ -936,7 +977,9 @@ def process_single_flight(
             pref_grad_e=pref_grad_e.detach().cpu() if pref_grad_e is not None else None,
             log_likelihood=log_likelihood,
             processing_time=processing_time,
-            success=True
+            success=True,
+            n_expected_e=n_expected_e.cpu() if n_expected_e is not None else None,
+            t_expected_e=t_expected_e.cpu() if t_expected_e is not None else None,
         )
         
     except Exception as e:
@@ -1148,6 +1191,9 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     pref_edge_v = None
     pref_support_mask = None
     pref_edge_signature = None
+    pref_feature_bias_e = None
+    pref_feature_ac_dist_e = None
+    pref_time_fallback_e = None
     if pref_enabled:
         routes_df = pd.read_csv(flights_csv)
         edge_u_cpu, edge_v_cpu = build_edge_list(components["graph"], components["node_to_idx"])
@@ -1180,6 +1226,9 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             device=device,
             dtype=torch.float64,
         )
+        pref_feature_bias_e = X_raw[:, 0]
+        pref_feature_ac_dist_e = X_raw[:, 1]
+        pref_time_fallback_e = X_raw[:, 2]
         X_norm, feature_means, feature_scales, manual_scales = d_weighted_normalize_features(
             X_raw,
             d_e,
@@ -1333,6 +1382,16 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             failed_flights = 0
             gradient_queue.clear() # Clear queue for each new batch
             pref_grad_queue.clear()
+            n_expected_sum_e = None
+            t_expected_sum_e = None
+            pref_edge_stats_flights = 0
+            if pref_enabled and pref_edge_u is not None:
+                n_expected_sum_e = torch.zeros(
+                    (pref_edge_u.shape[0],),
+                    device=device,
+                    dtype=torch.float64,
+                )
+                t_expected_sum_e = torch.zeros_like(n_expected_sum_e)
 
             for result in batch_results:
                 if result.success:
@@ -1340,6 +1399,16 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                     gradient_queue.append(result.gradient)
                     if pref_enabled and result.pref_grad_e is not None:
                         pref_grad_queue.append(result.pref_grad_e)
+                        if result.n_expected_e is not None and result.t_expected_e is not None:
+                            n_expected_sum_e += result.n_expected_e.to(
+                                device=device,
+                                dtype=torch.float64,
+                            )
+                            t_expected_sum_e += result.t_expected_e.to(
+                                device=device,
+                                dtype=torch.float64,
+                            )
+                            pref_edge_stats_flights += 1
                 else:
                     failed_flights += 1
                     logger.warning(f"Flight {result.flight_id} failed: {result.error_message}")
@@ -1396,7 +1465,78 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             pref_min = None
             pref_max = None
             pref_mean = None
-            if pref_enabled and pref_projector is not None and pref_grad_queue:
+            if pref_enabled and pref_grad_queue:
+                if pref_feature_bias_e is None or pref_feature_ac_dist_e is None or pref_time_fallback_e is None:
+                    raise RuntimeError("Preference features not initialized; cannot rebuild preference projector.")
+                if n_expected_sum_e is None or t_expected_sum_e is None:
+                    n_expected_sum_e = torch.zeros_like(pref_time_fallback_e)
+                    t_expected_sum_e = torch.zeros_like(pref_time_fallback_e)
+
+                eps = 1e-12
+                time_support = n_expected_sum_e > eps
+                x_time_batch = pref_time_fallback_e.clone()
+                if time_support.any():
+                    x_time_batch[time_support] = t_expected_sum_e[time_support] / n_expected_sum_e[time_support]
+                nonfinite_mask = ~torch.isfinite(x_time_batch)
+                if nonfinite_mask.any():
+                    x_time_batch[nonfinite_mask] = pref_time_fallback_e[nonfinite_mask]
+
+                X_raw_batch = torch.stack(
+                    [pref_feature_bias_e, pref_feature_ac_dist_e, x_time_batch],
+                    dim=1,
+                )
+                X_norm, feature_means, feature_scales, manual_scales = d_weighted_normalize_features(
+                    X_raw_batch,
+                    d_e,
+                    bias_index=0,
+                )
+                pref_projector = PreferenceProjector(
+                    X_norm,
+                    d_e,
+                    ridge=batch_config.pref_projection_ridge,
+                    feature_means=feature_means,
+                    feature_scales=feature_scales,
+                    manual_scales=manual_scales,
+                )
+
+                stats_support = time_support
+                if pref_support_mask is not None:
+                    stats_support = stats_support & pref_support_mask
+
+                if pref_support_mask is not None and pref_support_mask.any():
+                    support_frac = float(stats_support.sum().item() / pref_support_mask.sum().item())
+                else:
+                    support_frac = float(time_support.to(dtype=torch.float64).mean().item())
+
+                if stats_support.any():
+                    time_vals = x_time_batch[stats_support]
+                    time_min = float(time_vals.min().item())
+                    time_max = float(time_vals.max().item())
+                    time_mean = float(time_vals.mean().item())
+                else:
+                    time_min = None
+                    time_max = None
+                    time_mean = None
+
+                if time_mean is not None:
+                    if pref_projector.condition_number is not None:
+                        logger.info(
+                            "Preference projector (batch): cond=%.3e | time_support=%.1f%% | time[min/mean/max]=%.6f/%.6f/%.6f",
+                            pref_projector.condition_number,
+                            100.0 * support_frac,
+                            time_min,
+                            time_mean,
+                            time_max,
+                        )
+                    else:
+                        logger.info(
+                            "Preference projector (batch): time_support=%.1f%% | time[min/mean/max]=%.6f/%.6f/%.6f",
+                            100.0 * support_frac,
+                            time_min,
+                            time_mean,
+                            time_max,
+                        )
+
                 pref_grad_sum = torch.zeros_like(
                     pref_grad_queue[0],
                     device=device,
@@ -1413,9 +1553,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                     dtype=pref_projector.X.dtype,
                 )
 
-                alpha_pref_reg = float(
-                    components["cost_model"].alpha_pref_reg.detach().cpu().item()
-                )
+                alpha_pref_reg = float(components["cost_model"].alpha_pref_reg.detach().cpu().item())
                 if alpha_pref_reg != 0.0:
                     pref_grad_avg = pref_grad_avg + 2.0 * alpha_pref_reg * p_e
 
@@ -1785,6 +1923,12 @@ def main():
         default=None,
         help="Use a fixed batch index for all iterations to check for convergence on a single batch."
     )
+    parser.add_argument(
+        "--max-iters",
+        type=int,
+        default=None,
+        help="Override max_iters from the case YAML (useful for smoke tests).",
+    )
     
     args = parser.parse_args()
 
@@ -1799,6 +1943,8 @@ def main():
     pref_learning_rate = training_params.get("preference_feature_learning_rate", default_batch_config.pref_learning_rate)
     pref_projection_ridge = training_params.get("preference_projection_ridge", default_batch_config.pref_projection_ridge)
     max_iterations = training_params.get("max_iters", default_batch_config.max_iterations)
+    if args.max_iters is not None:
+        max_iterations = args.max_iters
     convergence_threshold = training_params.get("convergence_threshold", default_batch_config.convergence_threshold)
     checkpoint_interval = training_params.get("checkpoint_interval", default_batch_config.checkpoint_interval)
     gamma = training_params.get("gamma", default_batch_config.gamma)
