@@ -90,17 +90,15 @@ The model has two “parts”:
      - it appears in `model.state_dict()`,
      - it is *not* returned by `model.parameters()` and thus not updated by Adam.
 
-### Feature definition: fixed per waypoint-edge
+### Feature definition: common linear features
 
-The feature map is fixed and time-independent:
+The common-cost feature map mirrors `CostLinearDisentangled`:
 
 - `bias`: \(1\)
 - `ac_dist`: \(\mathrm{AC}(e)\cdot d(e) / 100\)
-- `dist`: \(d(e)\)
+- `time`: \(d(e) / (60\cdot(\mathrm{cruise\_speed} + w_{\mathrm{tail}}))\)
 
-This matches the “common cost is explicitly linear \(Xw\)” decision.
-
-Tailwind is still passed through the shared cost-model call signature for compatibility, but the linear model **does not use it** (because we need \(x(e)\) fixed per edge to precompute the projector).
+For the *projector*, `time` must be instantiated as a fixed per-edge statistic. The training pipeline computes a per-edge mean tailwind (knots) over the available `WIND_*.pt` / `CLSR_*.pkl` files and uses that to build `X`. If this statistic can’t be computed, training raises an error (rather than silently defaulting to `tailwind=0`).
 
 ### Total cost used everywhere
 
@@ -144,7 +142,7 @@ This is a “global, fixed at training start” empirical weighting.
 
 `build_feature_matrix(edge_u, edge_v, dist_matrix, ac_matrix, ...)` constructs:
 
-`X_raw[:, :] = [bias, ac_dist, dist]`.
+`X_raw[:, :] = [bias, ac_dist, time]`.
 
 ### \(D\)-weighted normalization
 

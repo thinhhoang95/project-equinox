@@ -59,6 +59,7 @@ import multiprocessing
 from tqdm import tqdm
 import yaml
 from collections import defaultdict
+import re
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_AVAILABLE = True
@@ -106,6 +107,132 @@ def _edge_list_fingerprint(edge_u: torch.Tensor, edge_v: torch.Tensor) -> str:
     hasher.update(b"|")
     hasher.update(edge_v_cpu.numpy().tobytes())
     return f"{edge_u_cpu.numel()}:{hasher.hexdigest()}"
+
+
+def _index_tres_batch_files(tres_dir: Path) -> dict[tuple[str, int], tuple[Optional[Path], Optional[Path]]]:
+    """
+    Build an index from (flight_id, takeoff_timestamp) to (CLSR_path, WIND_path).
+    """
+    pattern = re.compile(r"^(?P<prefix>CLSR|WIND)_(?P<flight_id>.+)_(?P<ts>\\d+)\\.(?P<ext>pkl|pt)$")
+    index: dict[tuple[str, int], tuple[Optional[Path], Optional[Path]]] = {}
+    for batch_dir in tres_dir.glob("batch*"):
+        if not batch_dir.is_dir():
+            continue
+        for path in batch_dir.iterdir():
+            match = pattern.match(path.name)
+            if match is None:
+                continue
+            flight_id = match.group("flight_id")
+            ts = int(match.group("ts"))
+            key = (flight_id, ts)
+            clsr_path, wind_path = index.get(key, (None, None))
+            if match.group("prefix") == "CLSR":
+                clsr_path = path
+            else:
+                wind_path = path
+            index[key] = (clsr_path, wind_path)
+    return index
+
+
+def _compute_mean_tailwind_per_edge(
+    *,
+    routes_df: pd.DataFrame,
+    case_dir: str,
+    edge_u_cpu: torch.Tensor,
+    edge_v_cpu: torch.Tensor,
+) -> Optional[torch.Tensor]:
+    """
+    Compute a fixed per-edge mean tailwind (knots) over the training dataset.
+
+    This provides a deterministic per-edge statistic suitable for building the
+    disentanglement feature matrix X (which must be fixed for precomputing X^T D X).
+    """
+    if routes_df.empty:
+        raise RuntimeError("Routes CSV is empty; cannot compute mean tailwind per edge for projector features.")
+
+    required_cols = {"flight_id", "takeoff_timestamp"}
+    if not required_cols.issubset(set(routes_df.columns)):
+        raise RuntimeError(
+            f"Routes CSV missing columns {sorted(required_cols)}; cannot compute mean tailwind per edge."
+        )
+
+    tres_dir = Path(case_dir) / "tres_runs"
+    file_index = _index_tres_batch_files(tres_dir)
+    if not file_index:
+        raise RuntimeError(
+            f"No batch directories or CLSR/WIND files found under {tres_dir}; "
+            "cannot compute mean tailwind per edge. Ensure TRES thinning and wind files exist."
+        )
+
+    edge_u_list = edge_u_cpu.detach().to(device="cpu", dtype=torch.int64).tolist()
+    edge_v_list = edge_v_cpu.detach().to(device="cpu", dtype=torch.int64).tolist()
+    edge_to_id = {(int(u), int(v)): i for i, (u, v) in enumerate(zip(edge_u_list, edge_v_list))}
+
+    import numpy as np
+
+    sum_tail = np.zeros((len(edge_u_list),), dtype=np.float64)
+    cnt_tail = np.zeros((len(edge_u_list),), dtype=np.int64)
+    used_flights = 0
+    missing_flights = 0
+
+    for row in routes_df.itertuples(index=False):
+        flight_id = getattr(row, "flight_id")
+        takeoff_timestamp = int(getattr(row, "takeoff_timestamp"))
+        clsr_path, wind_path = file_index.get((flight_id, takeoff_timestamp), (None, None))
+        if clsr_path is None or wind_path is None:
+            missing_flights += 1
+            continue
+
+        try:
+            with open(clsr_path, "rb") as f:
+                thinned_transitions = pickle.load(f)
+            tailwind = torch.load(wind_path, weights_only=False)
+        except Exception as e:
+            logger.debug(f"Failed to load wind/thinned data for {flight_id}_{takeoff_timestamp}: {e}")
+            missing_flights += 1
+            continue
+
+        tailwind_np = np.asarray(tailwind, dtype=np.float64).reshape(-1)
+        if len(thinned_transitions) != tailwind_np.shape[0]:
+            logger.debug(
+                f"Tailwind length mismatch for {flight_id}_{takeoff_timestamp}: "
+                f"{len(thinned_transitions)} transitions vs {tailwind_np.shape[0]} tailwind values."
+            )
+            missing_flights += 1
+            continue
+
+        for i, transition in enumerate(thinned_transitions):
+            try:
+                u_idx = int(transition[0])
+                v_idx = int(transition[5])
+            except Exception:
+                continue
+            edge_id = edge_to_id.get((u_idx, v_idx))
+            if edge_id is None:
+                continue
+            sum_tail[edge_id] += float(tailwind_np[i])
+            cnt_tail[edge_id] += 1
+
+        used_flights += 1
+
+    if used_flights == 0:
+        raise RuntimeError(
+            "No CLSR/WIND files matched the flights in the routes CSV; cannot compute mean tailwind per edge. "
+            "This indicates tailwind is not plumbed/available for the training set."
+        )
+
+    avg_tail = np.zeros_like(sum_tail)
+    mask = cnt_tail > 0
+    avg_tail[mask] = sum_tail[mask] / cnt_tail[mask]
+    coverage = float(mask.mean()) if mask.size else 0.0
+    if missing_flights > 0:
+        logger.warning(
+            "Mean tailwind per edge computed from %d flights; %d flights missing CLSR/WIND files.",
+            used_flights,
+            missing_flights,
+        )
+    logger.info("Mean tailwind per edge coverage %.1f%% (edges observed in CLSR transitions).", 100.0 * coverage)
+    return torch.from_numpy(avg_tail).to(dtype=torch.float64)
 
 
 def _init_worker(
@@ -1035,11 +1162,21 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         )
         d_e = global_counts[edge_u_cpu, edge_v_cpu].to(device=device, dtype=torch.float64)
 
+        mean_tailwind_e = _compute_mean_tailwind_per_edge(
+            routes_df=routes_df,
+            case_dir=case_dir,
+            edge_u_cpu=edge_u_cpu,
+            edge_v_cpu=edge_v_cpu,
+        )
+        mean_tailwind_e = mean_tailwind_e.to(device=device, dtype=torch.float64)
+
         X_raw = build_feature_matrix(
             pref_edge_u,
             pref_edge_v,
             components["dist_matrix"],
             components["ac_matrix"],
+            cruise_speed_kts=float(components["cost_model"].cruise_speed_kts),
+            tailwind_values_w=mean_tailwind_e,
             device=device,
             dtype=torch.float64,
         )

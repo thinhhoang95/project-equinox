@@ -60,6 +60,8 @@ def build_feature_matrix(
     distance_matrix_d: Union[torch.Tensor, np.ndarray],
     airspace_charge_matrix_ac: Union[torch.Tensor, np.ndarray],
     *,
+    cruise_speed_kts: float = 450.0,
+    tailwind_values_w: Optional[Union[torch.Tensor, np.ndarray, float]] = None,
     device: torch.device,
     dtype: torch.dtype = torch.float64,
 ) -> torch.Tensor:
@@ -67,13 +69,44 @@ def build_feature_matrix(
     Build per-edge feature matrix X for the linear common cost model.
 
     Feature order must match CostLinearDisentangled:
-      [bias, ac_dist, dist]
+      [bias, ac_dist, time]
+
+    Notes:
+      - The cost model defines time as:
+          time = dist / (60 * (cruise_speed_kts + tailwind))
+      - For disentanglement/projection, `tailwind_values_w` must be a fixed per-edge statistic
+        (e.g., climatology mean tailwind per edge). If omitted, tailwind is assumed to be 0,
+        making time proportional to distance.
     """
     dist = _ensure_tensor(distance_matrix_d, device=device, dtype=dtype)[edge_u, edge_v]
     ac = _ensure_tensor(airspace_charge_matrix_ac, device=device, dtype=dtype)[edge_u, edge_v]
     ac_dist = ac * dist / 100.0
+    if cruise_speed_kts <= 0:
+        raise ValueError("cruise_speed_kts must be positive.")
+
+    if tailwind_values_w is None:
+        tailwind_e = torch.zeros_like(dist)
+    elif isinstance(tailwind_values_w, (float, int)):
+        tailwind_e = torch.full_like(dist, float(tailwind_values_w))
+    else:
+        tailwind_tensor = _ensure_tensor(tailwind_values_w, device=device, dtype=dtype)
+        if tailwind_tensor.ndim == 2:
+            tailwind_e = tailwind_tensor[edge_u, edge_v]
+        elif tailwind_tensor.ndim == 1:
+            if tailwind_tensor.shape[0] != edge_u.shape[0]:
+                raise ValueError(
+                    "tailwind_values_w must be 1D with length matching the edge list, "
+                    "or 2D with shape (num_nodes, num_nodes)."
+                )
+            tailwind_e = tailwind_tensor
+        elif tailwind_tensor.ndim == 0:
+            tailwind_e = tailwind_tensor.expand_as(dist)
+        else:
+            raise ValueError("tailwind_values_w must be a scalar, 1D, or 2D tensor/array.")
+
+    time_e = dist / (60.0 * (cruise_speed_kts + tailwind_e))
     ones = torch.ones_like(dist)
-    return torch.stack([ones, ac_dist, dist], dim=1)
+    return torch.stack([ones, ac_dist, time_e], dim=1)
 
 
 def d_weighted_normalize_features(
