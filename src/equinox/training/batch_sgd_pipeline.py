@@ -141,10 +141,22 @@ def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: i
                     # Get flight-specific origin and destination from CSV data
                     flights_csv = os.path.join(case_dir, "all_routes.csv")
                     flights_df = pd.read_csv(flights_csv)
-                    flight_row = flights_df[flights_df['flight_id'] == flight_id]
+                    if "takeoff_time" in flights_df.columns:
+                        takeoff_col = "takeoff_time"
+                    elif "takeoff" in flights_df.columns:
+                        takeoff_col = "takeoff"
+                    else:
+                        raise ValueError("No takeoff_time/takeoff column found in all_routes.csv")
+
+                    flight_row = flights_df[
+                        (flights_df["flight_id"] == flight_id)
+                        & (flights_df[takeoff_col] == takeoff_timestamp)
+                    ]
                     
                     if flight_row.empty:
-                        raise ValueError(f"Flight {flight_id} not found in all_routes.csv")
+                        raise ValueError(
+                            f"Flight {flight_id} with takeoff {takeoff_timestamp} not found in all_routes.csv"
+                        )
                     
                     origin_node = flight_row.iloc[0]['origin']
                     destination_node = flight_row.iloc[0]['destination']

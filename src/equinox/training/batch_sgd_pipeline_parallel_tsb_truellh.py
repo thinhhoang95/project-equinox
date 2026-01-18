@@ -254,6 +254,7 @@ def _init_worker(
     gamma: float,
     debug_single_process: bool,
     pref_edge_signature: Optional[str],
+    disable_edge_preference: bool,
 ) -> None:
     """Initialize per-worker shared context to avoid pickling large objects per task."""
     os.environ["OMP_NUM_THREADS"] = "1"
@@ -278,7 +279,7 @@ def _init_worker(
     dist_matrix = dist_matrix.to(device)
     ac_matrix = ac_matrix.to(device)
 
-    pref_enabled = config.cost_model_version == "lin_disent"
+    pref_enabled = config.cost_model_version == "lin_disent" and not disable_edge_preference
     edge_u = None
     edge_v = None
     if pref_enabled:
@@ -357,6 +358,7 @@ class BatchLearningConfig:
     randomized: bool = False
     random_seed: int = None  # Random seed for deterministic randomization
     fixed_batch_index: Optional[int] = None # Use a fixed batch for all iterations
+    disable_edge_preference: bool = False
     
     def __post_init__(self):
         if self.num_workers is None:
@@ -1185,7 +1187,10 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         return
     logger.info(f"Created {num_batches} batches of flights.")
 
-    pref_enabled = components["cost_model_version"] == "lin_disent"
+    pref_enabled = (
+        components["cost_model_version"] == "lin_disent"
+        and not batch_config.disable_edge_preference
+    )
     pref_projector = None
     pref_edge_u = None
     pref_edge_v = None
@@ -1194,6 +1199,10 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     pref_feature_bias_e = None
     pref_feature_ac_dist_e = None
     pref_time_fallback_e = None
+    if batch_config.disable_edge_preference and components["cost_model_version"] == "lin_disent":
+        with torch.no_grad():
+            components["cost_model"].preference_matrix_p.zero_()
+        logger.info("Edge preference learning disabled; preference matrix fixed at 0.")
     if pref_enabled:
         routes_df = pd.read_csv(flights_csv)
         edge_u_cpu, edge_v_cpu = build_edge_list(components["graph"], components["node_to_idx"])
@@ -1290,6 +1299,9 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                         p_e = pref_projector.project(p_e)
                         pref_matrix.zero_()
                         pref_matrix[pref_edge_u, pref_edge_v] = p_e.to(dtype=pref_matrix.dtype)
+                elif batch_config.disable_edge_preference and components["cost_model_version"] == "lin_disent":
+                    with torch.no_grad():
+                        components["cost_model"].preference_matrix_p.zero_()
             except Exception as e:
                 logger.warning(f"✗ Failed to load checkpoint {latest_checkpoint}: {e}")
                 logger.info("Starting training from scratch")
@@ -1326,6 +1338,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             batch_config.gamma,
             batch_config.debug_single_process,
             pref_edge_signature,
+            batch_config.disable_edge_preference,
         ),
     ) as executor:
         while iteration <= batch_config.max_iterations and not converged:
@@ -1940,6 +1953,11 @@ def main():
         default=None,
         help="Override max_iters from the case YAML (useful for smoke tests).",
     )
+    parser.add_argument(
+        "--disable-edge-preference",
+        action="store_true",
+        help="Disable edge preference learning and fix preference matrix at 0 (lin_disent only).",
+    )
     
     args = parser.parse_args()
 
@@ -1980,7 +1998,8 @@ def main():
         resume_from_checkpoint=not args.no_resume,  # Resume by default unless --no-resume is specified
         randomized=args.randomize,
         random_seed=getattr(args, 'random_seed', None),  # Handle hyphenated argument name
-        fixed_batch_index=args.fixed_batch_index
+        fixed_batch_index=args.fixed_batch_index,
+        disable_edge_preference=args.disable_edge_preference,
     )
     
     # Validate implementation first

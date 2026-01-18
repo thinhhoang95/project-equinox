@@ -65,6 +65,7 @@ def _select_route_from_csv(
     routes_csv_path: str,
     *,
     flight_id: Optional[str] = None,
+    takeoff_time: Optional[int] = None,
     row_idx: int = 0,
 ) -> RouteSelection:
     df = pd.read_csv(routes_csv_path)
@@ -73,8 +74,18 @@ def _select_route_from_csv(
 
     if flight_id is not None:
         match = df.loc[df["flight_id"] == flight_id]
+        if takeoff_time is not None:
+            match = match.loc[match["takeoff_time"] == int(takeoff_time)]
         if match.empty:
-            raise ValueError(f"Flight ID {flight_id} not found in {routes_csv_path}")
+            if takeoff_time is None:
+                raise ValueError(f"Flight ID {flight_id} not found in {routes_csv_path}")
+            raise ValueError(
+                f"Flight ID {flight_id} with takeoff_time {takeoff_time} not found in {routes_csv_path}"
+            )
+        if takeoff_time is None and len(match) > 1:
+            raise ValueError(
+                f"Flight ID {flight_id} is not unique in {routes_csv_path}; provide takeoff_time"
+            )
         row = match.iloc[0]
     else:
         row = df.iloc[row_idx]
@@ -201,6 +212,7 @@ def compute_route_cost_breakdown(
     case_dir: str,
     routes_csv_path: Optional[str] = None,
     flight_id: Optional[str] = None,
+    takeoff_time: Optional[int] = None,
     row_idx: int = 0,
     use_tres_wind: bool = True,
     tailwind_fallback_kts: float = 0.0,
@@ -213,6 +225,7 @@ def compute_route_cost_breakdown(
         case_dir: Case directory containing default.yaml and case assets.
         routes_csv_path: Optional path to a routes CSV. Defaults to all_routes_sculpted.csv.
         flight_id: Optional flight identifier to select the route. If omitted, row_idx is used.
+        takeoff_time: Optional takeoff timestamp to disambiguate flight_id.
         row_idx: Row index to use when flight_id is not provided.
         use_tres_wind: Use precomputed WIND/CLSR files to estimate tailwind per edge.
         tailwind_fallback_kts: Tailwind fallback if wind data is unavailable.
@@ -229,6 +242,7 @@ def compute_route_cost_breakdown(
     selection = _select_route_from_csv(
         routes_csv,
         flight_id=flight_id,
+        takeoff_time=takeoff_time,
         row_idx=row_idx,
     )
 
