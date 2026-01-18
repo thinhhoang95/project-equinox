@@ -1,0 +1,1 @@
+If need to use a Python interpreter, use: `/Users/thinhhoang/miniforge3/envs/equinox/bin/python` because it has all the libraries and packages installed, correctly configured.

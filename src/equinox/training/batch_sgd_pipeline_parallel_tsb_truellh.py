@@ -80,7 +80,7 @@ from src.equinox.preferences.disentanglement import (
     build_feature_matrix,
     compute_empirical_counts_from_routes,
     d_weighted_normalize_features,
-    PreferenceProjector,
+    GaugeFixedPreferenceProjector,
 )
 
 # Setup logging
@@ -1207,6 +1207,8 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             components["num_nodes"],
         )
         d_e = global_counts[edge_u_cpu, edge_v_cpu].to(device=device, dtype=torch.float64)
+        pref_projection_eps = 1e-12
+        w_e = d_e + pref_projection_eps
 
         mean_tailwind_e = _compute_mean_tailwind_per_edge(
             routes_df=routes_df,
@@ -1234,18 +1236,18 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             d_e,
             bias_index=0,
         )
-        pref_projector = PreferenceProjector(
-            X_norm,
-            d_e,
-            ridge=batch_config.pref_projection_ridge,
-            feature_means=feature_means,
-            feature_scales=feature_scales,
-            manual_scales=manual_scales,
+        pref_projector = GaugeFixedPreferenceProjector(
+            edge_u_cpu,
+            edge_v_cpu,
+            components["num_nodes"],
+            w_e,
+            feature_ridge=batch_config.pref_projection_ridge,
         )
+        pref_projector.update_features(X_norm)
         pref_support_mask = d_e > 0
 
         if pref_projector.condition_number is not None:
-            logger.info(f"Preference projector condition number: {pref_projector.condition_number:.3e}")
+            logger.info(f"Preference projector A_eff condition number: {pref_projector.condition_number:.3e}")
 
         with torch.no_grad():
             pref_matrix = components["cost_model"].preference_matrix_p
@@ -1461,13 +1463,16 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                     converged = True
 
             pref_grad_norm = None
-            pref_violation = None
+            pref_violation_features = None
+            pref_violation_cycle = None
             pref_min = None
             pref_max = None
             pref_mean = None
             if pref_enabled and pref_grad_queue:
                 if pref_feature_bias_e is None or pref_feature_ac_dist_e is None or pref_time_fallback_e is None:
                     raise RuntimeError("Preference features not initialized; cannot rebuild preference projector.")
+                if pref_projector is None:
+                    raise RuntimeError("Preference projector not initialized; cannot update features.")
                 if n_expected_sum_e is None or t_expected_sum_e is None:
                     n_expected_sum_e = torch.zeros_like(pref_time_fallback_e)
                     t_expected_sum_e = torch.zeros_like(pref_time_fallback_e)
@@ -1490,14 +1495,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                     d_e,
                     bias_index=0,
                 )
-                pref_projector = PreferenceProjector(
-                    X_norm,
-                    d_e,
-                    ridge=batch_config.pref_projection_ridge,
-                    feature_means=feature_means,
-                    feature_scales=feature_scales,
-                    manual_scales=manual_scales,
-                )
+                pref_projector.update_features(X_norm)
 
                 stats_support = time_support
                 if pref_support_mask is not None:
@@ -1521,7 +1519,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 if time_mean is not None:
                     if pref_projector.condition_number is not None:
                         logger.info(
-                            "Preference projector (batch): cond=%.3e | time_support=%.1f%% | time[min/mean/max]=%.6f/%.6f/%.6f",
+                            "Preference projector (batch): A_eff cond=%.3e | time_support=%.1f%% | time[min/mean/max]=%.6f/%.6f/%.6f",
                             pref_projector.condition_number,
                             100.0 * support_frac,
                             time_min,
@@ -1566,7 +1564,8 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                     pref_matrix[pref_edge_u, pref_edge_v] = p_e.to(dtype=pref_matrix.dtype)
 
                 pref_grad_norm = float(torch.linalg.norm(pref_grad_proj).item())
-                pref_violation = float(pref_projector.constraint_violation(p_e).item())
+                pref_violation_features = float(pref_projector.violation_features(p_e).item())
+                pref_violation_cycle = float(pref_projector.violation_cycle(p_e).item())
 
                 support_mask = pref_support_mask
                 if support_mask is not None and support_mask.any():
@@ -1578,9 +1577,10 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 pref_mean = float(p_support.mean().item())
 
                 logger.info(
-                    "Preference update: grad_norm=%.6f | constraint=%.3e | min=%.6f max=%.6f mean=%.6f",
+                    "Preference update: grad_norm=%.6f | features=%.3e | cycle=%.3e | min=%.6f max=%.6f mean=%.6f",
                     pref_grad_norm,
-                    pref_violation,
+                    pref_violation_features,
+                    pref_violation_cycle,
                     pref_min,
                     pref_max,
                     pref_mean,
@@ -1622,7 +1622,18 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
 
                 if pref_enabled and pref_grad_norm is not None:
                     tensorboard_writer.add_scalar('Preferences/Grad_Norm_L2', pref_grad_norm, iteration)
-                    tensorboard_writer.add_scalar('Preferences/Constraint_Violation', pref_violation, iteration)
+                    if pref_violation_features is not None:
+                        tensorboard_writer.add_scalar(
+                            'Preferences/Feature_Constraint_Violation',
+                            pref_violation_features,
+                            iteration,
+                        )
+                    if pref_violation_cycle is not None:
+                        tensorboard_writer.add_scalar(
+                            'Preferences/Cycle_Constraint_Violation',
+                            pref_violation_cycle,
+                            iteration,
+                        )
                     tensorboard_writer.add_scalar('Preferences/Mean', pref_mean, iteration)
                     tensorboard_writer.add_scalar('Preferences/Min', pref_min, iteration)
                     tensorboard_writer.add_scalar('Preferences/Max', pref_max, iteration)

@@ -73,7 +73,7 @@ def build_feature_matrix(
 
     Notes:
       - The cost model defines time as:
-          time = dist / (60 * (cruise_speed_kts + tailwind))
+          time = 60.0 * dist / (cruise_speed_kts + tailwind_e)
       - If you want a *static* projector, `tailwind_values_w` must be a fixed per-edge statistic
         (e.g., climatology mean tailwind per edge) so that X is time-invariant.
       - If your workflow rebuilds the projector over time, prefer supplying a precomputed per-edge
@@ -106,7 +106,7 @@ def build_feature_matrix(
         else:
             raise ValueError("tailwind_values_w must be a scalar, 1D, or 2D tensor/array.")
 
-    time_e = dist / (60.0 * (cruise_speed_kts + tailwind_e))
+    time_e = 60.0 * dist / (cruise_speed_kts + tailwind_e)
     ones = torch.ones_like(dist)
     return torch.stack([ones, ac_dist, time_e], dim=1)
 
@@ -249,3 +249,299 @@ class PreferenceProjector:
         if p_e.ndim != 1:
             raise ValueError("p_e must be 1D (m,).")
         return torch.linalg.norm(self.X.t().matmul(self.d_e * p_e))
+
+
+def _infer_reference_nodes(
+    edge_u: torch.Tensor,
+    edge_v: torch.Tensor,
+    num_nodes: int,
+    ref_nodes: Optional[Iterable[int]] = None,
+) -> tuple[list[int], int]:
+    edge_u_cpu = edge_u.detach().to(device="cpu", dtype=torch.int64).tolist()
+    edge_v_cpu = edge_v.detach().to(device="cpu", dtype=torch.int64).tolist()
+
+    parent = list(range(num_nodes))
+    rank = [0] * num_nodes
+
+    def find(idx: int) -> int:
+        while parent[idx] != idx:
+            parent[idx] = parent[parent[idx]]
+            idx = parent[idx]
+        return idx
+
+    def union(left: int, right: int) -> None:
+        root_left = find(left)
+        root_right = find(right)
+        if root_left == root_right:
+            return
+        if rank[root_left] < rank[root_right]:
+            parent[root_left] = root_right
+        elif rank[root_left] > rank[root_right]:
+            parent[root_right] = root_left
+        else:
+            parent[root_right] = root_left
+            rank[root_left] += 1
+
+    for left, right in zip(edge_u_cpu, edge_v_cpu):
+        union(left, right)
+
+    root_to_comp: dict[int, int] = {}
+    comp_for_node: list[int] = []
+    comp_to_rep: list[int] = []
+    for node in range(num_nodes):
+        root = find(node)
+        comp_id = root_to_comp.get(root)
+        if comp_id is None:
+            comp_id = len(root_to_comp)
+            root_to_comp[root] = comp_id
+            comp_to_rep.append(node)
+        comp_for_node.append(comp_id)
+
+    ref_list: list[int] = []
+    if ref_nodes is not None:
+        if isinstance(ref_nodes, torch.Tensor):
+            ref_list = ref_nodes.detach().to(device="cpu", dtype=torch.int64).tolist()
+        else:
+            ref_list = list(ref_nodes)
+    ref_set = {int(node) for node in ref_list}
+    for node in ref_set:
+        if node < 0 or node >= num_nodes:
+            raise ValueError(f"Reference node {node} is out of range for {num_nodes} nodes.")
+
+    pinned_components = {comp_for_node[node] for node in ref_set} if ref_set else set()
+    pins = set(ref_set)
+    for comp_id, rep in enumerate(comp_to_rep):
+        if comp_id not in pinned_components:
+            pins.add(rep)
+
+    if ref_nodes is not None and len(pins) > len(ref_set):
+        logger.warning(
+            "Reference nodes did not cover all components; added %d extra pins.",
+            len(pins) - len(ref_set),
+        )
+
+    return sorted(pins), len(comp_to_rep)
+
+
+class GaugeFixedPreferenceProjector:
+    """Projects onto X^T W p = 0 and B W p = 0 using a stable Schur complement."""
+
+    def __init__(
+        self,
+        edge_u: torch.Tensor,
+        edge_v: torch.Tensor,
+        num_nodes: int,
+        w_e: torch.Tensor,
+        *,
+        ref_nodes: Optional[Iterable[int]] = None,
+        laplacian_ridge: float = 0.0,
+        feature_ridge: float = 1e-8,
+    ) -> None:
+        if edge_u.ndim != 1 or edge_v.ndim != 1:
+            raise ValueError("edge_u and edge_v must be 1D (m,).")
+        if edge_u.shape != edge_v.shape:
+            raise ValueError("edge_u and edge_v must have the same shape.")
+        if w_e.ndim != 1:
+            raise ValueError("w_e must be 1D (m,).")
+        if w_e.shape[0] != edge_u.shape[0]:
+            raise ValueError("w_e must match edge_u/edge_v length.")
+        if num_nodes <= 0:
+            raise ValueError("num_nodes must be positive.")
+        if laplacian_ridge < 0.0:
+            raise ValueError("laplacian_ridge must be non-negative.")
+        if feature_ridge < 0.0:
+            raise ValueError("feature_ridge must be non-negative.")
+
+        self.num_nodes = num_nodes
+        self.w_e = w_e
+        self.laplacian_ridge = float(laplacian_ridge)
+        self.feature_ridge = float(feature_ridge)
+
+        device = w_e.device
+        self.edge_u = edge_u.to(device=device, dtype=torch.long)
+        self.edge_v = edge_v.to(device=device, dtype=torch.long)
+
+        pins, num_components = _infer_reference_nodes(
+            self.edge_u, self.edge_v, num_nodes, ref_nodes
+        )
+        if num_components > 1:
+            logger.warning("Preference graph has %d connected components.", num_components)
+        self.ref_nodes = pins
+
+        node_to_reduced = [-1] * num_nodes
+        reduced_idx = 0
+        pin_set = set(pins)
+        for node in range(num_nodes):
+            if node in pin_set:
+                continue
+            node_to_reduced[node] = reduced_idx
+            reduced_idx += 1
+        if reduced_idx == 0:
+            raise ValueError("All nodes are pinned; projection is ill-defined.")
+
+        self.node_to_reduced = torch.tensor(
+            node_to_reduced, device=device, dtype=torch.long
+        )
+        self.reduced_node_count = reduced_idx
+
+        self._row_u = self.node_to_reduced[self.edge_u]
+        self._row_v = self.node_to_reduced[self.edge_v]
+        self._mask_u = self._row_u >= 0
+        self._mask_v = self._row_v >= 0
+        self._mask_both = self._mask_u & self._mask_v
+
+        self._laplacian = None
+        self._laplacian_chol = None
+        self._build_laplacian()
+
+        self.X = None
+        self._C = None
+        self._Z = None
+        self._A_eff = None
+        self._A_eff_chol = None
+        self.condition_number = None
+
+    def _build_laplacian(self) -> None:
+        device = self.w_e.device
+        dtype = self.w_e.dtype
+        laplacian = torch.zeros(
+            (self.reduced_node_count, self.reduced_node_count),
+            device=device,
+            dtype=dtype,
+        )
+        if self._mask_u.any():
+            idx_u = self._row_u[self._mask_u]
+            laplacian.index_put_((idx_u, idx_u), self.w_e[self._mask_u], accumulate=True)
+        if self._mask_v.any():
+            idx_v = self._row_v[self._mask_v]
+            laplacian.index_put_((idx_v, idx_v), self.w_e[self._mask_v], accumulate=True)
+        if self._mask_both.any():
+            idx_u = self._row_u[self._mask_both]
+            idx_v = self._row_v[self._mask_both]
+            weights = self.w_e[self._mask_both]
+            laplacian.index_put_((idx_u, idx_v), -weights, accumulate=True)
+            laplacian.index_put_((idx_v, idx_u), -weights, accumulate=True)
+
+        if self.laplacian_ridge > 0.0:
+            laplacian.diagonal().add_(self.laplacian_ridge)
+
+        self._laplacian = laplacian
+        self._laplacian_chol = None
+        try:
+            self._laplacian_chol = torch.linalg.cholesky(laplacian)
+        except RuntimeError:
+            logger.warning("Cholesky failed for the Laplacian; falling back to solve().")
+
+    def _solve_laplacian(self, rhs: torch.Tensor) -> torch.Tensor:
+        squeeze = False
+        if rhs.ndim == 1:
+            rhs = rhs.unsqueeze(1)
+            squeeze = True
+        if self._laplacian_chol is not None:
+            sol = torch.cholesky_solve(rhs, self._laplacian_chol)
+        else:
+            sol = torch.linalg.solve(self._laplacian, rhs)
+        return sol.squeeze(1) if squeeze else sol
+
+    def _solve_aeff(self, rhs: torch.Tensor) -> torch.Tensor:
+        squeeze = False
+        if rhs.ndim == 1:
+            rhs = rhs.unsqueeze(1)
+            squeeze = True
+        if self._A_eff_chol is not None:
+            sol = torch.cholesky_solve(rhs, self._A_eff_chol)
+        else:
+            sol = torch.linalg.solve(self._A_eff, rhs)
+        return sol.squeeze(1) if squeeze else sol
+
+    def _bw_apply(self, v_e: torch.Tensor) -> torch.Tensor:
+        weighted_v = self.w_e * v_e
+        bwv = torch.zeros(
+            self.reduced_node_count, device=v_e.device, dtype=weighted_v.dtype
+        )
+        if self._mask_u.any():
+            bwv.index_add_(0, self._row_u[self._mask_u], weighted_v[self._mask_u])
+        if self._mask_v.any():
+            bwv.index_add_(0, self._row_v[self._mask_v], -weighted_v[self._mask_v])
+        return bwv
+
+    def _bt_apply(self, psi: torch.Tensor) -> torch.Tensor:
+        bpsi = torch.zeros_like(self.w_e, dtype=psi.dtype, device=psi.device)
+        if self._mask_u.any():
+            bpsi[self._mask_u] += psi[self._row_u[self._mask_u]]
+        if self._mask_v.any():
+            bpsi[self._mask_v] -= psi[self._row_v[self._mask_v]]
+        return bpsi
+
+    def update_features(self, X: torch.Tensor) -> None:
+        if X.ndim != 2:
+            raise ValueError("X must be 2D (m, d).")
+        if X.shape[0] != self.w_e.shape[0]:
+            raise ValueError("X must match edge dimension.")
+        if X.device != self.w_e.device or X.dtype != self.w_e.dtype:
+            X = X.to(device=self.w_e.device, dtype=self.w_e.dtype)
+
+        self.X = X
+        weighted_X = self.w_e[:, None] * X
+        A = X.t().matmul(weighted_X)
+
+        C = torch.zeros(
+            (self.reduced_node_count, X.shape[1]),
+            device=X.device,
+            dtype=X.dtype,
+        )
+        if self._mask_u.any():
+            C.index_add_(0, self._row_u[self._mask_u], weighted_X[self._mask_u])
+        if self._mask_v.any():
+            C.index_add_(0, self._row_v[self._mask_v], -weighted_X[self._mask_v])
+
+        Z = self._solve_laplacian(C)
+        A_eff = A - C.t().matmul(Z)
+        if self.feature_ridge > 0.0:
+            A_eff = A_eff + self.feature_ridge * torch.eye(
+                X.shape[1], device=X.device, dtype=X.dtype
+            )
+
+        self._C = C
+        self._Z = Z
+        self._A_eff = A_eff
+        self._A_eff_chol = None
+        try:
+            self._A_eff_chol = torch.linalg.cholesky(A_eff)
+        except RuntimeError:
+            logger.warning("Cholesky failed for A_eff; falling back to solve().")
+
+        self.condition_number = None
+        try:
+            self.condition_number = float(torch.linalg.cond(A_eff).item())
+        except RuntimeError:
+            logger.warning("Could not compute condition number for A_eff.")
+
+    def project(self, v_e: torch.Tensor) -> torch.Tensor:
+        if v_e.ndim != 1:
+            raise ValueError("v_e must be 1D (m,).")
+        if v_e.shape[0] != self.w_e.shape[0]:
+            raise ValueError("v_e must match edge dimension.")
+        if self.X is None or self._A_eff is None or self._C is None or self._Z is None:
+            raise RuntimeError("update_features() must be called before project().")
+
+        if v_e.device != self.w_e.device or v_e.dtype != self.w_e.dtype:
+            v_e = v_e.to(device=self.w_e.device, dtype=self.w_e.dtype)
+
+        rhs1 = self.X.t().matmul(self.w_e * v_e)
+        rhs2 = self._bw_apply(v_e)
+        z2 = self._solve_laplacian(rhs2)
+        rhs1_eff = rhs1 - self._C.t().matmul(z2)
+        alpha = self._solve_aeff(rhs1_eff)
+        psi = z2 - self._Z.matmul(alpha)
+        return v_e - self.X.matmul(alpha) - self._bt_apply(psi)
+
+    def violation_features(self, p_e: torch.Tensor) -> torch.Tensor:
+        if p_e.ndim != 1:
+            raise ValueError("p_e must be 1D (m,).")
+        return torch.linalg.norm(self.X.t().matmul(self.w_e * p_e))
+
+    def violation_cycle(self, p_e: torch.Tensor) -> torch.Tensor:
+        if p_e.ndim != 1:
+            raise ValueError("p_e must be 1D (m,).")
+        return torch.linalg.norm(self._bw_apply(p_e))

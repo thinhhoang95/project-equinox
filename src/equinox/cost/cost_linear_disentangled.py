@@ -21,7 +21,7 @@ class CostLinearDisentangled(nn.Module):
     Feature definition (fixed per waypoint-edge):
       - bias = 1
       - ac_dist = AC(e) * d(e) / 100.0
-      - time = d(e) / (60 * (cruise_speed + w_tail(e, t_e)))
+      - time = 60.0 * dist / (cruise_speed_kts + tailwind_e)
 
     Units:
       - AC: per 100km of Boeing 737 weight load
@@ -156,7 +156,7 @@ class CostLinearDisentangled(nn.Module):
         ac_e = self._get_edge_metric_batched(u_indices, v_indices, airspace_charge_matrix_ac)
         ac_dist = ac_e * dist_e / 100.0
         tailwind_tensor = tailwind_values_w.to(device=self.device, dtype=torch.float32)
-        time_e = dist_e / (60.0 * (self.cruise_speed_kts + tailwind_tensor))
+        time_e = 60.0 * dist_e / (self.cruise_speed_kts + tailwind_tensor)
         ones = torch.ones_like(dist_e)
         return torch.stack([ones, ac_dist, time_e], dim=-1)
 
