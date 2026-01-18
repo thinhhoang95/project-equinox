@@ -1,4 +1,10 @@
-# Context
+# Hodge decomposition Gauge
+Calculus on MDPs: Potential Shaping as a Gradient
+Erik Jenner,1, 2 Herke van Hoof,1 Adam Gleave2
+
+HODGE LAPLACIANS ON GRAPHS
+LEK-HENG LIM†
+https://arxiv.org/pdf/1507.05379
 ## 1) What is well-defined in the document (given $c$)
 
 ### Decomposition identifiability
