@@ -316,10 +316,23 @@ max_flight_duration_hours: 5.0
 origin_node: {source_id}
 output_dir: {relative_output_dir}
 source_elevation_ft: 0.0
-wind_data_dir: {wind_data_dir_path.replace('\\', '\\\\')}
+wind_data_dir: {wind_data_dir_path.replace('\\', '/')}
 disable_config_wind_model: true
-gamma: 1.0
+
 cost_model_version: lin_disent
+# configuration of lin_disent cost function
+common_weights: [1.0, 0.1, 1.0]
+preference_weight: 1.0
+
+# training params
+gamma: 0.1
+training_batch_size: 10
+common_features_learning_rate: 1e-2
+preference_feature_learning_rate: 1e-2
+preference_projection_ridge: 1e-8
+max_iters: 1000
+convergence_threshold: 1e-4
+checkpoint_interval: 50
 """
 
     output_yaml_path = os.path.join(case_dir, "default.yaml")

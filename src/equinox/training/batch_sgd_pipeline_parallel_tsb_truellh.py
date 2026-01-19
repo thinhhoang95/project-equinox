@@ -1207,9 +1207,31 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             random_state=batch_config.random_seed + epoch_idx,
         ).reset_index(drop=True)
 
+    def batch_order_signature(batches: List[pd.DataFrame]) -> Tuple[str, List[str]]:
+        hasher = hashlib.blake2b(digest_size=8)
+        batch_heads: List[str] = []
+        for batch in batches:
+            if batch.empty:
+                batch_heads.append("<empty>")
+                hasher.update(b"<empty>|")
+                continue
+            first_row = batch.iloc[0]
+            head = f"{first_row['flight_id']}:{int(first_row['takeoff_time'])}"
+            batch_heads.append(head)
+            hasher.update(head.encode("utf-8"))
+            hasher.update(b"|")
+        return hasher.hexdigest(), batch_heads
+
     if batch_config.batch_shuffling == "shuffle":
         flight_batches = make_batches(shuffled_df_for_epoch(epoch_idx))
         logger.info("Batch shuffling enabled: rebuilding batches each epoch.")
+        batch_signature, batch_heads = batch_order_signature(flight_batches)
+        logger.info(
+            "Epoch %d shuffle signature=%s batch_heads=%s",
+            epoch_idx,
+            batch_signature,
+            batch_heads,
+        )
     else:
         flight_batches = make_batches(routes_df)
     logger.info(f"Created {num_batches} batches of flights.")
@@ -1379,13 +1401,26 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         while iteration <= batch_config.max_iterations and not converged:
             iteration_start_time = time.time()
             
-            logger.info(f"\n--- Iteration {iteration}/{batch_config.max_iterations} ---")
+            logger.info(
+                "\n--- Iteration %d/%d (epoch %d/%d) ---",
+                iteration,
+                batch_config.max_iterations,
+                epoch_idx + 1,
+                int(np.ceil(batch_config.max_iterations / steps_per_epoch)),
+            )
 
             if batch_config.batch_shuffling == "shuffle":
                 new_epoch_idx = (iteration - 1) // steps_per_epoch
                 if new_epoch_idx != epoch_idx:
                     epoch_idx = new_epoch_idx
                     flight_batches = make_batches(shuffled_df_for_epoch(epoch_idx))
+                    batch_signature, batch_heads = batch_order_signature(flight_batches)
+                    logger.info(
+                        "Reshuffled for epoch %d: signature=%s batch_heads=%s",
+                        epoch_idx,
+                        batch_signature,
+                        batch_heads,
+                    )
 
             # Get the next batch of flights (fixed, randomly or sequentially)
             if batch_config.fixed_batch_index is not None:

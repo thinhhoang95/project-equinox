@@ -456,6 +456,7 @@ def process_flight(flight_series, config, components, case_name, batch_idx, outp
 
     except Exception as e:
         logging.error(f"Error during wind amortization for flight {flight_id}: {e}", exc_info=True)
+        raise
 
 
 def extract_feasible_waypoint_transitions(thinned_transitions):

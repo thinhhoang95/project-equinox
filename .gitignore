@@ -50,3 +50,4 @@ temp_graph_*.pdf
 # Ronbun experiments
 ronbun_experiments/runs_*
 batch_sgd_pipeline.log
+data/cases*
