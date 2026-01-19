@@ -74,6 +74,7 @@ def build_feature_matrix(
     Notes:
       - The cost model defines time as:
           time = 60.0 * dist / (cruise_speed_kts + tailwind_e)
+        (minutes if `dist` is in nautical miles).
       - If you want a *static* projector, `tailwind_values_w` must be a fixed per-edge statistic
         (e.g., climatology mean tailwind per edge) so that X is time-invariant.
       - If your workflow rebuilds the projector over time, prefer supplying a precomputed per-edge

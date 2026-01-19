@@ -39,7 +39,7 @@ def test_build_feature_matrix_uses_time_and_tailwind_matrix() -> None:
     dist_e = dist[edge_u, edge_v]
     ac_e = ac[edge_u, edge_v]
     ac_dist = ac_e * dist_e / 100.0
-    time_e = dist_e / (60.0 * (cruise_speed_kts + tailwind[edge_u, edge_v]))
+    time_e = 60.0 * dist_e / (cruise_speed_kts + tailwind[edge_u, edge_v])
     expected = torch.stack([torch.ones_like(dist_e), ac_dist, time_e], dim=1)
 
     assert torch.allclose(X, expected)
@@ -68,7 +68,7 @@ def test_build_feature_matrix_defaults_tailwind_to_zero() -> None:
     dist_e = dist[edge_u, edge_v]
     ac_e = ac[edge_u, edge_v]
     ac_dist = ac_e * dist_e / 100.0
-    time_e = dist_e / (60.0 * cruise_speed_kts)
+    time_e = 60.0 * dist_e / cruise_speed_kts
     expected = torch.stack([torch.ones_like(dist_e), ac_dist, time_e], dim=1)
 
     assert torch.allclose(X, expected)
@@ -99,7 +99,7 @@ def test_build_feature_matrix_accepts_tailwind_vector() -> None:
     dist_e = dist[edge_u, edge_v]
     ac_e = ac[edge_u, edge_v]
     ac_dist = ac_e * dist_e / 100.0
-    time_e = dist_e / (60.0 * (cruise_speed_kts + tailwind_e))
+    time_e = 60.0 * dist_e / (cruise_speed_kts + tailwind_e)
     expected = torch.stack([torch.ones_like(dist_e), ac_dist, time_e], dim=1)
 
     assert torch.allclose(X, expected)

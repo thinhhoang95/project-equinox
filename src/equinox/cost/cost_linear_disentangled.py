@@ -27,7 +27,7 @@ class CostLinearDisentangled(nn.Module):
     Feature definition (fixed per waypoint-edge):
       - bias = 1
       - ac_dist = AC(e) * d(e) / 100.0
-      - time = 60.0 * dist / (cruise_speed_kts + tailwind_e)
+      - time = 60.0 * dist / (cruise_speed_kts + tailwind_e)  (minutes if dist is in nautical miles)
 
     Units:
       - AC: per 100km of Boeing 737 weight load
@@ -147,7 +147,7 @@ class CostLinearDisentangled(nn.Module):
         For each edge, this method constructs a 3-dimensional feature vector consisting of:
             - 1 (bias term),
             - airspace charge per distance unit multiplied by edge distance (ac_e * dist_e / 100.0),
-            - edge time in hours based on cruise speed and tailwind.
+            - edge time in minutes based on cruise speed and tailwind.
 
         These features are stacked for each edge to produce a batch of shape (num_edges, 3).
 
@@ -160,7 +160,7 @@ class CostLinearDisentangled(nn.Module):
 
         Returns:
             torch.Tensor: Stacked feature tensor of shape (num_edges, 3) where each row is:
-                [1.0, (airspace_charge * distance / 100.0), time_hours]
+                [1.0, (airspace_charge * distance / 100.0), time_minutes]
         """
         dist_e = self._get_edge_metric_batched(u_indices, v_indices, distance_matrix_d)
         ac_e = self._get_edge_metric_batched(u_indices, v_indices, airspace_charge_matrix_ac)
