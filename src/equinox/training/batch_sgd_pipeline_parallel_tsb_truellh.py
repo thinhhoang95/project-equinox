@@ -1554,8 +1554,13 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             pref_grad_norm = None
             pref_violation_features = None
             pref_violation_cycle = None
+            pref_grad_cycle_residual = None
+            pref_grad_potential_energy = None
+            pref_grad_cycle_fraction = None
             common_cycle_violation_raw = None
             common_cycle_violation_cyc = None
+            common_cost_raw_potential_energy = None
+            common_cost_raw_cycle_fraction = None
             pref_min = None
             pref_max = None
             pref_mean = None
@@ -1606,6 +1611,13 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 common_cycle_violation_raw = float(
                     pref_projector.cycle_violation(common_cost_raw_e).item()
                 )
+                with torch.no_grad():
+                    common_cost_raw_potential_energy = float(
+                        pref_projector.potential_energy(common_cost_raw_e).item()
+                    )
+                    common_cost_raw_cycle_fraction = float(
+                        pref_projector.cycle_fraction(common_cost_raw_e).item()
+                    )
 
                 cost_model = components["cost_model"]
                 phi_bias = cost_model.phi_bias.to(device=X_raw_batch.device, dtype=X_raw_batch.dtype)
@@ -1676,6 +1688,17 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 alpha_pref_reg = float(components["cost_model"].alpha_pref_reg.detach().cpu().item())
                 if alpha_pref_reg != 0.0:
                     pref_grad_avg = pref_grad_avg + 2.0 * alpha_pref_reg * p_e
+
+                with torch.no_grad():
+                    pref_grad_cycle_residual = float(
+                        pref_projector.cycle_violation(pref_grad_avg).item()
+                    )
+                    pref_grad_potential_energy = float(
+                        pref_projector.potential_energy(pref_grad_avg).item()
+                    )
+                    pref_grad_cycle_fraction = float(
+                        pref_projector.cycle_fraction(pref_grad_avg).item()
+                    )
 
                 pref_grad_proj = pref_projector.project(pref_grad_avg)
                 p_e = p_e - batch_config.pref_learning_rate * pref_grad_proj
@@ -1754,6 +1777,24 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
 
                 if pref_enabled and pref_grad_norm is not None:
                     tensorboard_writer.add_scalar('Preferences/Grad_Norm_L2', pref_grad_norm, iteration)
+                    if pref_grad_cycle_residual is not None:
+                        tensorboard_writer.add_scalar(
+                            'Preferences/RawGrad_CycleResidual_L2',
+                            pref_grad_cycle_residual,
+                            iteration,
+                        )
+                    if pref_grad_potential_energy is not None:
+                        tensorboard_writer.add_scalar(
+                            'Preferences/RawGrad_PotentialEnergy',
+                            pref_grad_potential_energy,
+                            iteration,
+                        )
+                    if pref_grad_cycle_fraction is not None:
+                        tensorboard_writer.add_scalar(
+                            'Preferences/RawGrad_CycleFraction',
+                            pref_grad_cycle_fraction,
+                            iteration,
+                        )
                     if pref_violation_features is not None:
                         tensorboard_writer.add_scalar(
                             'Preferences/Feature_Constraint_Violation',
@@ -1773,6 +1814,18 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                         tensorboard_writer.add_scalar(
                             'Common/Feature_Cycle_Violation_Raw',
                             common_cycle_violation_raw,
+                            iteration,
+                        )
+                    if common_cost_raw_potential_energy is not None:
+                        tensorboard_writer.add_scalar(
+                            'Common/CommonCostRaw_PotentialEnergy',
+                            common_cost_raw_potential_energy,
+                            iteration,
+                        )
+                    if common_cost_raw_cycle_fraction is not None:
+                        tensorboard_writer.add_scalar(
+                            'Common/CommonCostRaw_CycleFraction',
+                            common_cost_raw_cycle_fraction,
                             iteration,
                         )
                     if common_cycle_violation_cyc is not None:

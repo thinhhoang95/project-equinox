@@ -604,6 +604,45 @@ class GaugeFixedPreferenceProjector:
             v_e = v_e.to(device=self.w_e.device, dtype=self.w_e.dtype)
         return torch.linalg.norm(self._bw_apply(v_e))
 
+    def potential_energy(self, v_e: torch.Tensor) -> torch.Tensor:
+        """Return (B W v)^T L^{-1} (B W v) for diagnostics."""
+        if v_e.ndim != 1:
+            raise ValueError("v_e must be 1D (m,).")
+        if v_e.shape[0] != self.w_e.shape[0]:
+            raise ValueError("v_e must match edge dimension.")
+        if v_e.device != self.w_e.device or v_e.dtype != self.w_e.dtype:
+            v_e = v_e.to(device=self.w_e.device, dtype=self.w_e.dtype)
+        rhs = self._bw_apply(v_e)
+        phi = self._solve_laplacian(rhs)
+        return torch.dot(rhs, phi)
+
+    def w_energy(self, v_e: torch.Tensor) -> torch.Tensor:
+        """Return v^T W v for diagnostics."""
+        if v_e.ndim != 1:
+            raise ValueError("v_e must be 1D (m,).")
+        if v_e.shape[0] != self.w_e.shape[0]:
+            raise ValueError("v_e must match edge dimension.")
+        if v_e.device != self.w_e.device or v_e.dtype != self.w_e.dtype:
+            v_e = v_e.to(device=self.w_e.device, dtype=self.w_e.dtype)
+        return torch.dot(self.w_e * v_e, v_e)
+
+    def cycle_fraction(self, v_e: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+        """Return 1 - E_pot / (v^T W v + eps) for diagnostics."""
+        if eps < 0.0:
+            raise ValueError("eps must be non-negative.")
+        if v_e.ndim != 1:
+            raise ValueError("v_e must be 1D (m,).")
+        if v_e.shape[0] != self.w_e.shape[0]:
+            raise ValueError("v_e must match edge dimension.")
+        if v_e.device != self.w_e.device or v_e.dtype != self.w_e.dtype:
+            v_e = v_e.to(device=self.w_e.device, dtype=self.w_e.dtype)
+        rhs = self._bw_apply(v_e)
+        phi = self._solve_laplacian(rhs)
+        potential = torch.dot(rhs, phi)
+        w_energy = torch.dot(self.w_e * v_e, v_e)
+        denom = w_energy + w_energy.new_tensor(eps)
+        return w_energy.new_tensor(1.0) - potential / denom
+
     def violation_features(self, p_e: torch.Tensor) -> torch.Tensor:
         if p_e.ndim != 1:
             raise ValueError("p_e must be 1D (m,).")
