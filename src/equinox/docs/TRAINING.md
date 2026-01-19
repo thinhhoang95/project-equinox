@@ -22,8 +22,8 @@ The key trick is: **we never enumerate routes**. Instead we:
 There are two stages in the repo:
 
 #### Pre-Training: deriving the base route graph for a city pair from historical data
-- This would be done in the `prep_all.py` script. You can run it with the chosen city pair.
-- The artifacts required for `prep_all.py` is a separate topic, but in short, it will be taken care of in `hlybokyi-potik` and `project-akrav`. 
+- Pre-training utilities live under `src/equinox/training/prep/`.
+- There is also a convenience runner in `src/equinox/training/prep_all.py` (note: it uses hard-coded paths and is meant as a local script rather than a general CLI).
 
 #### Stage A — precompute *feasible state transitions* and *wind*
 This is done by `src/equinox/training/tres_batch.py` using:
@@ -43,15 +43,13 @@ This stage writes, per flight, files like:
 
 The exact filenames the **training loop expects** are loaded here:
 
-```121:216:/Volumes/CrucialX/project-equinox/src/equinox/training/batch_sgd_pipeline_parallel_tsb_truellh.py
-def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: int, 
-                            components: Dict[str, Any]) -> Tuple[List, List, List, torch.Tensor]:
+```369:407:/Volumes/CrucialX/project-equinox/src/equinox/training/batch_sgd_pipeline_parallel_tsb_truellh.py
+def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: int) -> Tuple[List, List, List, torch.Tensor]:
     tres_dir = Path(case_dir) / "tres_runs"
     # ...
     for batch_dir in tres_dir.glob("batch*"):
         fw_file = batch_dir / f"FW_{flight_id}_{takeoff_timestamp}.pkl"
         bw_file = batch_dir / f"BW_{flight_id}_{takeoff_timestamp}.pkl"
-        # ...
         thinned_file = batch_dir / f"CLSR_{flight_id}_{takeoff_timestamp}.pkl"
         wind_file = batch_dir / f"WIND_{flight_id}_{takeoff_timestamp}.pt"
 ```
@@ -211,9 +209,9 @@ num_phases = max_phase_val + 1
 origin_node_idx = components['node_to_idx'][flight_data['origin']]
 goal_node_idx = components['node_to_idx'][flight_data['destination']]
 
-# 6. forward + backward SVI (optionally in parallel)
-v_f = _run_forward_svi_wrapper(...)
-v_b = _run_backward_svi_wrapper(...)
+# 6. forward + backward SVI (sequential inside the worker)
+v_f = forward_soft_value_iteration(...)
+v_b = backward_soft_value_iteration(...)
 
 # 7. empirical_counts from snapped route string
 empirical_counts = compute_empirical_counts_for_flight(...)
@@ -255,6 +253,22 @@ optimizer.step()
 
 **Why this design?**
 - Multiprocessing + PyTorch models can easily drift in parameter ordering across refactors; name-keyed grads make updates robust.
+
+#### 2.4 Edge preference update (lin_disent only)
+When edge preferences are enabled, the worker also returns per-edge gradients, and the main process applies a **projected** update to `preference_matrix_p`:
+
+```1687:1716:/Volumes/CrucialX/project-equinox/src/equinox/training/batch_sgd_pipeline_parallel_tsb_truellh.py
+pref_grad_avg = pref_grad_sum / float(len(pref_grad_queue))
+pref_matrix = components["cost_model"].preference_matrix_p
+p_e = pref_matrix[pref_edge_u, pref_edge_v].to(device=device, dtype=pref_projector.X.dtype)
+pref_grad_proj = pref_projector.project(pref_grad_avg)
+p_e = p_e - batch_config.pref_learning_rate * pref_grad_proj
+p_e = pref_projector.project(p_e)
+pref_matrix.zero_()
+pref_matrix[pref_edge_u, pref_edge_v] = p_e.to(dtype=pref_matrix.dtype)
+```
+
+The projector is built once from a deterministic edge list and D-weighted features (using dataset-level empirical counts), so preference updates stay disentangled from the common linear feature space.
 
 ---
 
@@ -373,74 +387,63 @@ total_log_likelihood_grad += (link_grad / gamma) * (n_empirical - n_expected)
 ---
 
 ### 5) Cost model + learnable parameters (what the optimizer is updating)
+The current training pipeline expects `cost_model_version: "lin_disent"` and uses `CostLinearDisentangled`.
 
-Your case config sets `cost_model_version: "4"`:
-
-```1:29:/Volumes/CrucialX/project-equinox/data/cases/LEMD_EGLL/default.yaml
-cost_model_version: "4"
-gamma: 1.0
-cost_model_beta0: 0.0
-cost_model_beta1: 1.0
-cost_model_beta2: 1.0
-cost_model_beta3: 1.0
-```
-
-Version 4 implements (conceptually):
+It splits cost into:
 
 \[
-c(e,t)\approx \underbrace{\text{PLM}_{ac}\!\left(AC(e)\cdot d(e)\right)}_{\text{monotone increasing}} \;+\;
-\underbrace{\text{PLM}_{wind}\!\left(\text{(distance-equivalent tailwind)}\right)}_{\text{monotone decreasing}}
+c(e,t) = \underbrace{w^\top x(e,t)}_{\text{common linear cost}} \;+\; \underbrace{p(e)}_{\text{per-edge preference}}
 \]
 
-See the docstring and monotone PLM wiring:
+Where the per-edge feature vector matches the model implementation:
 
-```15:82:/Volumes/CrucialX/project-equinox/src/equinox/cost/cost_rev4.py
-class CostRev4(nn.Module):
+- **bias**: \(1\)
+- **ac\_dist**: \(AC(e)\cdot d(e) / 100\)
+- **time**: \(60 \cdot d(e) / (\text{cruise\_speed\_kts} + \text{tailwind}_e)\)
+
+See the cost model:
+
+```14:76:/Volumes/CrucialX/project-equinox/src/equinox/cost/cost_linear_disentangled.py
+class CostLinearDisentangled(nn.Module):
     """
-    c(e,t) = beta_0 + beta_1 * PLM_ac(AC(e) * d(e)) + beta_2 * PLM_wind(w_tail(e,t)) + beta_3 * P(e)
-    ...
-    - PLM_ac is monotone non-decreasing
-    - PLM_wind is monotone non-increasing
+    Common cost: c_common(e) = x(e)^T w
+    Total cost: c(e) = c_common(e) + p(e)
     """
-    self.plm_ac_dist = PiecewiseLinearMonoModel(... monotonic_type="non_decreasing", anchor_at_first_knot=True)
-    self.plm_wind = PiecewiseLinearMonoModel(... monotonic_type="non_increasing", anchor_knot_value=0.0)
+    # Feature definition (fixed per waypoint-edge):
+    # - bias = 1
+    # - ac_dist = AC(e) * d(e) / 100.0
+    # - time = 60.0 * dist / (cruise_speed_kts + tailwind_e)
 ```
 
-And the monotone PLM itself is a parameterized piecewise linear function where monotonicity is enforced via softplus on slope increments:
+**What actually gets updated**
+- **Common weights** `w` are updated by SGD/Adam from the MaxEnt gradient (main optimizer).
+- **Preferences** `p(e)` live in `preference_matrix_p` and are updated **separately** via a projected gradient step (see `GaugeFixedPreferenceProjector` in `preferences/disentanglement.py`).
+- `alpha_pref_reg` (if non-zero) adds L2 regularization to the preference update.
 
-```6:33:/Volumes/CrucialX/project-equinox/src/equinox/cost/plf_mono.py
-f(x) = initial_intercept + first_slope * x + sum_i d_i * ReLU(x - knot_points[i])
-d_i = softplus(alpha_i)   (or -softplus(alpha_i) for non_increasing)
-```
-
-**Why keep betas fixed?**
-The training pipeline explicitly warns about scale ambiguity:
-
-```269:274:/Volumes/CrucialX/project-equinox/src/equinox/training/batch_sgd_pipeline_parallel_tsb_truellh.py
-# The beta coefficients are intentionally kept FIXED (requires_grad=False) to avoid an
-# ill-defined scale ambiguity between beta weights and the learned functionals (PLMs / preferences).
-```
+**Why the projector exists**
+- Preferences are disentangled from the linear feature space by enforcing D-weighted orthogonality to the common feature columns.
+- The projector also fixes a cycle-gauge so per-edge offsets remain identifiable (prevents adding arbitrary node potentials).
 
 ---
 
 ### 6) “How the moving parts are glued together”: config locations + key settings
 
 #### 6.1 Where configuration comes from
-- **Case YAML** (graph + aircraft + discretization + cost model version):
+- **Case YAML** (graph + aircraft + discretization + cost model):
   - training defaults to `--config <case_dir>/default.yaml`
-  - example: `data/cases/LEMD_EGLL/default.yaml` (shown above)
+  - the YAML is expected to live in the `--case-dir` you pass to the training script
 
 - **RunConfiguration** loader and component initializer:
   - loads graph/matrices, builds node mappings, initializes cost model:
 
-```33:244:/Volumes/CrucialX/project-equinox/src/equinox/config.py
+```11:127:/Volumes/CrucialX/project-equinox/src/equinox/config.py
 class RunConfiguration:
-    graph_file_path: str = ...
-    distances_file_path: str = ...
-    charges_file_path: str = ...
+    graph_file_path: str = None
+    distances_file_path: str = None
+    charges_file_path: str = None
     # ...
-    cost_model_version: str = "3"
-    gamma: float = 0.01
+    cost_model_version: str = None
+    gamma: float = None
     # ...
     def initialize_all_components(self, cost_model_version: str = None, ...):
         G, node_to_idx, idx_to_node, node_coords_deg = self.load_graph()
@@ -450,10 +453,10 @@ class RunConfiguration:
         return {...}
 ```
 
-- **Training hyperparameters** are mostly CLI-driven via `BatchLearningConfig` (not the YAML). For example, the training loop uses **`batch_config.gamma`** for SVI/gradient, not `config.gamma`.
+- **Training hyperparameters** come from the case YAML and are then passed into `BatchLearningConfig` (CLI flags can override). The training loop uses **`batch_config.gamma`** for SVI/gradient.
 
 #### 6.2 Brief meaning of the most important YAML fields (case config)
-From `data/cases/LEMD_EGLL/default.yaml`:
+From your `<case_dir>/default.yaml`:
 - **`graph_file_path`**: DAG route graph (`.gml`) used for reachability and DP ordering.
 - **`distances_file_path`**: NxN waypoint distance matrix used in the cost model.
 - **`charges_file_path`**: NxN airspace charges matrix used in the cost model.
@@ -463,21 +466,24 @@ From `data/cases/LEMD_EGLL/default.yaml`:
 - **`max_flight_duration_hours`**: time window length for backward pass / bins.
 - **`max_elapsed_time_since_takeoff_hours`**: cap on elapsed-time bins in forward pass.
 - **`climb_phase_switch_allowance_climb_time_bins`**: tolerance window around TOC where cruise→climb switching is allowed in backward TRES.
-- **`cost_model_version`**: selects the model class (`get_cost_model_class`).
-- **`cost_model_beta*`, `alpha_pref_reg`**: passed into cost model constructors; some versions use/ignore them.
+- **`cost_model_version`**: should be `"lin_disent"` for the current training pipeline.
+- **`common_weights`, `preference_weight`, `alpha_pref_reg`**: parameters used by the linear disentangled cost model.
 - **`disable_config_wind_model`**: if true, `RunConfiguration.initialize_all_components` won’t load a wind model (training uses precomputed WIND files anyway).
 
-#### 6.3 Brief meaning of the key CLI fields (training script)
-From `BatchLearningConfig`:
-- **`batch_size`**: number of flights per SGD update.
-- **`learning_rate`**: Adam learning rate.
-- **`gamma`**: temperature for SVI + gradient; must match your probabilistic model assumptions.
-- **`max_iterations`**: number of SGD iterations.
+#### 6.3 Brief meaning of the key training fields and CLI overrides
+From `BatchLearningConfig` + CLI:
+- **`training_batch_size`** (YAML) → `batch_size`: flights per SGD update.
+- **`common_features_learning_rate`** (YAML) → `learning_rate`: optimizer LR for common weights.
+- **`preference_feature_learning_rate`** (YAML) → `pref_learning_rate`: LR for per-edge preferences.
+- **`preference_projection_ridge`** (YAML): ridge term for the preference projector.
+- **`gamma`** (YAML) → `batch_config.gamma`: temperature for SVI + gradient.
+- **`max_iters`** (YAML) / `--max-iters`: SGD iteration cap.
 - **`convergence_threshold`**: stops when gradient L2 norm < threshold.
 - **`checkpoint_interval`**: save model/optimizer/training history periodically.
 - **`num_workers`**: parallel workers for per-flight processing.
-- **`debug_single_process`**: disables nested parallelism for easier debugging.
-- **`fixed_batch_index` / `randomized` / `random_seed`**: controls batch selection strategy.
+- **`--debug-single-process`**: run without multiprocessing (easier debugging).
+- **`--randomize`, `--batch-shuffling`, `--random-seed`, `--fixed-batch-index`**: batch selection strategy.
+- **`--disable-edge-preference`**: freeze `preference_matrix_p` at zero (lin_disent only).
 
 ---
 

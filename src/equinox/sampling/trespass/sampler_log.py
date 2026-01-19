@@ -1,8 +1,11 @@
-from venv import logger
+import logging
+from typing import Optional
 import torch
 import numpy as np
 import networkx as nx
 from equinox.dp.trespass.sparse_io_utils import load_sparse_coo_tensor_with_convention
+
+logger = logging.getLogger(__name__)
 
 def sample_tres_trajectory(
     G: nx.DiGraph,
@@ -15,7 +18,9 @@ def sample_tres_trajectory(
     soft_cost_to_go: torch.Tensor, # V_bwd (num_nodes, num_time_bins_wall_clock, num_rho_bins, num_phases)
     edge_costs_uv: torch.Tensor, # edge_costs from backward_svi (sparse COO)
     gamma: float = 0.1, # this temperature should also be the same as the temperature used in the backward_svi
-    max_steps: int = 1000 # Max steps to prevent infinite loops
+    max_steps: int = 1000, # Max steps to prevent infinite loops
+    policy: str = "sample", # "sample" or "greedy"
+    rng: Optional[np.random.Generator] = None,
 ):
     """
     Samples a single trajectory using the TResPASS algorithm.
@@ -66,26 +71,16 @@ def sample_tres_trajectory(
             "All V_bwd values are non-finite."
         )
 
+    if policy not in {"sample", "greedy"}:
+        raise ValueError(f"Unsupported policy '{policy}'. Use 'sample' or 'greedy'.")
+
     # Uniformly sample initial_k from the valid ones
-    current_k = np.random.choice(valid_initial_ks)
+    if rng is None:
+        current_k = np.random.choice(valid_initial_ks)
+    else:
+        current_k = rng.choice(valid_initial_ks)
     current_rho = initial_rho
     current_phase = initial_phase
-
-    # FOR DEBUGGING (NOT USED ANYMORE)
-    # print("WARNING: DEBUGGING MODE, setting current_k, current_rho, current_phase to 39, 36, 0")
-    # print("*" * 100)
-    # Find the last non-inf value of soft_cost_to_go[current_node_idx, :, current_rho, current_phase]
-    cost_slice = soft_cost_to_go[current_node_idx, :, current_rho, current_phase]
-    finite_mask = torch.isfinite(cost_slice)
-    if finite_mask.any():
-        # Find the last (highest index) finite value
-        finite_indices = torch.where(finite_mask)[0]
-        current_k = finite_indices[-1].item()
-        logger.warning(f"Setting current_k to {current_k} because it is the last non-inf value of soft_cost_to_go[current_node_idx, :, current_rho, current_phase]")
-    else:
-        # Fallback if no finite values found
-        raise ValueError(f"No finite values found for state {idx_to_node[current_node_idx], current_rho, current_phase}. All values are non-finite.")
-    
 
     goal_node_idx = node_to_idx[goal_node_id]
     
@@ -101,11 +96,6 @@ def sample_tres_trajectory(
     # The edge_costs_uv is a sparse COO tensor.
     # We need to find all (v_idx, k_v, rho_v, phase_v) reachable from (current_node_idx, current_k, current_rho, current_phase)
 
-    num_nodes = soft_cost_to_go.shape[0]
-    num_k_bins = soft_cost_to_go.shape[1]
-    num_rho_bins = soft_cost_to_go.shape[2]
-    num_phase_bins = soft_cost_to_go.shape[3]
-
     for step in range(max_steps):
         if current_node_idx == goal_node_idx:
             # Potentially add a condition for k, rho, phase if goal is more specific
@@ -113,8 +103,6 @@ def sample_tres_trajectory(
             print(f"Goal {goal_node_id} reached at step {step}.")
             return trajectory, trajectory_costs
 
-        current_state_tuple = (current_node_idx, current_k, current_rho, current_phase)
-        
         # V_bwd[i]
         V_bwd_i = soft_cost_to_go[current_node_idx, current_k, current_rho, current_phase].item()
 
@@ -180,14 +168,14 @@ def sample_tres_trajectory(
         # Normalize probabilities
         probabilities = np.array(probabilities)
         probabilities_sum = np.sum(probabilities)
-        if probabilities_sum == 0: # Should not happen if we checked prob > 0
-            raise ValueError(f"Sum of probabilities is zero at state: {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. All probabilities are invalid.")
-        else:
-            if abs(probabilities_sum - 1) > 1e-1:
-                # print(f"WARNING: Probabilities sum: {probabilities_sum} at state: {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. All probabilities are invalid.")
-                raise ValueError(f"Probabilities sum: {probabilities_sum} at state: {idx_to_node[current_node_idx], current_k, current_rho, current_phase}. All probabilities are invalid.")
+        if not np.isfinite(probabilities_sum) or probabilities_sum <= 0:
+            raise ValueError(
+                f"Sum of probabilities is invalid at state: "
+                f"{idx_to_node[current_node_idx], current_k, current_rho, current_phase}. "
+                f"Sum={probabilities_sum}"
+            )
 
-        probabilities /= probabilities_sum # SHOULD NOT BE NECESSARY???
+        probabilities = probabilities / probabilities_sum
 
         # DEBUGGING
         # for i in range(len(possible_next_transitions)):
@@ -199,13 +187,19 @@ def sample_tres_trajectory(
         #     )
 
         # Sample next state
-        try:
-            choice_idx = np.random.choice(len(possible_next_transitions), p=probabilities)
-            # Greedy choice: pick the transition with the highest probability
-            # print("WARNING: DEBUGGING MODE, USING GREEDY CHOICE")
-            # choice_idx = int(np.argmax(probabilities))
-        except ValueError as e:
-            raise ValueError(f"Error during np.random.choice at state {idx_to_node[current_node_idx], current_k, current_rho, current_phase}: {e}. Probabilities: {probabilities}, Sum: {np.sum(probabilities)}")
+        if policy == "greedy":
+            choice_idx = int(np.argmax(probabilities))
+        else:
+            try:
+                if rng is None:
+                    choice_idx = np.random.choice(len(possible_next_transitions), p=probabilities)
+                else:
+                    choice_idx = rng.choice(len(possible_next_transitions), p=probabilities)
+            except ValueError as e:
+                raise ValueError(
+                    f"Error during sampling at state {idx_to_node[current_node_idx], current_k, current_rho, current_phase}: "
+                    f"{e}. Probabilities: {probabilities}, Sum: {np.sum(probabilities)}"
+                )
 
         next_state, transition_cost = possible_next_transitions[choice_idx]
         

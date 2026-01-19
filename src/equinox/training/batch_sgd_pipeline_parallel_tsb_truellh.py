@@ -1158,6 +1158,13 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     components = config.initialize_all_components(cost_model_version=config.cost_model_version)
     components['cost_model_version'] = config.cost_model_version
     components['etto_delta_t_seconds'] = config.etto_delta_t_seconds
+
+    graph_signature = None
+    try:
+        edge_u_cpu, edge_v_cpu = build_edge_list(components["graph"], components["node_to_idx"])
+        graph_signature = _edge_list_fingerprint(edge_u_cpu, edge_v_cpu)
+    except Exception as e:
+        logger.warning(f"Failed to compute graph fingerprint: {e}")
     
     device = torch.device(batch_config.device if torch.cuda.is_available() else "cpu")
     components['device'] = device
@@ -1887,7 +1894,10 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                         'model_state_dict': components['cost_model'].state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'training_history': training_history,
-                        'batch_config': asdict(batch_config)
+                        'batch_config': asdict(batch_config),
+                        'run_config': config.to_dict(),
+                        'edge_list_fingerprint': graph_signature,
+                        'cost_model_version': config.cost_model_version,
                     }, checkpoint_path)
                     
                     # Verify the checkpoint was saved successfully
@@ -1915,7 +1925,10 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         'final_iteration': iteration,
         'training_history': training_history,
         'final_model_state': components['cost_model'].state_dict(),
-        'batch_config': asdict(batch_config)
+        'batch_config': asdict(batch_config),
+        'run_config': config.to_dict(),
+        'edge_list_fingerprint': graph_signature,
+        'cost_model_version': config.cost_model_version,
     }
     
     results_path = os.path.join(output_dir, "final_results.pt")
@@ -1929,7 +1942,10 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             'model_state_dict': components['cost_model'].state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'training_history': training_history,
-            'batch_config': asdict(batch_config)
+            'batch_config': asdict(batch_config),
+            'run_config': config.to_dict(),
+            'edge_list_fingerprint': graph_signature,
+            'cost_model_version': config.cost_model_version,
         }, final_checkpoint_path)
         
         if os.path.exists(final_checkpoint_path):
