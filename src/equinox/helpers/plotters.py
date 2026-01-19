@@ -23,10 +23,10 @@ def plot_routes_on_map(graph, routes, ax=None, show_waypoints=True, route_alpha=
     # ax.stock_img()
     ax.add_feature(cfeature.COASTLINE)
     ax.add_feature(cfeature.BORDERS, linestyle=':')
-    ax.add_feature(cfeature.LAND)
-    ax.add_feature(cfeature.OCEAN)
-    ax.add_feature(cfeature.LAKES)
-    ax.add_feature(cfeature.RIVERS)
+    # ax.add_feature(cfeature.LAND)
+    # ax.add_feature(cfeature.OCEAN)
+    # ax.add_feature(cfeature.LAKES)
+    # ax.add_feature(cfeature.RIVERS)
 
     # Collect all coordinates for extent calculation
     all_lons = []

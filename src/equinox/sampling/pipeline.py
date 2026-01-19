@@ -115,6 +115,7 @@ def _write_outputs(
     tranche_altitudes_ft: List[float],
     components: Dict[str, Any],
     config: Any,
+    write_pt_files: bool = False,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -124,14 +125,15 @@ def _write_outputs(
             route_line = " ".join(sample.route)
             f.write(f"{sample.total_cost},{route_line}\n")
 
-    metadata_path = output_dir / "metadata.pt"
-    torch.save(result.metadata, metadata_path)
+    if write_pt_files:
+        metadata_path = output_dir / "metadata.pt"
+        torch.save(result.metadata, metadata_path)
 
-    for idx, sample in enumerate(result.samples):
-        if sample.trajectory_4d is None:
-            continue
-        traj_path = output_dir / f"trajectory_{idx}.pt"
-        torch.save(sample.trajectory_4d, traj_path)
+        for idx, sample in enumerate(result.samples):
+            if sample.trajectory_4d is None:
+                continue
+            traj_path = output_dir / f"trajectory_{idx}.pt"
+            torch.save(sample.trajectory_4d, traj_path)
 
     if write_4d_csv:
         if not result.samples or any(sample.trajectory_4d is None for sample in result.samples):
@@ -484,6 +486,7 @@ def compute_4d_path_for_dataset(
             tranche_altitudes_ft=tranche_altitudes_ft,
             components=components,
             config=config,
+            write_pt_files=False,
         )
 
     return result
