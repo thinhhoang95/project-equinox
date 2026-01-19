@@ -1487,7 +1487,8 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             pref_grad_norm = None
             pref_violation_features = None
             pref_violation_cycle = None
-            common_cycle_violation = None
+            common_cycle_violation_raw = None
+            common_cycle_violation_cyc = None
             pref_min = None
             pref_max = None
             pref_mean = None
@@ -1534,8 +1535,26 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 common_w = components["cost_model"].common_weights.detach().to(
                     device=X_raw_batch.device, dtype=X_raw_batch.dtype
                 )
-                common_cost_e = X_raw_batch.matmul(common_w)
-                common_cycle_violation = float(pref_projector.cycle_violation(common_cost_e).item())
+                common_cost_raw_e = X_raw_batch.matmul(common_w)
+                common_cycle_violation_raw = float(
+                    pref_projector.cycle_violation(common_cost_raw_e).item()
+                )
+
+                cost_model = components["cost_model"]
+                phi_bias = cost_model.phi_bias.to(device=X_raw_batch.device, dtype=X_raw_batch.dtype)
+                phi_ac = cost_model.phi_ac_dist.to(device=X_raw_batch.device, dtype=X_raw_batch.dtype)
+                phi_time = cost_model.phi_time.to(device=X_raw_batch.device, dtype=X_raw_batch.dtype)
+                phi_w = (
+                    common_w[0] * phi_bias
+                    + common_w[1] * phi_ac
+                    + common_w[2] * phi_time
+                )
+                common_cost_cyc_e = common_cost_raw_e - (
+                    phi_w[pref_edge_u] - phi_w[pref_edge_v]
+                )
+                common_cycle_violation_cyc = float(
+                    pref_projector.cycle_violation(common_cost_cyc_e).item()
+                )
 
                 if pref_support_mask is not None and pref_support_mask.any():
                     support_frac = float(stats_support.sum().item() / pref_support_mask.sum().item())
@@ -1621,10 +1640,15 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                     pref_max,
                     pref_mean,
                 )
-                if common_cycle_violation is not None:
+                if common_cycle_violation_raw is not None:
                     logger.info(
-                        "Common gauge: BW(Xw) norm=%.3e",
-                        common_cycle_violation,
+                        "Common gauge (raw): BW(Xw) norm=%.3e",
+                        common_cycle_violation_raw,
+                    )
+                if common_cycle_violation_cyc is not None:
+                    logger.info(
+                        "Common gauge (cyc): BW(X_cyc w) norm=%.3e",
+                        common_cycle_violation_cyc,
                     )
             
             # Compute iteration statistics
@@ -1678,10 +1702,16 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                     tensorboard_writer.add_scalar('Preferences/Mean', pref_mean, iteration)
                     tensorboard_writer.add_scalar('Preferences/Min', pref_min, iteration)
                     tensorboard_writer.add_scalar('Preferences/Max', pref_max, iteration)
-                    if common_cycle_violation is not None:
+                    if common_cycle_violation_raw is not None:
                         tensorboard_writer.add_scalar(
-                            'Common/Feature_Cycle_Violation',
-                            common_cycle_violation,
+                            'Common/Feature_Cycle_Violation_Raw',
+                            common_cycle_violation_raw,
+                            iteration,
+                        )
+                    if common_cycle_violation_cyc is not None:
+                        tensorboard_writer.add_scalar(
+                            'Common/Feature_Cycle_Violation_Cyc',
+                            common_cycle_violation_cyc,
                             iteration,
                         )
                 
