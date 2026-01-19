@@ -456,7 +456,12 @@ class WindModel:
         tailwind_mps_per_point = u_unflattened * e_track.unsqueeze(1) + v_unflattened * n_track.unsqueeze(1)
 
         # 7. Average tailwind and convert to knots
-        avg_tailwind_mps = torch.nan_to_num(tailwind_mps_per_point, nan=0.0).mean(axis=1)
+        # IMPORTANT: Do not coerce NaNs to 0 before averaging. NaNs here typically mean
+        # "wind unavailable" (e.g., missing ERA5 coverage or interpolation failure).
+        # Coercing to 0 silently biases averages toward 0 and can create misleading
+        # exact-zero tailwinds on some links. Use nanmean so partial coverage is
+        # averaged over valid samples; all-NaN edges remain NaN.
+        avg_tailwind_mps = torch.nanmean(tailwind_mps_per_point, dim=1)
         avg_tailwind_knots = avg_tailwind_mps * MPS_TO_KNOTS
 
         return avg_tailwind_knots.to(device=original_device, dtype=original_dtype)

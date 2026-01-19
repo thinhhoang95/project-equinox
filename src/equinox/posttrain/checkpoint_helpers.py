@@ -216,6 +216,7 @@ def plot_edge_preferences_cartopy(
     cmap: str = "coolwarm",
     linewidth: float = 1.5,
     alpha: float = 0.9,
+    preference_color_range: Optional[Tuple[float, float]] = None,
     percentile: Optional[float] = None,
     percentile_mode: str = "both",
     show_colorbar: bool = True,
@@ -281,7 +282,14 @@ def plot_edge_preferences_cartopy(
 
     used_lons = [lon for pair in segment_lons for lon in pair]
     used_lats = [lat for pair in segment_lats for lat in pair]
-    norm = Normalize(vmin=float(values_np.min()), vmax=float(values_np.max()))
+    if preference_color_range is not None:
+        vmin, vmax = preference_color_range
+        if vmin >= vmax:
+            raise ValueError("preference_color_range must be (min, max) with min < max.")
+    else:
+        vmin = float(values_np.min())
+        vmax = float(values_np.max())
+    norm = Normalize(vmin=vmin, vmax=vmax)
     line_collection = LineCollection(
         segments,
         cmap=cmap,

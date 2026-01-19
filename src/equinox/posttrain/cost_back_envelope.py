@@ -128,6 +128,8 @@ def _load_tailwind_by_edge(
     sums: Dict[Tuple[int, int], float] = {}
     counts: Dict[Tuple[int, int], int] = {}
     for transition, wind_value in zip(transitions, tailwind):
+        if not np.isfinite(wind_value):
+            continue
         u_idx = int(transition[0])
         v_idx = int(transition[5])
         key = (u_idx, v_idx)
@@ -165,11 +167,17 @@ def _compute_edge_breakdown(
 
         dist = float(dist_matrix[u_idx, v_idx])
         charge = float(charges_matrix[u_idx, v_idx])
-        tailwind_kts = (
-            float(tailwind_by_edge.get((u_idx, v_idx), tailwind_fallback_kts))
-            if tailwind_by_edge is not None
-            else float(tailwind_fallback_kts)
-        )
+        if tailwind_by_edge is None:
+            tailwind_kts = float(tailwind_fallback_kts)
+            tailwind_is_fallback = True
+        else:
+            value = tailwind_by_edge.get((u_idx, v_idx))
+            if value is None:
+                tailwind_kts = float(tailwind_fallback_kts)
+                tailwind_is_fallback = True
+            else:
+                tailwind_kts = float(value)
+                tailwind_is_fallback = False
 
         ac_dist = charge * dist / 100.0
         time_feature = 60.0 * dist / (cruise_speed_kts + tailwind_kts)
@@ -188,6 +196,7 @@ def _compute_edge_breakdown(
                 "distance": dist,
                 "airspace_charge": charge,
                 "tailwind_kts": tailwind_kts,
+                "tailwind_is_fallback": tailwind_is_fallback,
                 "feature_bias": 1.0,
                 "feature_ac_dist": ac_dist,
                 "feature_time": time_feature,

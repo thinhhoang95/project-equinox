@@ -74,7 +74,6 @@ from src.equinox.config import RunConfiguration
 from src.equinox.dp.trespass.amorwin.forward_svi_log_temp import forward_soft_value_iteration
 from src.equinox.dp.trespass.amorwin.backward_svi_log_cost_temp import backward_soft_value_iteration
 from src.equinox.dp.trespass.amorwin.backward_gradient import backward_gradient_pass
-from src.equinox.wind.batch_wind_model import get_flight_batches
 from src.equinox.preferences.disentanglement import (
     build_edge_list,
     build_feature_matrix,
@@ -357,6 +356,7 @@ class BatchLearningConfig:
     resume_from_checkpoint: bool = True  # Resume from last checkpoint by default
     randomized: bool = False
     random_seed: int = None  # Random seed for deterministic randomization
+    batch_shuffling: str = "none"
     fixed_batch_index: Optional[int] = None # Use a fixed batch for all iterations
     disable_edge_preference: bool = False
     
@@ -1184,11 +1184,34 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     # 2. Load flight data and create batches
     flights_csv = os.path.join(case_dir, "tres_runs", "all_routes_feasibly_snapped.csv")
     logger.info(f"Loading flights from {flights_csv} and creating batches...")
-    flight_batches = get_flight_batches(flights_csv, batch_config.batch_size)
-    num_batches = len(flight_batches)
+    routes_df = pd.read_csv(flights_csv)
+    if routes_df.empty:
+        logger.error("No flights were found in the routes file. Please check the routes file and batch size.")
+        return
+
+    def make_batches(df: pd.DataFrame) -> List[pd.DataFrame]:
+        return [df.iloc[i:i + batch_config.batch_size] for i in range(0, len(df), batch_config.batch_size)]
+
+    num_batches = int(np.ceil(len(routes_df) / batch_config.batch_size))
     if num_batches == 0:
         logger.error("No flight batches were created. Please check the routes file and batch size.")
         return
+    steps_per_epoch = num_batches
+    epoch_idx = 0
+
+    def shuffled_df_for_epoch(epoch_idx: int) -> pd.DataFrame:
+        if batch_config.random_seed is None:
+            return routes_df.sample(frac=1).reset_index(drop=True)
+        return routes_df.sample(
+            frac=1,
+            random_state=batch_config.random_seed + epoch_idx,
+        ).reset_index(drop=True)
+
+    if batch_config.batch_shuffling == "shuffle":
+        flight_batches = make_batches(shuffled_df_for_epoch(epoch_idx))
+        logger.info("Batch shuffling enabled: rebuilding batches each epoch.")
+    else:
+        flight_batches = make_batches(routes_df)
     logger.info(f"Created {num_batches} batches of flights.")
 
     pref_enabled = (
@@ -1208,7 +1231,6 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             components["cost_model"].preference_matrix_p.zero_()
         logger.info("Edge preference learning disabled; preference matrix fixed at 0.")
     if pref_enabled:
-        routes_df = pd.read_csv(flights_csv)
         edge_u_cpu, edge_v_cpu = build_edge_list(components["graph"], components["node_to_idx"])
         pref_edge_signature = _edge_list_fingerprint(edge_u_cpu, edge_v_cpu)
         pref_edge_u = edge_u_cpu.to(device)
@@ -1358,7 +1380,13 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             iteration_start_time = time.time()
             
             logger.info(f"\n--- Iteration {iteration}/{batch_config.max_iterations} ---")
-            
+
+            if batch_config.batch_shuffling == "shuffle":
+                new_epoch_idx = (iteration - 1) // steps_per_epoch
+                if new_epoch_idx != epoch_idx:
+                    epoch_idx = new_epoch_idx
+                    flight_batches = make_batches(shuffled_df_for_epoch(epoch_idx))
+
             # Get the next batch of flights (fixed, randomly or sequentially)
             if batch_config.fixed_batch_index is not None:
                 batch_idx = batch_config.fixed_batch_index
@@ -2002,7 +2030,13 @@ def main():
     parser.add_argument(
         "--randomize",
         action="store_true",
-        help="Randomize the order of flights in each batch"
+        help="Randomize which precomputed batch index is selected each iteration"
+    )
+    parser.add_argument(
+        "--batch-shuffling",
+        choices=["none", "shuffle"],
+        default="none",
+        help="Shuffle flights once per epoch and rebuild batches (default: none)",
     )
     parser.add_argument(
         "--random-seed",
@@ -2066,6 +2100,7 @@ def main():
         resume_from_checkpoint=not args.no_resume,  # Resume by default unless --no-resume is specified
         randomized=args.randomize,
         random_seed=getattr(args, 'random_seed', None),  # Handle hyphenated argument name
+        batch_shuffling=args.batch_shuffling,
         fixed_batch_index=args.fixed_batch_index,
         disable_edge_preference=args.disable_edge_preference,
     )
