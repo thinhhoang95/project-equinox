@@ -536,6 +536,74 @@ class GaugeFixedPreferenceProjector:
         psi = z2 - self._Z.matmul(alpha)
         return v_e - self.X.matmul(alpha) - self._bt_apply(psi)
 
+    def compute_node_potential(self, v_e: torch.Tensor) -> torch.Tensor:
+        """Solve L phi = B W v and return full node potentials with pinned nodes set to 0."""
+        if v_e.ndim != 1:
+            raise ValueError("v_e must be 1D (m,).")
+        if v_e.shape[0] != self.w_e.shape[0]:
+            raise ValueError("v_e must match edge dimension.")
+        if v_e.device != self.w_e.device or v_e.dtype != self.w_e.dtype:
+            v_e = v_e.to(device=self.w_e.device, dtype=self.w_e.dtype)
+
+        rhs = self._bw_apply(v_e)
+        phi_reduced = self._solve_laplacian(rhs)
+        phi_full = torch.zeros(self.num_nodes, device=phi_reduced.device, dtype=phi_reduced.dtype)
+        mask = self.node_to_reduced >= 0
+        if mask.any():
+            phi_full[mask] = phi_reduced[self.node_to_reduced[mask]]
+        return phi_full
+
+    def cycle_project_vector(self, v_e: torch.Tensor) -> torch.Tensor:
+        """Project v_e onto ker(B W) by subtracting a gradient component."""
+        if v_e.ndim != 1:
+            raise ValueError("v_e must be 1D (m,).")
+        if v_e.shape[0] != self.w_e.shape[0]:
+            raise ValueError("v_e must match edge dimension.")
+        if v_e.device != self.w_e.device or v_e.dtype != self.w_e.dtype:
+            v_e = v_e.to(device=self.w_e.device, dtype=self.w_e.dtype)
+
+        psi = self._solve_laplacian(self._bw_apply(v_e))
+        return v_e - self._bt_apply(psi)
+
+    def cycle_project_features(self, X: torch.Tensor) -> torch.Tensor:
+        """Project each column of X onto ker(B W) without forming dense matrices."""
+        if X.ndim != 2:
+            raise ValueError("X must be 2D (m, d).")
+        if X.shape[0] != self.w_e.shape[0]:
+            raise ValueError("X must match edge dimension.")
+        if X.device != self.w_e.device or X.dtype != self.w_e.dtype:
+            X = X.to(device=self.w_e.device, dtype=self.w_e.dtype)
+
+        weighted_X = self.w_e[:, None] * X
+        C = torch.zeros(
+            (self.reduced_node_count, X.shape[1]),
+            device=X.device,
+            dtype=X.dtype,
+        )
+        if self._mask_u.any():
+            C.index_add_(0, self._row_u[self._mask_u], weighted_X[self._mask_u])
+        if self._mask_v.any():
+            C.index_add_(0, self._row_v[self._mask_v], -weighted_X[self._mask_v])
+
+        Z = self._solve_laplacian(C)
+        btx = torch.zeros_like(X)
+        if self._mask_u.any():
+            btx[self._mask_u] += Z[self._row_u[self._mask_u]]
+        if self._mask_v.any():
+            btx[self._mask_v] -= Z[self._row_v[self._mask_v]]
+
+        return X - btx
+
+    def cycle_violation(self, v_e: torch.Tensor) -> torch.Tensor:
+        """Return ||B W v_e||_2 for diagnostics."""
+        if v_e.ndim != 1:
+            raise ValueError("v_e must be 1D (m,).")
+        if v_e.shape[0] != self.w_e.shape[0]:
+            raise ValueError("v_e must match edge dimension.")
+        if v_e.device != self.w_e.device or v_e.dtype != self.w_e.dtype:
+            v_e = v_e.to(device=self.w_e.device, dtype=self.w_e.dtype)
+        return torch.linalg.norm(self._bw_apply(v_e))
+
     def violation_features(self, p_e: torch.Tensor) -> torch.Tensor:
         if p_e.ndim != 1:
             raise ValueError("p_e must be 1D (m,).")

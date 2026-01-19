@@ -1264,6 +1264,15 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             p_e = pref_projector.project(p_e)
             pref_matrix.zero_()
             pref_matrix[pref_edge_u, pref_edge_v] = p_e.to(dtype=pref_matrix.dtype)
+
+        with torch.no_grad():
+            cost_model = components["cost_model"]
+            phi_bias = pref_projector.compute_node_potential(pref_feature_bias_e)
+            phi_ac = pref_projector.compute_node_potential(pref_feature_ac_dist_e)
+            phi_time = pref_projector.compute_node_potential(pref_time_fallback_e)
+            cost_model.phi_bias.copy_(phi_bias.to(device=cost_model.phi_bias.device, dtype=cost_model.phi_bias.dtype))
+            cost_model.phi_ac_dist.copy_(phi_ac.to(device=cost_model.phi_ac_dist.device, dtype=cost_model.phi_ac_dist.dtype))
+            cost_model.phi_time.copy_(phi_time.to(device=cost_model.phi_time.device, dtype=cost_model.phi_time.dtype))
     
     # 3. Initialize tracking variables and handle checkpoint resumption
     gradient_queue: List[Dict[str, torch.Tensor]] = []
@@ -1478,6 +1487,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             pref_grad_norm = None
             pref_violation_features = None
             pref_violation_cycle = None
+            common_cycle_violation = None
             pref_min = None
             pref_max = None
             pref_mean = None
@@ -1499,6 +1509,13 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 if nonfinite_mask.any():
                     x_time_batch[nonfinite_mask] = pref_time_fallback_e[nonfinite_mask]
 
+                with torch.no_grad():
+                    phi_time = pref_projector.compute_node_potential(x_time_batch)
+                    cost_model = components["cost_model"]
+                    cost_model.phi_time.copy_(
+                        phi_time.to(device=cost_model.phi_time.device, dtype=cost_model.phi_time.dtype)
+                    )
+
                 X_raw_batch = torch.stack(
                     [pref_feature_bias_e, pref_feature_ac_dist_e, x_time_batch],
                     dim=1,
@@ -1513,6 +1530,12 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 stats_support = time_support
                 if pref_support_mask is not None:
                     stats_support = stats_support & pref_support_mask
+
+                common_w = components["cost_model"].common_weights.detach().to(
+                    device=X_raw_batch.device, dtype=X_raw_batch.dtype
+                )
+                common_cost_e = X_raw_batch.matmul(common_w)
+                common_cycle_violation = float(pref_projector.cycle_violation(common_cost_e).item())
 
                 if pref_support_mask is not None and pref_support_mask.any():
                     support_frac = float(stats_support.sum().item() / pref_support_mask.sum().item())
@@ -1598,6 +1621,11 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                     pref_max,
                     pref_mean,
                 )
+                if common_cycle_violation is not None:
+                    logger.info(
+                        "Common gauge: BW(Xw) norm=%.3e",
+                        common_cycle_violation,
+                    )
             
             # Compute iteration statistics
             avg_log_likelihood = np.mean([r.log_likelihood for r in batch_results if r.success]) if successful_flights > 0 else 0.0
@@ -1650,6 +1678,12 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                     tensorboard_writer.add_scalar('Preferences/Mean', pref_mean, iteration)
                     tensorboard_writer.add_scalar('Preferences/Min', pref_min, iteration)
                     tensorboard_writer.add_scalar('Preferences/Max', pref_max, iteration)
+                    if common_cycle_violation is not None:
+                        tensorboard_writer.add_scalar(
+                            'Common/Feature_Cycle_Violation',
+                            common_cycle_violation,
+                            iteration,
+                        )
                 
                 # Model parameters statistics
                 for name, param in components['cost_model'].named_parameters():

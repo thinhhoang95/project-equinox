@@ -78,6 +78,10 @@ class CostLinearDisentangled(nn.Module):
             "preference_matrix_p",
             torch.zeros((num_waypoints, num_waypoints), dtype=torch.float32),
         )
+        # Cycle-projection node potentials for each feature column (pinned nodes remain 0).
+        self.register_buffer("phi_bias", torch.zeros((num_waypoints,), dtype=torch.float64))
+        self.register_buffer("phi_ac_dist", torch.zeros((num_waypoints,), dtype=torch.float64))
+        self.register_buffer("phi_time", torch.zeros((num_waypoints,), dtype=torch.float64))
 
         self.to(self.device)
 
@@ -158,7 +162,27 @@ class CostLinearDisentangled(nn.Module):
         tailwind_tensor = tailwind_values_w.to(device=self.device, dtype=torch.float32)
         time_e = 60.0 * dist_e / (self.cruise_speed_kts + tailwind_tensor)
         ones = torch.ones_like(dist_e)
-        return torch.stack([ones, ac_dist, time_e], dim=-1)
+        features = torch.stack([ones, ac_dist, time_e], dim=-1)
+        return self._apply_cycle_gauge(u_indices, v_indices, features)
+
+    def _apply_cycle_gauge(
+        self,
+        u_indices: torch.Tensor,
+        v_indices: torch.Tensor,
+        features: torch.Tensor,
+    ) -> torch.Tensor:
+        if features.shape[-1] != 3:
+            raise ValueError("features must have 3 columns to match the built-in feature map.")
+
+        bias = features[:, 0]
+        ac_dist = features[:, 1]
+        time_e = features[:, 2]
+
+        bias_cyc = bias - (self.phi_bias[u_indices] - self.phi_bias[v_indices])
+        ac_cyc = ac_dist - (self.phi_ac_dist[u_indices] - self.phi_ac_dist[v_indices])
+        time_cyc = time_e - (self.phi_time[u_indices] - self.phi_time[v_indices])
+
+        return torch.stack([bias_cyc, ac_cyc, time_cyc], dim=-1)
 
     def get_preference_score_batched(
         self, u_indices: torch.Tensor, v_indices: torch.Tensor

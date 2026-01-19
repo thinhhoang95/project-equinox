@@ -63,7 +63,7 @@ def backward_gradient_pass(
         - edge_time_sums (torch.Tensor, optional): If `return_edge_time_sums=True`, returns an
           additional dense tensor of shape (num_nodes, num_nodes) where each entry is:
             sum_{transitions u->v} p_transition * time(transition),
-          with time computed as dist / (60 * (cruise_speed_kts + tailwind_knots)).
+          with time computed as 60 * dist / ((cruise_speed_kts + tailwind_knots)).
     """
     cost_model.train()
     num_cost_params = sum(p.numel() for p in cost_model.parameters() if p.requires_grad)
@@ -131,7 +131,7 @@ def backward_gradient_pass(
             if edge_time_sums is not None:
                 dist_uv = distance_matrix_d[u_idx, v_idx].to(dtype=torch.float64)
                 tailwind_knots_f = tailwind_knots.to(dtype=torch.float64)
-                time_transition = dist_uv / (60.0 * (float(cruise_speed_kts) + tailwind_knots_f))
+                time_transition = 60.0 * dist_uv / (float(cruise_speed_kts) + tailwind_knots_f)
                 edge_time_sums[u_idx, v_idx] += p_transition * time_transition
     
     if verbose:
