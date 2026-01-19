@@ -823,6 +823,10 @@ def process_single_flight(
             if edge_u is None or edge_v is None:
                 raise RuntimeError("Preference edges missing in worker context.")
             expected_e = expected_counts[edge_u, edge_v]
+            # Gradient of the negative log-likelihood w.r.t. the per-edge cost offset p(e):
+            #   ∂NLL/∂p(e) = (N_empirical(e) - N_expected(e)) / gamma
+            # With the update rule p <- p - lr * ∂NLL/∂p, this increases p(e) for edges
+            # the model over-uses (expected > empirical), making them more avoided.
             pref_grad_e = (empirical_counts[edge_u, edge_v] - expected_e) / gamma
             n_expected_e = expected_e.detach()
             if edge_time_sums is None:

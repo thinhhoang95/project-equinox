@@ -18,6 +18,12 @@ class CostLinearDisentangled(nn.Module):
     Common cost: c_common(e) = x(e)^T w
     Total cost: c(e) = c_common(e) + p(e)
 
+    Sign convention:
+      - ``preference_matrix_p[u, v]`` is an additive *cost offset* (a penalty term).
+      - Higher values increase the edge cost and therefore make the edge less likely under
+        MaxEnt policies of the form ``p(path) ∝ exp(-cost(path)/gamma)``.
+      - If you want a "preference score" where larger means *more chosen*, use ``-p(e)``.
+
     Feature definition (fixed per waypoint-edge):
       - bias = 1
       - ac_dist = AC(e) * d(e) / 100.0
@@ -188,7 +194,9 @@ class CostLinearDisentangled(nn.Module):
         self, u_indices: torch.Tensor, v_indices: torch.Tensor
     ) -> torch.Tensor:
         """
-        Retrieves preference scores P(e) from the preference matrix p for a batch of edges e = (u, v).
+        Retrieves the per-edge cost offset ``p(e)`` for a batch of edges ``e = (u, v)``.
+
+        Note: despite the name "preference", ``p(e)`` is used as an additive cost (penalty).
         """
         return self._get_edge_metric_batched(u_indices, v_indices, self.preference_matrix_p)
 
