@@ -48,9 +48,8 @@ def thin_batch(batch_dir: str, config_path: str):
             
             print(f"  Loaded {len(closure_list)} closures.")
 
-            # The value '36' is based on the example in test_trespass_preferences_config.py
-            # It corresponds to num_rho_bins - 1
-            thinned_closures = thin_closures(origin_node_idx, goal_node_idx, 36, G, closure_list)
+            # Option A: infer max_rho directly from the closure tuples.
+            thinned_closures = thin_closures(origin_node_idx, goal_node_idx, None, G, closure_list)
             
             print(f"  Thinned to {len(thinned_closures)} closures.")
 

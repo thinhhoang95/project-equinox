@@ -158,7 +158,14 @@ def thinning(config: RunConfiguration, components: dict):
     G = components['graph']
     node_to_idx = components['node_to_idx']
 
-    thinned_closures = thin_closures(node_to_idx[config.origin_node], node_to_idx[config.goal_node], 36, G, closure_list)
+    # Option A: infer max_rho directly from the closure tuples.
+    thinned_closures = thin_closures(
+        node_to_idx[config.origin_node],
+        node_to_idx[config.goal_node],
+        None,
+        G,
+        closure_list,
+    )
     save_transitions(thinned_closures, config.output_dir, f"{config.file_prefix}_{config.thinning_output_file_name}")
 
 def amortize_wind_average(config: RunConfiguration, components: dict):

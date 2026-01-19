@@ -85,6 +85,28 @@ def _seconds_to_hhmmss_int(seconds: float) -> int:
     return int(f"{hours:02d}{minutes:02d}{secs:02d}")
 
 
+def _select_initial_state(
+    V_bwd: torch.Tensor,
+    *,
+    origin_node_idx: int,
+    phase_order: Optional[List[int]] = None,
+) -> tuple[int, int]:
+    if V_bwd.ndim < 4:
+        raise ValueError("V_bwd must be 4D (node, k, rho, phase).")
+    num_rho = V_bwd.shape[2]
+    num_phase = V_bwd.shape[3]
+    if num_rho == 0 or num_phase == 0:
+        return 0, 0
+    if phase_order is None:
+        phase_order = list(range(num_phase))
+    for phase in phase_order:
+        for rho in range(num_rho - 1, -1, -1):
+            cost_slice = V_bwd[origin_node_idx, :, rho, phase]
+            if torch.isfinite(cost_slice).any():
+                return rho, phase
+    return 0, 0
+
+
 def _write_outputs(
     output_dir: Path,
     *,
@@ -584,7 +606,10 @@ def compute_4d_path_for_flight(
     if not closure_list:
         raise RuntimeError("Backward TResPASS produced no closures.")
 
-    max_rho_val = max(t[2] for t in closure_list)
+    max_rho_val = max(
+        max(t[2] for t in closure_list),
+        max(t[7] for t in closure_list),
+    )
     thinned_transitions = thin_closures(
         components["origin_node_idx"],
         components["goal_node_idx"],
@@ -655,6 +680,11 @@ def compute_4d_path_for_flight(
             gamma=effective_gamma,
         )
 
+    initial_rho, initial_phase = _select_initial_state(
+        V_bwd,
+        origin_node_idx=components["origin_node_idx"],
+        phase_order=[0, 1, 2],
+    )
     trajectories, cost_lists = sample_paths(
         V_bwd,
         edge_costs,
@@ -663,6 +693,8 @@ def compute_4d_path_for_flight(
         gamma=effective_gamma,
         policy=policy,
         seed=seed,
+        initial_rho=initial_rho,
+        initial_phase=initial_phase,
     )
 
     samples: List[SampledPath] = []

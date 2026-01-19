@@ -163,12 +163,11 @@ def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: i
                     
                     source_node_idx = components['node_to_idx'][origin_node]
                     goal_node_idx = components['node_to_idx'][destination_node]
-                    max_rho = 36  # Standard value from examples
-                    
                     # Use thin_closures with correct parameters
                     from src.equinox.dp.trespass.thinning import thin_closures
                     thinned_transitions = thin_closures(
-                        source_node_idx, goal_node_idx, max_rho, 
+                        # Option A: infer max_rho directly from the closure tuples.
+                        source_node_idx, goal_node_idx, None,
                         components['graph'], backward_transitions
                     )
                     

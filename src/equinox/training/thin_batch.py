@@ -59,12 +59,12 @@ def process_batch(batch_dir: str, output_filename: str, config: RunConfiguration
     G = components['graph']
     node_to_idx = components['node_to_idx']
     
-    # Assuming origin/goal are consistent for the case. max_rho is from example.
+    # Assuming origin/goal are consistent for the case.
     source_node_idx = node_to_idx[config.origin_node]
     goal_node_idx = node_to_idx[config.goal_node]
-    max_rho = 36 
 
-    thinned_transitions = thin_closures(source_node_idx, goal_node_idx, max_rho, G, all_transitions)
+    # Option A: infer max_rho directly from the closure tuples.
+    thinned_transitions = thin_closures(source_node_idx, goal_node_idx, None, G, all_transitions)
     
     print(f"Thinned down to {len(thinned_transitions)} transitions.")
 

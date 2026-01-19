@@ -479,11 +479,13 @@ def sample_paths(
     policy: str,
     seed: Optional[int] = None,
     max_steps: int = 200,
+    initial_rho: Optional[int] = None,
+    initial_phase: int = 0,
 ) -> Tuple[List[list], List[list]]:
     rng = np.random.default_rng(seed) if seed is not None else None
 
-    initial_rho = V_bwd.shape[2] - 1 if V_bwd.shape[2] > 0 else 0
-    initial_phase = 0
+    if initial_rho is None:
+        initial_rho = V_bwd.shape[2] - 1 if V_bwd.shape[2] > 0 else 0
 
     edge_costs_uv = edge_costs_uv.coalesce()
 

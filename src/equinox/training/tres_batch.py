@@ -363,12 +363,9 @@ def process_flight(flight_series, config, components, case_name, batch_idx, outp
         node_to_idx = flight_components['node_to_idx']
         source_node_idx = node_to_idx[flight_config.origin_node]
         goal_node_idx = node_to_idx[flight_config.goal_node]
-        # Using a fixed max_rho as seen in test files.
-        # This parameter is related to the maximum number of climb time bins.
-        max_rho = 36
-        
         thinned_transitions = thin_closures(
-            source_node_idx, goal_node_idx, max_rho,
+            # Option A: infer max_rho directly from the closure tuples.
+            source_node_idx, goal_node_idx, None,
             flight_components['graph'], state_closure_list
         )
         

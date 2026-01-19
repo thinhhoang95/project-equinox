@@ -150,14 +150,24 @@ def thinning(config: RunConfiguration, components: dict):
         return None
         
     closure_list = pickle.load(open(backward_pass_output_path, "rb"))
-    max_rho_val = max(t[2] for t in closure_list)
-    print(f"Loaded {len(closure_list)} closures from backward tres pass, max rho value: {max_rho_val}")
 
     G = components['graph']
     node_to_idx = components['node_to_idx']
 
     try:
-        thinned_closures = thin_closures(node_to_idx[config.origin_node], node_to_idx[config.goal_node], max_rho_val, G, closure_list)
+        # Option A: infer max_rho directly from the closure tuples.
+        thinned_closures = thin_closures(
+            node_to_idx[config.origin_node],
+            node_to_idx[config.goal_node],
+            None,
+            G,
+            closure_list,
+        )
+        max_rho_val = max(
+            max(t[2] for t in closure_list),
+            max(t[7] for t in closure_list),
+        )
+        print(f"Loaded {len(closure_list)} closures from backward tres pass, max rho value: {max_rho_val}")
         print(f"After thinning: {len(thinned_closures)} closures remain from backward tres pass")
         save_transitions(thinned_closures, config.output_dir, f"{config.file_prefix}_{config.thinning_output_file_name}")
         return thinned_closures

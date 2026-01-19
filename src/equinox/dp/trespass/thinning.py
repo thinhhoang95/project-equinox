@@ -1,9 +1,53 @@
 import networkx as nx
+from typing import Optional
 
 # closures: [(3, 56, 0, 32653, 2, 54, 60, 0, 0, 2)...]
 # (u_idx, k_u, rho_u, alt_u, phase_u, v_idx, k_v, rho_v, alt_v, phase_v)
 
-def thin_closures(source_node_idx: int, goal_node_idx: int, max_rho: int, G: nx.DiGraph, closures: list[tuple[int, int, int, float, int, int, int, int, float, int]]):
+def infer_max_rho_from_closures(
+    closures: list[tuple[int, int, int, float, int, int, int, int, float, int]],
+) -> int:
+    """
+    Infer the maximum rho index present in a list of closure/transition tuples.
+
+    The project convention is:
+    - rho is the "remaining climb time bin index"
+    - closures are 10-tuples:
+      (u_idx, k_u, rho_u, alt_u, phase_u, v_idx, k_v, rho_v, alt_v, phase_v)
+
+    This helper implements "Option A": derive max_rho from the closures themselves,
+    using both rho_u (index 2) and rho_v (index 7).
+    """
+    if not closures:
+        raise ValueError("Cannot infer max_rho from an empty closures list.")
+
+    max_rho = -1
+    for c in closures:
+        # Be defensive: we only need indices 2 and 7.
+        if len(c) <= 7:
+            raise ValueError(
+                "Closure tuple is too short to contain rho_u/rho_v at indices 2 and 7. "
+                f"Expected 10-tuple, got length={len(c)} value={c!r}"
+            )
+        try:
+            rho_u = int(c[2])
+            rho_v = int(c[7])
+        except Exception as exc:
+            raise ValueError(f"Failed to parse rho indices from closure tuple: {c!r}") from exc
+        max_rho = max(max_rho, rho_u, rho_v)
+
+    if max_rho < 0:
+        raise ValueError("Inferred max_rho < 0; closures list appears invalid.")
+    return max_rho
+
+
+def thin_closures(
+    source_node_idx: int,
+    goal_node_idx: int,
+    max_rho: Optional[int],
+    G: nx.DiGraph,
+    closures: list[tuple[int, int, int, float, int, int, int, int, float, int]],
+):
     """
     Prunes the closures list to keep only transitions that are part of a valid path
     from a source configuration to a goal configuration.
@@ -13,6 +57,9 @@ def thin_closures(source_node_idx: int, goal_node_idx: int, max_rho: int, G: nx.
     """
     if not closures:
         return []
+
+    if max_rho is None:
+        max_rho = infer_max_rho_from_closures(closures)
 
     # 1. Build graph from closures
     # Nodes are states: (waypoint_idx, k_idx, rho_idx, altitude, phase_idx)
