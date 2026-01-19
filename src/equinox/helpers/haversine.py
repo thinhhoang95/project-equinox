@@ -34,6 +34,49 @@ def haversine(lat1, lon1, lat2, lon2):
     c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
     return R_NM * c
 
+def bearing(point1, point2):
+    """
+    Calculate the initial bearing between two points in degrees.
+    """
+    lat1, lon1 = point1
+    lat2, lon2 = point2
+
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lat2_rad = math.radians(lat2)
+    lon2_rad = math.radians(lon2)
+
+    dlon = lon2_rad - lon1_rad
+    y = math.sin(dlon) * math.cos(lat2_rad)
+    x = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(dlon)
+    initial_bearing = math.atan2(y, x)
+    return (math.degrees(initial_bearing) + 360) % 360
+
+
+def destination_point(point, bearing_deg, distance_nm):
+    """
+    Calculate destination point given start, bearing, and distance (nm).
+    """
+    R_NM = 3440.065
+    lat1, lon1 = point
+
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    bearing_rad = math.radians(bearing_deg)
+
+    angular_distance = distance_nm / R_NM
+
+    lat2_rad = math.asin(
+        math.sin(lat1_rad) * math.cos(angular_distance)
+        + math.cos(lat1_rad) * math.sin(angular_distance) * math.cos(bearing_rad)
+    )
+    lon2_rad = lon1_rad + math.atan2(
+        math.sin(bearing_rad) * math.sin(angular_distance) * math.cos(lat1_rad),
+        math.cos(angular_distance) - math.sin(lat1_rad) * math.sin(lat2_rad),
+    )
+
+    return (math.degrees(lat2_rad), math.degrees(lon2_rad))
+
 # Here is a Torch version of the same haversine function
 def haversinet(lat1, lon1, lat2, lon2):
     """

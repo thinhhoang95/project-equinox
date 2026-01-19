@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime
+import csv
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import torch
 
+from equinox.helpers.datetimeh import seconds_to_hhmmss
+from equinox.posttrain.vertical_tranchification import VerticalTranchifier, seconds_to_time_str
 from equinox.sampling.trespass.inference import (
     compute_checkpoint_hash,
     graph_fingerprint,
@@ -62,6 +66,10 @@ def _write_outputs(
     output_dir: Path,
     *,
     result: Compute4DPathResult,
+    write_4d_csv: bool,
+    tranche_altitudes_ft: List[float],
+    components: Dict[str, Any],
+    config: Any,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -80,6 +88,189 @@ def _write_outputs(
         traj_path = output_dir / f"trajectory_{idx}.pt"
         torch.save(sample.trajectory_4d, traj_path)
 
+    if write_4d_csv:
+        if not result.samples or any(sample.trajectory_4d is None for sample in result.samples):
+            raise ValueError("4D CSV requested but 4D trajectories are missing.")
+
+        waypoints_csv = output_dir / "shortest_path_4d_waypoints.csv"
+        _write_4d_waypoints_csv(waypoints_csv, result)
+
+        base_csv = output_dir / "shortest_path_4d_trajectories.csv"
+        _write_4d_segments_csv(base_csv, result, components)
+
+        tranchifier = VerticalTranchifier(
+            performance=config.initialize_performance_model(),
+            tranche_altitudes=tranche_altitudes_ft,
+        )
+        tranched_csv = output_dir / "shortest_path_4d_trajectories_tranched.csv"
+        tranchifier.process_trajectory(str(base_csv), str(tranched_csv))
+
+
+def _write_4d_waypoints_csv(output_path: Path, result: Compute4DPathResult) -> None:
+    phase_map = {0: "CLIMB", 1: "CRUISE", 2: "DESCENT"}
+    header = [
+        "sample_id",
+        "waypoint_index",
+        "waypoint",
+        "phase",
+        "phase_name",
+        "eta_seconds",
+        "eta_hhmmss",
+        "distance_nm",
+        "altitude_ft",
+        "takeoff_time_str",
+        "absolute_timestamp",
+        "absolute_time_str",
+        "route",
+    ]
+
+    rows = []
+    for sample_idx, sample in enumerate(result.samples):
+        traj = sample.trajectory_4d
+        if traj is None:
+            continue
+        waypoints = list(traj.get("waypoints", []))
+        phases = traj.get("phase")
+        etas = traj.get("eta")
+        distances = traj.get("distance_nm")
+        altitudes = traj.get("altitude_ft")
+        takeoff_time_str = traj.get("takeoff_time_str")
+
+        if hasattr(phases, "tolist"):
+            phases = phases.tolist()
+        if hasattr(etas, "tolist"):
+            etas = etas.tolist()
+        if hasattr(distances, "tolist"):
+            distances = distances.tolist()
+        if hasattr(altitudes, "tolist"):
+            altitudes = altitudes.tolist()
+
+        if not (len(waypoints) == len(phases) == len(etas) == len(distances) == len(altitudes)):
+            raise ValueError("Trajectory arrays have inconsistent lengths.")
+
+        route_str = " ".join(waypoints)
+        for idx, waypoint in enumerate(waypoints):
+            eta_seconds = float(etas[idx])
+            phase_val = int(phases[idx])
+            abs_ts = None
+            abs_time_str = None
+            if result.takeoff_timestamp is not None:
+                abs_ts = int(result.takeoff_timestamp + round(eta_seconds))
+                abs_time_str = datetime.fromtimestamp(abs_ts).strftime("%Y-%m-%d %H:%M:%S")
+
+            rows.append(
+                {
+                    "sample_id": sample_idx,
+                    "waypoint_index": idx,
+                    "waypoint": waypoint,
+                    "phase": phase_val,
+                    "phase_name": phase_map.get(phase_val, str(phase_val)),
+                    "eta_seconds": eta_seconds,
+                    "eta_hhmmss": seconds_to_hhmmss(eta_seconds),
+                    "distance_nm": float(distances[idx]),
+                    "altitude_ft": float(altitudes[idx]),
+                    "takeoff_time_str": takeoff_time_str,
+                    "absolute_timestamp": abs_ts,
+                    "absolute_time_str": abs_time_str,
+                    "route": route_str,
+                }
+            )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=header)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _write_4d_segments_csv(
+    output_path: Path,
+    result: Compute4DPathResult,
+    components: Dict[str, Any],
+) -> None:
+    header = [
+        "segment_identifier",
+        "origin_aerodrome",
+        "destination_aerodrome",
+        "time_begin_segment",
+        "time_end_segment",
+        "flight_level_begin",
+        "flight_level_end",
+        "latitude_begin",
+        "longitude_begin",
+        "latitude_end",
+        "longitude_end",
+        "flight_identifier",
+        "route",
+    ]
+
+    graph = components["graph"]
+    rows = []
+    for sample_idx, sample in enumerate(result.samples):
+        traj = sample.trajectory_4d
+        if traj is None:
+            continue
+        waypoints = list(traj.get("waypoints", []))
+        etas = traj.get("eta")
+        altitudes = traj.get("altitude_ft")
+
+        if hasattr(etas, "tolist"):
+            etas = etas.tolist()
+        if hasattr(altitudes, "tolist"):
+            altitudes = altitudes.tolist()
+
+        if len(waypoints) < 2:
+            continue
+
+        route_str = " ".join(waypoints)
+        origin = waypoints[0]
+        destination = waypoints[-1]
+        flight_identifier = f"sample_{sample_idx}"
+
+        for idx in range(len(waypoints) - 1):
+            wp_begin = waypoints[idx]
+            wp_end = waypoints[idx + 1]
+
+            lat_begin = graph.nodes[wp_begin]["lat"] if wp_begin in graph.nodes else -1
+            lon_begin = graph.nodes[wp_begin]["lon"] if wp_begin in graph.nodes else -1
+            lat_end = graph.nodes[wp_end]["lat"] if wp_end in graph.nodes else -1
+            lon_end = graph.nodes[wp_end]["lon"] if wp_end in graph.nodes else -1
+
+            if hasattr(lat_begin, "item"):
+                lat_begin = lat_begin.item()
+            if hasattr(lon_begin, "item"):
+                lon_begin = lon_begin.item()
+            if hasattr(lat_end, "item"):
+                lat_end = lat_end.item()
+            if hasattr(lon_end, "item"):
+                lon_end = lon_end.item()
+
+            time_begin = seconds_to_time_str(int(round(etas[idx])))
+            time_end = seconds_to_time_str(int(round(etas[idx + 1])))
+
+            rows.append(
+                {
+                    "segment_identifier": f"{wp_begin}_{wp_end}",
+                    "origin_aerodrome": origin,
+                    "destination_aerodrome": destination,
+                    "time_begin_segment": int(time_begin),
+                    "time_end_segment": int(time_end),
+                    "flight_level_begin": int(float(altitudes[idx]) / 100),
+                    "flight_level_end": int(float(altitudes[idx + 1]) / 100),
+                    "latitude_begin": lat_begin,
+                    "longitude_begin": lon_begin,
+                    "latitude_end": lat_end,
+                    "longitude_end": lon_end,
+                    "flight_identifier": flight_identifier,
+                    "route": route_str,
+                }
+            )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=header)
+        writer.writeheader()
+        writer.writerows(rows)
 
 def compute_4d_path(
     *,
@@ -96,7 +287,16 @@ def compute_4d_path(
     output_dir: Optional[str] = None,
     cache_dir: Optional[str] = None,
     use_cache: bool = True,
+    write_4d_csv: bool = False,
+    tranche_altitudes_ft: Optional[List[float]] = None,
 ) -> Compute4DPathResult:
+    if write_4d_csv and output_dir is None:
+        raise ValueError("write_4d_csv requires output_dir to be set.")
+    if write_4d_csv and not return_4d:
+        raise ValueError("write_4d_csv requires return_4d=True.")
+    if tranche_altitudes_ft is None:
+        tranche_altitudes_ft = [10000, 15000, 20000, 24000, 28000, 32000]
+
     config, components = load_case(case_dir, device=device)
 
     resolved_checkpoint = resolve_checkpoint(case_dir, checkpoint_path)
@@ -229,6 +429,13 @@ def compute_4d_path(
     )
 
     if output_dir is not None:
-        _write_outputs(Path(output_dir), result=result)
+        _write_outputs(
+            Path(output_dir),
+            result=result,
+            write_4d_csv=write_4d_csv,
+            tranche_altitudes_ft=tranche_altitudes_ft,
+            components=components,
+            config=config,
+        )
 
     return result

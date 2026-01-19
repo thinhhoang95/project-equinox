@@ -3,7 +3,7 @@ import networkx as nx
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
-def plot_routes_on_map(graph, routes, ax=None):
+def plot_routes_on_map(graph, routes, ax=None, show_waypoints=True, route_alpha=1.0):
     """
     Plots waypoints and routes on a map using Cartopy.
 
@@ -13,6 +13,8 @@ def plot_routes_on_map(graph, routes, ax=None):
         routes (list[list[str]]): A list of routes, where each route is a list of waypoint names.
         ax (matplotlib.axes.Axes, optional): A Matplotlib Axes object to plot on.
                                              If None, a new figure and axes will be created.
+        show_waypoints (bool, optional): Whether to plot waypoint markers and labels.
+        route_alpha (float, optional): Opacity for route line plotting.
     """
     if ax is None:
         fig = plt.figure(figsize=(48, 16))
@@ -31,12 +33,13 @@ def plot_routes_on_map(graph, routes, ax=None):
     all_lats = []
 
     # 1. Plot all the nodes on the map with text label of the waypoint name (small font)
-    for node, data in graph.nodes(data=True):
-        lon, lat = data['lon'], data['lat']
-        all_lons.append(lon)
-        all_lats.append(lat)
-        ax.plot(lon, lat, 'o', color='blue', markersize=3, transform=ccrs.Geodetic())
-        ax.text(lon + 0.01, lat + 0.01, str(node), fontsize=6, transform=ccrs.Geodetic())
+    if show_waypoints:
+        for node, data in graph.nodes(data=True):
+            lon, lat = data['lon'], data['lat']
+            all_lons.append(lon)
+            all_lats.append(lat)
+            ax.plot(lon, lat, 'o', color='blue', markersize=3, transform=ccrs.Geodetic())
+            ax.text(lon + 0.01, lat + 0.01, str(node), fontsize=6, transform=ccrs.Geodetic())
 
     # 3. Plot the routes in thick lines
     for route_idx, route in enumerate(routes):
@@ -53,7 +56,15 @@ def plot_routes_on_map(graph, routes, ax=None):
                 print(f"Warning: Waypoint '{waypoint_name}' in route {route_idx} not found in graph.")
         
         if route_lons and route_lats: # Ensure there are points to plot
-            ax.plot(route_lons, route_lats, '-', linewidth=2, transform=ccrs.Geodetic(), label=f'Route {route_idx+1}')
+            ax.plot(
+                route_lons,
+                route_lats,
+                '-',
+                linewidth=2,
+                alpha=route_alpha,
+                transform=ccrs.Geodetic(),
+                label=f'Route {route_idx+1}',
+            )
 
     # Set map extent
     if all_lons and all_lats:

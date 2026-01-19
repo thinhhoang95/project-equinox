@@ -16,7 +16,7 @@ res = compute_4d_path(
     takeoff_timestamp=1682781206,
     n_samples=10,
     policy="sample",
-    return_4d=True,
+    write_4d_csv=True,
     seed=7,
 )
 
@@ -35,9 +35,11 @@ from equinox.sampling.pipeline import compute_4d_path
 
 res = compute_4d_path(
     case_dir="data/cases/LGAV_LFPG",
-    n_samples=5,
+    n_samples=100,
     policy="greedy",
-    return_4d=False,
+    return_4d=True,
+    write_4d_csv=True,
+    output_dir="data/cases/LGAV_LFPG/inference100"
 )
 ```
 
@@ -47,6 +49,11 @@ When `output_dir` is provided, the pipeline writes:
 - `routes.txt` with one route per line (`total_cost,waypoint...`)
 - `metadata.pt` with run metadata
 - `trajectory_*.pt` for each sample (if `return_4d=True`)
+
+Set `write_4d_csv=True` (requires `return_4d=True` and `output_dir`) to also emit:
+- `shortest_path_4d_waypoints.csv` (per-waypoint 4D points)
+- `shortest_path_4d_trajectories.csv` (segment-based, Silverdrizzle-compatible schema)
+- `shortest_path_4d_trajectories_tranched.csv` (vertical tranchification output)
 
 ```python
 from equinox.sampling.pipeline import compute_4d_path
@@ -59,6 +66,8 @@ res = compute_4d_path(
     return_4d=True,
     seed=7,
     output_dir="data/cases/LGAV_LFPG/inference_outputs/sample_100",
+    write_4d_csv=True,
+    tranche_altitudes_ft=[10000, 15000, 20000, 24000, 28000, 32000],
 )
 ```
 
