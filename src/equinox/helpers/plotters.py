@@ -60,7 +60,7 @@ def plot_routes_on_map(graph, routes, ax=None, show_waypoints=True, route_alpha=
                 route_lons,
                 route_lats,
                 '-',
-                linewidth=2,
+                linewidth=10,
                 alpha=route_alpha,
                 transform=ccrs.Geodetic(),
                 label=f'Route {route_idx+1}',

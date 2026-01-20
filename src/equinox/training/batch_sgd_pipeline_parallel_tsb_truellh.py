@@ -178,6 +178,36 @@ def _support_component_stats(
     }
 
 
+def _project_pref_features_only(
+    pref_projector: GaugeFixedPreferenceProjector,
+    v_e: torch.Tensor,
+) -> torch.Tensor:
+    """Project v_e to satisfy X^T W v = 0 without enforcing B W v = 0."""
+    if v_e.ndim != 1:
+        raise ValueError("v_e must be 1D (m,).")
+    if v_e.shape[0] != pref_projector.w_e.shape[0]:
+        raise ValueError("v_e must match edge dimension.")
+    if pref_projector.X is None:
+        raise RuntimeError("Preference projector features are not initialized.")
+
+    if v_e.device != pref_projector.w_e.device or v_e.dtype != pref_projector.w_e.dtype:
+        v_e = v_e.to(device=pref_projector.w_e.device, dtype=pref_projector.w_e.dtype)
+
+    X = pref_projector.X
+    w_e = pref_projector.w_e
+    weighted_X = w_e[:, None] * X
+    A = X.t().matmul(weighted_X)
+    if pref_projector.feature_ridge > 0.0:
+        A = A + pref_projector.feature_ridge * torch.eye(
+            X.shape[1],
+            device=X.device,
+            dtype=X.dtype,
+        )
+    rhs = X.t().matmul(w_e * v_e)
+    alpha = torch.linalg.solve(A, rhs)
+    return v_e - X.matmul(alpha)
+
+
 def _index_tres_batch_files(tres_dir: Path) -> dict[tuple[str, int], tuple[Optional[Path], Optional[Path]]]:
     """
     Build an index from (flight_id, takeoff_timestamp) to (CLSR_path, WIND_path).
@@ -428,6 +458,7 @@ class BatchLearningConfig:
     batch_shuffling: str = "none"
     fixed_batch_index: Optional[int] = None # Use a fixed batch for all iterations
     disable_edge_preference: bool = False
+    disable_pref_bw_constraint: bool = False
     
     def __post_init__(self):
         if self.num_workers is None:
@@ -1214,6 +1245,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         and not batch_config.disable_edge_preference
     )
     pref_projector = None
+    pref_project = None
     pref_edge_u = None
     pref_edge_v = None
     pref_support_mask = None
@@ -1283,6 +1315,13 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             feature_ridge=batch_config.pref_projection_ridge,
         )
         pref_projector.update_features(X_norm)
+        if batch_config.disable_pref_bw_constraint:
+            pref_project = lambda v_e: _project_pref_features_only(pref_projector, v_e)
+            logger.info(
+                "Preference projection ablation: enforcing X^T W p = 0 only (BW constraint disabled)."
+            )
+        else:
+            pref_project = pref_projector.project
         pref_support_mask = d_e > 0
 
         support_stats = _support_component_stats(
@@ -1325,7 +1364,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         with torch.no_grad():
             pref_matrix = components["cost_model"].preference_matrix_p
             p_e = pref_matrix[pref_edge_u, pref_edge_v].to(dtype=X_norm.dtype)
-            p_e = pref_projector.project(p_e)
+            p_e = pref_project(p_e)
             pref_matrix.zero_()
             pref_matrix[pref_edge_u, pref_edge_v] = p_e.to(dtype=pref_matrix.dtype)
 
@@ -1686,9 +1725,9 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                         pref_projector.cycle_fraction(pref_grad_avg).item()
                     )
 
-                pref_grad_proj = pref_projector.project(pref_grad_avg)
+                pref_grad_proj = pref_project(pref_grad_avg)
                 p_e = p_e - batch_config.pref_learning_rate * pref_grad_proj
-                p_e = pref_projector.project(p_e)
+                p_e = pref_project(p_e)
 
                 with torch.no_grad():
                     pref_matrix.zero_()
@@ -2191,6 +2230,11 @@ def main():
         action="store_true",
         help="Disable edge preference learning and fix preference matrix at 0 (lin_disent only).",
     )
+    parser.add_argument(
+        "--disable-pref-bw-constraint",
+        action="store_true",
+        help="Disable BW preference constraint; only enforce X^T W p = 0 projection.",
+    )
     
     args = parser.parse_args()
 
@@ -2233,6 +2277,7 @@ def main():
         batch_shuffling=args.batch_shuffling,
         fixed_batch_index=args.fixed_batch_index,
         disable_edge_preference=args.disable_edge_preference,
+        disable_pref_bw_constraint=args.disable_pref_bw_constraint,
     )
     
     # Validate implementation first

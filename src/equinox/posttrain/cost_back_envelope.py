@@ -415,7 +415,7 @@ def compute_routes_cost_breakdowns(
         )
         graph = nx.read_gml(graph_path_value)
 
-    results: List[Dict[str, Any]] = []
+    route_entries: List[Dict[str, Any]] = []
     for route_idx, route_nodes in enumerate(unique_routes, start=1):
         breakdown = _compute_edge_breakdown(
             route_nodes=route_nodes,
@@ -436,6 +436,25 @@ def compute_routes_cost_breakdowns(
             "cost_common": sum(edge["cost_common"] for edge in breakdown),
             "cost_total": sum(edge["cost_total"] for edge in breakdown),
         }
+
+        route_entries.append(
+            {
+                "route_idx": route_idx,
+                "route_nodes": route_nodes,
+                "breakdown": breakdown,
+                "totals": totals,
+            }
+        )
+
+    sorted_entries = sorted(
+        route_entries, key=lambda entry: entry["totals"]["cost_total"]
+    )
+
+    results: List[Dict[str, Any]] = []
+    for route_rank, entry in enumerate(sorted_entries, start=1):
+        route_nodes = entry["route_nodes"]
+        breakdown = entry["breakdown"]
+        totals = entry["totals"]
 
         display_frame = breakdown_to_frame(breakdown)
         columns = [
@@ -462,7 +481,7 @@ def compute_routes_cost_breakdowns(
         display_frame[float_cols] = display_frame[float_cols].round(3)
 
         print(
-            f"Route {route_idx}/{len(unique_routes)}: "
+            f"Route {route_rank}/{len(sorted_entries)}: "
             f"{' -> '.join(route_nodes)}"
         )
         _display_frame(display_frame)
@@ -487,7 +506,7 @@ def compute_routes_cost_breakdowns(
                 show_waypoints=show_waypoints,
                 route_alpha=route_alpha,
             )
-            ax.set_title(f"Route {route_idx}")
+            ax.set_title(f"Route {route_rank}")
             plt.show()
 
         results.append(

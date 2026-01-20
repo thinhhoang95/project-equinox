@@ -7,7 +7,7 @@ import networkx as nx
 
 logger = logging.getLogger(__name__)
 
-_EPS = 1e-2 # minimal count for non-traversed edge, to improve numerical stability
+_EPS = 1e-4 # minimal count for non-traversed edge, to improve numerical stability
 
 
 def build_edge_list(
