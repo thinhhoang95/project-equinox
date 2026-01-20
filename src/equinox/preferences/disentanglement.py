@@ -7,6 +7,8 @@ import networkx as nx
 
 logger = logging.getLogger(__name__)
 
+_EPS = 1e-2 # minimal count for non-traversed edge, to improve numerical stability
+
 
 def build_edge_list(
     graph: nx.DiGraph, node_to_idx: dict[str, int]
@@ -159,7 +161,7 @@ def d_weighted_normalize_features(
     d_e: torch.Tensor,
     *,
     bias_index: int = 0,
-    eps: float = 1e-12,
+    eps: float = _EPS,
     manual_scales: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
     """Center/scale columns under D-weighted statistics, keeping the bias intact."""
@@ -518,6 +520,48 @@ class GaugeFixedPreferenceProjector:
         except RuntimeError:
             logger.warning("Could not compute condition number for A_eff.")
 
+    def estimate_laplacian_spectrum(
+        self,
+        *,
+        max_iter: int = 12,
+        eigvalsh_threshold: int = 1500,
+    ) -> Tuple[Optional[float], Optional[float], Optional[float], str]:
+        """Return (min_eig, max_eig, cond_est, method) for the reduced Laplacian."""
+        if self._laplacian is None or self.reduced_node_count <= 0:
+            return None, None, None, "unavailable"
+
+        laplacian = self._laplacian
+        n = self.reduced_node_count
+        if n == 1:
+            val = float(laplacian[0, 0].item())
+            cond = val / val if val > 0.0 else float("inf")
+            return val, val, cond, "diag"
+
+        if n <= eigvalsh_threshold:
+            laplacian_cpu = laplacian.detach().cpu()
+            eigvals = torch.linalg.eigvalsh(laplacian_cpu)
+            min_eig = float(eigvals[0].item())
+            max_eig = float(eigvals[-1].item())
+            cond = max_eig / min_eig if min_eig > 0.0 else float("inf")
+            return min_eig, max_eig, cond, "eigvalsh"
+
+        def _normalize(vec: torch.Tensor) -> torch.Tensor:
+            norm = torch.linalg.norm(vec)
+            return vec / norm if norm > 0 else vec
+
+        max_vec = _normalize(torch.randn(n, device=laplacian.device, dtype=laplacian.dtype))
+        for _ in range(max_iter):
+            max_vec = _normalize(laplacian.matmul(max_vec))
+        max_eig = float(torch.dot(max_vec, laplacian.matmul(max_vec)).item())
+
+        min_vec = _normalize(torch.randn(n, device=laplacian.device, dtype=laplacian.dtype))
+        for _ in range(max_iter):
+            min_vec = _normalize(self._solve_laplacian(min_vec))
+        min_eig = float(torch.dot(min_vec, laplacian.matmul(min_vec)).item())
+
+        cond = max_eig / min_eig if min_eig > 0.0 else float("inf")
+        return min_eig, max_eig, cond, "power_inverse"
+
     def project(self, v_e: torch.Tensor) -> torch.Tensor:
         if v_e.ndim != 1:
             raise ValueError("v_e must be 1D (m,).")
@@ -627,7 +671,7 @@ class GaugeFixedPreferenceProjector:
             v_e = v_e.to(device=self.w_e.device, dtype=self.w_e.dtype)
         return torch.dot(self.w_e * v_e, v_e)
 
-    def cycle_fraction(self, v_e: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    def cycle_fraction(self, v_e: torch.Tensor, eps: float = _EPS) -> torch.Tensor:
         """Return 1 - E_pot / (v^T W v + eps) for diagnostics."""
         if eps < 0.0:
             raise ValueError("eps must be non-negative.")

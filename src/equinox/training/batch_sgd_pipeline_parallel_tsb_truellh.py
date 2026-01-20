@@ -36,8 +36,6 @@ Usage:
     python batch_sgd_pipeline_parallel_w_tensorboard.py --case-dir data/cases/LEMD_EGLL \
         --clear-tensorboard-logs
     
-    To start fresh training without resuming from checkpoint:
-    python batch_sgd_pipeline_parallel_w_tensorboard.py --case-dir data/cases/LEMD_EGLL --no-resume
 """
 
 import os
@@ -80,6 +78,7 @@ from src.equinox.preferences.disentanglement import (
     compute_empirical_counts_from_routes,
     d_weighted_normalize_features,
     GaugeFixedPreferenceProjector,
+    _EPS
 )
 
 # Setup logging
@@ -106,6 +105,77 @@ def _edge_list_fingerprint(edge_u: torch.Tensor, edge_v: torch.Tensor) -> str:
     hasher.update(b"|")
     hasher.update(edge_v_cpu.numpy().tobytes())
     return f"{edge_u_cpu.numel()}:{hasher.hexdigest()}"
+
+
+def _support_component_stats(
+    edge_u: torch.Tensor,
+    edge_v: torch.Tensor,
+    num_nodes: int,
+    support_mask: torch.Tensor,
+) -> dict[str, float]:
+    if num_nodes <= 0:
+        return {
+            "edge_count": 0.0,
+            "node_count": 0.0,
+            "component_count": 0.0,
+            "edge_fraction": 0.0,
+            "node_fraction": 0.0,
+        }
+
+    edge_u_cpu = edge_u.detach().to(device="cpu", dtype=torch.int64)
+    edge_v_cpu = edge_v.detach().to(device="cpu", dtype=torch.int64)
+    support_cpu = support_mask.detach().to(device="cpu")
+    if support_cpu.numel() != edge_u_cpu.numel():
+        raise ValueError("support_mask must match edge list length.")
+
+    support_edge_u = edge_u_cpu[support_cpu]
+    support_edge_v = edge_v_cpu[support_cpu]
+    support_edge_count = int(support_edge_u.numel())
+    total_edges = int(edge_u_cpu.numel())
+
+    support_nodes = set(support_edge_u.tolist()) | set(support_edge_v.tolist())
+    support_node_count = len(support_nodes)
+
+    parent = list(range(num_nodes))
+    rank = [0] * num_nodes
+
+    def find(idx: int) -> int:
+        while parent[idx] != idx:
+            parent[idx] = parent[parent[idx]]
+            idx = parent[idx]
+        return idx
+
+    def union(left: int, right: int) -> None:
+        root_left = find(left)
+        root_right = find(right)
+        if root_left == root_right:
+            return
+        if rank[root_left] < rank[root_right]:
+            parent[root_left] = root_right
+        elif rank[root_left] > rank[root_right]:
+            parent[root_right] = root_left
+        else:
+            parent[root_right] = root_left
+            rank[root_left] += 1
+
+    for left, right in zip(support_edge_u.tolist(), support_edge_v.tolist()):
+        union(left, right)
+
+    if support_node_count > 0:
+        component_count = len({find(node) for node in support_nodes})
+    else:
+        component_count = 0
+
+    edge_fraction = support_edge_count / total_edges if total_edges > 0 else 0.0
+    node_fraction = support_node_count / num_nodes if num_nodes > 0 else 0.0
+
+    return {
+        "edge_count": float(support_edge_count),
+        "node_count": float(support_node_count),
+        "component_count": float(component_count),
+        "edge_fraction": float(edge_fraction),
+        "node_fraction": float(node_fraction),
+    }
 
 
 def _index_tres_batch_files(tres_dir: Path) -> dict[tuple[str, int], tuple[Optional[Path], Optional[Path]]]:
@@ -353,7 +423,6 @@ class BatchLearningConfig:
     tensorboard_run_name: Optional[str] = None
     clear_tensorboard_logs: bool = False
     log_interval: int = 1  # Log every iteration by default
-    resume_from_checkpoint: bool = True  # Resume from last checkpoint by default
     randomized: bool = False
     random_seed: int = None  # Random seed for deterministic randomization
     batch_shuffling: str = "none"
@@ -1008,109 +1077,6 @@ def _process_flight_wrapper(args):
     return process_single_flight(*args)
 
 
-def find_latest_checkpoint(output_dir: str) -> Optional[str]:
-    """
-    Find the latest checkpoint file in the output directory.
-    
-    Args:
-        output_dir: Directory to search for checkpoints
-        
-    Returns:
-        Path to the latest checkpoint file, or None if no checkpoints found
-    """
-    if not os.path.exists(output_dir):
-        logger.debug(f"Output directory does not exist: {output_dir}")
-        return None
-    
-    logger.debug(f"Searching for checkpoints in directory: {output_dir}")
-    
-    # Get all files in the directory for debugging
-    try:
-        all_files = os.listdir(output_dir)
-        logger.debug(f"All files in {output_dir}: {all_files}")
-    except Exception as e:
-        logger.error(f"Error listing directory {output_dir}: {e}")
-        return None
-    
-    checkpoint_files = []
-    for filename in all_files:
-        if filename.startswith("checkpoint_iter_") and filename.endswith(".pt"):
-            logger.debug(f"Found potential checkpoint file: {filename}")
-            # Extract iteration number from filename
-            try:
-                # More robust parsing: extract the number between "checkpoint_iter_" and ".pt"
-                prefix = "checkpoint_iter_"
-                suffix = ".pt"
-                if filename.startswith(prefix) and filename.endswith(suffix):
-                    iter_str = filename[len(prefix):-len(suffix)]
-                    iter_num = int(iter_str)
-                    full_path = os.path.join(output_dir, filename)
-                    checkpoint_files.append((iter_num, full_path))
-                    logger.debug(f"Valid checkpoint found: iteration {iter_num}, path: {full_path}")
-            except ValueError as e:
-                logger.warning(f"Could not parse iteration number from filename {filename}: {e}")
-                continue
-    
-    if not checkpoint_files:
-        logger.debug("No valid checkpoint files found")
-        return None
-    
-    # Sort by iteration number and get the latest
-    checkpoint_files.sort(key=lambda x: x[0])
-    latest_checkpoint = checkpoint_files[-1]
-    
-    logger.info(f"Found {len(checkpoint_files)} checkpoint(s). Latest: iteration {latest_checkpoint[0]}, path: {latest_checkpoint[1]}")
-    
-    # Verify the file actually exists and is readable
-    if os.path.exists(latest_checkpoint[1]) and os.path.isfile(latest_checkpoint[1]):
-        return latest_checkpoint[1]
-    else:
-        logger.error(f"Latest checkpoint file does not exist or is not readable: {latest_checkpoint[1]}")
-        return None
-
-
-def load_checkpoint(checkpoint_path: str, cost_model, optimizer, device: torch.device) -> Tuple[int, Dict]:
-    """
-    Load a checkpoint and restore model, optimizer, and training state.
-    
-    Args:
-        checkpoint_path: Path to the checkpoint file
-        cost_model: Cost model to load state into
-        optimizer: Optimizer to load state into
-        device: Device to load tensors to
-        
-    Returns:
-        Tuple of (start_iteration, training_history)
-    """
-    logger.info(f"Loading checkpoint from {checkpoint_path}")
-    
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    
-    # Load model state
-    cost_model.load_state_dict(checkpoint['model_state_dict'])
-    
-    # Load optimizer state
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    
-    # Get starting iteration (add 1 to continue from next iteration)
-    start_iteration = checkpoint['iteration'] + 1
-    
-    # Load training history
-    training_history = checkpoint.get('training_history', {
-        'iterations': [],
-        'avg_log_likelihood': [],
-        'gradient_norms': [],
-        'processing_times': [],
-        'successful_flights': [],
-        'failed_flights': []
-    })
-    
-    logger.info(f"Checkpoint loaded successfully. Resuming from iteration {start_iteration}")
-    logger.info(f"Previous training history contains {len(training_history['iterations'])} iterations")
-    
-    return start_iteration, training_history
-
-
 def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchLearningConfig,
                           output_dir: str = None) -> Dict[str, Any]:
     """
@@ -1255,6 +1221,15 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     pref_feature_bias_e = None
     pref_feature_ac_dist_e = None
     pref_time_fallback_e = None
+    pref_laplacian_min_eig = None
+    pref_laplacian_max_eig = None
+    pref_laplacian_cond = None
+    pref_laplacian_method = None
+    pref_support_edge_fraction = None
+    pref_support_node_fraction = None
+    pref_support_component_count = None
+    pref_support_edge_count = None
+    pref_support_node_count = None
     if batch_config.disable_edge_preference and components["cost_model_version"] == "lin_disent":
         with torch.no_grad():
             components["cost_model"].preference_matrix_p.zero_()
@@ -1271,7 +1246,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             components["num_nodes"],
         )
         d_e = global_counts[edge_u_cpu, edge_v_cpu].to(device=device, dtype=torch.float64)
-        pref_projection_eps = 1e-12
+        pref_projection_eps = _EPS
         w_e = d_e + pref_projection_eps
 
         mean_tailwind_e = _compute_mean_tailwind_per_edge(
@@ -1310,8 +1285,42 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         pref_projector.update_features(X_norm)
         pref_support_mask = d_e > 0
 
+        support_stats = _support_component_stats(
+            edge_u_cpu, edge_v_cpu, components["num_nodes"], pref_support_mask
+        )
+        pref_support_edge_count = support_stats["edge_count"]
+        pref_support_node_count = support_stats["node_count"]
+        pref_support_component_count = support_stats["component_count"]
+        pref_support_edge_fraction = support_stats["edge_fraction"]
+        pref_support_node_fraction = support_stats["node_fraction"]
+
+        with torch.no_grad():
+            (
+                pref_laplacian_min_eig,
+                pref_laplacian_max_eig,
+                pref_laplacian_cond,
+                pref_laplacian_method,
+            ) = pref_projector.estimate_laplacian_spectrum()
+
         if pref_projector.condition_number is not None:
             logger.info(f"Preference projector A_eff condition number: {pref_projector.condition_number:.3e}")
+        if pref_support_edge_fraction is not None:
+            logger.info(
+                "Preference support: edges=%d (%.1f%%) nodes=%d (%.1f%%) components=%d",
+                int(pref_support_edge_count),
+                100.0 * pref_support_edge_fraction,
+                int(pref_support_node_count),
+                100.0 * pref_support_node_fraction,
+                int(pref_support_component_count),
+            )
+        if pref_laplacian_min_eig is not None and pref_laplacian_max_eig is not None:
+            logger.info(
+                "Preference Laplacian spectrum (%s): min=%.3e max=%.3e cond=%.3e",
+                pref_laplacian_method,
+                pref_laplacian_min_eig,
+                pref_laplacian_max_eig,
+                pref_laplacian_cond,
+            )
 
         with torch.no_grad():
             pref_matrix = components["cost_model"].preference_matrix_p
@@ -1329,10 +1338,10 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
             cost_model.phi_ac_dist.copy_(phi_ac.to(device=cost_model.phi_ac_dist.device, dtype=cost_model.phi_ac_dist.dtype))
             cost_model.phi_time.copy_(phi_time.to(device=cost_model.phi_time.device, dtype=cost_model.phi_time.dtype))
     
-    # 3. Initialize tracking variables and handle checkpoint resumption
+    # 3. Initialize tracking variables
     gradient_queue: List[Dict[str, torch.Tensor]] = []
     pref_grad_queue: List[torch.Tensor] = []
-    iteration = 0
+    iteration = 1
     converged = False
     training_history = {
         'iterations': [],
@@ -1343,40 +1352,8 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         'failed_flights': []
     }
     
-    # Check for existing checkpoint and resume if requested
-    if batch_config.resume_from_checkpoint:
-        logger.info("Checkpoint resumption is enabled. Searching for existing checkpoints...")
-        logger.info(f"Checkpoint search directory: {output_dir}")
-        logger.info(f"Expected checkpoint pattern: checkpoint_iter_<number>.pt")
-        
-        latest_checkpoint = find_latest_checkpoint(output_dir)
-        if latest_checkpoint:
-            try:
-                iteration, training_history = load_checkpoint(
-                    latest_checkpoint, components['cost_model'], optimizer, device
-                )
-                logger.info(f"✓ Successfully resumed training from checkpoint. Starting at iteration {iteration}")
-                if pref_enabled and pref_projector is not None:
-                    with torch.no_grad():
-                        pref_matrix = components["cost_model"].preference_matrix_p
-                        p_e = pref_matrix[pref_edge_u, pref_edge_v].to(dtype=pref_projector.X.dtype)
-                        p_e = pref_projector.project(p_e)
-                        pref_matrix.zero_()
-                        pref_matrix[pref_edge_u, pref_edge_v] = p_e.to(dtype=pref_matrix.dtype)
-                elif batch_config.disable_edge_preference and components["cost_model_version"] == "lin_disent":
-                    with torch.no_grad():
-                        components["cost_model"].preference_matrix_p.zero_()
-            except Exception as e:
-                logger.warning(f"✗ Failed to load checkpoint {latest_checkpoint}: {e}")
-                logger.info("Starting training from scratch")
-                iteration = 1  # Start from iteration 1 for fresh training
-        else:
-            logger.info("No existing checkpoints found. Starting training from scratch")
-            logger.info(f"Note: Checkpoints will be saved to {output_dir}")
-            iteration = 1  # Start from iteration 1 for fresh training
-    else:
-        logger.info("Checkpoint resumption disabled. Starting training from scratch")
-        iteration = 1  # Start from iteration 1 for fresh training
+    logger.info("Starting training from scratch")
+    logger.info(f"Checkpoints will be saved to {output_dir}")
     
     # 4. Set random seed for deterministic behavior if specified
     if batch_config.random_seed is not None:
@@ -1559,6 +1536,8 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                     converged = True
 
             pref_grad_norm = None
+            pref_grad_avg_norm = None
+            pref_grad_proj_ratio = None
             pref_violation_features = None
             pref_violation_cycle = None
             pref_grad_cycle_residual = None
@@ -1580,7 +1559,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                     n_expected_sum_e = torch.zeros_like(pref_time_fallback_e)
                     t_expected_sum_e = torch.zeros_like(pref_time_fallback_e)
 
-                eps = 1e-12
+                eps = _EPS
                 time_support = n_expected_sum_e > eps
                 x_time_batch = pref_time_fallback_e.clone()
                 if time_support.any():
@@ -1715,7 +1694,9 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                     pref_matrix.zero_()
                     pref_matrix[pref_edge_u, pref_edge_v] = p_e.to(dtype=pref_matrix.dtype)
 
+                pref_grad_avg_norm = float(torch.linalg.norm(pref_grad_avg).item())
                 pref_grad_norm = float(torch.linalg.norm(pref_grad_proj).item())
+                pref_grad_proj_ratio = pref_grad_norm / (pref_grad_avg_norm + 1e-12)
                 pref_violation_features = float(pref_projector.violation_features(p_e).item())
                 pref_violation_cycle = float(pref_projector.violation_cycle(p_e).item())
 
@@ -1729,8 +1710,9 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                 pref_mean = float(p_support.mean().item())
 
                 logger.info(
-                    "Preference update: grad_norm=%.6f | features=%.3e | cycle=%.3e | min=%.6f max=%.6f mean=%.6f",
+                    "Preference update: grad_norm=%.6f | proj_ratio=%.6f | features=%.3e | cycle=%.3e | min=%.6f max=%.6f mean=%.6f",
                     pref_grad_norm,
+                    pref_grad_proj_ratio,
                     pref_violation_features,
                     pref_violation_cycle,
                     pref_min,
@@ -1784,6 +1766,18 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
 
                 if pref_enabled and pref_grad_norm is not None:
                     tensorboard_writer.add_scalar('Preferences/Grad_Norm_L2', pref_grad_norm, iteration)
+                    if pref_grad_avg_norm is not None:
+                        tensorboard_writer.add_scalar(
+                            'Preferences/RawGrad_Norm_L2',
+                            pref_grad_avg_norm,
+                            iteration,
+                        )
+                    if pref_grad_proj_ratio is not None:
+                        tensorboard_writer.add_scalar(
+                            'Preferences/Grad_Proj_Ratio',
+                            pref_grad_proj_ratio,
+                            iteration,
+                        )
                     if pref_grad_cycle_residual is not None:
                         tensorboard_writer.add_scalar(
                             'Preferences/RawGrad_CycleResidual_L2',
@@ -1839,6 +1833,44 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
                         tensorboard_writer.add_scalar(
                             'Common/Feature_Cycle_Violation_Cyc',
                             common_cycle_violation_cyc,
+                            iteration,
+                        )
+
+                if pref_enabled:
+                    if pref_laplacian_min_eig is not None:
+                        tensorboard_writer.add_scalar(
+                            'Preferences/Laplacian_MinEig_Est',
+                            pref_laplacian_min_eig,
+                            iteration,
+                        )
+                    if pref_laplacian_max_eig is not None:
+                        tensorboard_writer.add_scalar(
+                            'Preferences/Laplacian_MaxEig_Est',
+                            pref_laplacian_max_eig,
+                            iteration,
+                        )
+                    if pref_laplacian_cond is not None:
+                        tensorboard_writer.add_scalar(
+                            'Preferences/Laplacian_Cond_Est',
+                            pref_laplacian_cond,
+                            iteration,
+                        )
+                    if pref_support_edge_fraction is not None:
+                        tensorboard_writer.add_scalar(
+                            'Preferences/Laplacian_Support_Edge_Fraction',
+                            pref_support_edge_fraction,
+                            iteration,
+                        )
+                    if pref_support_node_fraction is not None:
+                        tensorboard_writer.add_scalar(
+                            'Preferences/Laplacian_Support_Node_Fraction',
+                            pref_support_node_fraction,
+                            iteration,
+                        )
+                    if pref_support_component_count is not None:
+                        tensorboard_writer.add_scalar(
+                            'Preferences/Laplacian_Support_Components',
+                            pref_support_component_count,
                             iteration,
                         )
                 
@@ -2076,7 +2108,7 @@ def _load_training_params(config_path: str) -> Dict[str, Any]:
 def main():
     """Command-line interface for the batch SGD pipeline."""
     parser = argparse.ArgumentParser(
-        description="Batch SGD Pipeline for Maximum Entropy Inverse Learning with automatic checkpoint resumption"
+        description="Batch SGD Pipeline for Maximum Entropy Inverse Learning"
     )
     
     parser.add_argument(
@@ -2125,11 +2157,6 @@ def main():
         type=int,
         default=1,
         help="Interval for logging to TensorBoard (default: 1, log every iteration)"
-    )
-    parser.add_argument(
-        "--no-resume",
-        action="store_true",
-        help="Disable automatic resume from checkpoint (default: resume is enabled)"
     )
     parser.add_argument(
         "--randomize",
@@ -2201,7 +2228,6 @@ def main():
         tensorboard_run_name=args.tensorboard_run_name,
         clear_tensorboard_logs=args.clear_tensorboard_logs,
         log_interval=args.log_interval,
-        resume_from_checkpoint=not args.no_resume,  # Resume by default unless --no-resume is specified
         randomized=args.randomize,
         random_seed=getattr(args, 'random_seed', None),  # Handle hyphenated argument name
         batch_shuffling=args.batch_shuffling,
