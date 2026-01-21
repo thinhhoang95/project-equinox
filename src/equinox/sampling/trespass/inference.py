@@ -477,6 +477,7 @@ def sample_paths(
     n_samples: int,
     gamma: float,
     policy: str,
+    initial_k_policy: str = "uniform",
     seed: Optional[int] = None,
     max_steps: int = 200,
     initial_rho: Optional[int] = None,
@@ -505,6 +506,7 @@ def sample_paths(
             gamma=gamma,
             max_steps=max_steps,
             policy=policy,
+            initial_k_policy=initial_k_policy,
             rng=rng,
         )
         trajectories.append(trajectory)

@@ -20,6 +20,7 @@ def sample_tres_trajectory(
     gamma: float = 0.1, # this temperature should also be the same as the temperature used in the backward_svi
     max_steps: int = 1000, # Max steps to prevent infinite loops
     policy: str = "sample", # "sample" or "greedy"
+    initial_k_policy: str = "uniform", # "uniform" or "zb" (weight by exp(-V_bwd/gamma))
     rng: Optional[np.random.Generator] = None,
 ):
     """
@@ -74,11 +75,40 @@ def sample_tres_trajectory(
     if policy not in {"sample", "greedy"}:
         raise ValueError(f"Unsupported policy '{policy}'. Use 'sample' or 'greedy'.")
 
-    # Uniformly sample initial_k from the valid ones
-    if rng is None:
-        current_k = np.random.choice(valid_initial_ks)
+    if initial_k_policy not in {"uniform", "zb"}:
+        raise ValueError(
+            f"Unsupported initial_k_policy '{initial_k_policy}'. Use 'uniform' or 'zb'."
+        )
+
+    if initial_k_policy == "uniform":
+        if rng is None:
+            current_k = np.random.choice(valid_initial_ks)
+        else:
+            current_k = rng.choice(valid_initial_ks)
     else:
-        current_k = rng.choice(valid_initial_ks)
+        if gamma <= 0:
+            raise ValueError("gamma must be positive when initial_k_policy='zb'.")
+        v_candidates = np.array(
+            [
+                soft_cost_to_go[current_node_idx, k, initial_rho, initial_phase].item()
+                for k in valid_initial_ks
+            ],
+            dtype=np.float64,
+        )
+        logits = -v_candidates / float(gamma)
+        logits = logits - np.max(logits)
+        probs = np.exp(logits)
+        prob_sum = float(np.sum(probs))
+        if not np.isfinite(prob_sum) or prob_sum <= 0:
+            raise ValueError(
+                "Invalid initial-k probabilities under initial_k_policy='zb'. "
+                f"sum={prob_sum}"
+            )
+        probs = probs / prob_sum
+        if rng is None:
+            current_k = int(np.random.choice(valid_initial_ks, p=probs))
+        else:
+            current_k = int(rng.choice(valid_initial_ks, p=probs))
     current_rho = initial_rho
     current_phase = initial_phase
 

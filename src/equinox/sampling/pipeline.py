@@ -331,6 +331,7 @@ def compute_4d_path_for_dataset(
     gamma: Optional[float] = None,
     n_samples: int = 1,
     policy: str = "sample",
+    initial_k_policy: str = "uniform",
     return_4d: bool = True,
     seed: Optional[int] = None,
     device: Optional[Union[str, torch.device]] = None,
@@ -424,6 +425,7 @@ def compute_4d_path_for_dataset(
         n_samples=n_samples,
         gamma=effective_gamma,
         policy=policy,
+        initial_k_policy=initial_k_policy,
         seed=seed,
     )
 
@@ -505,6 +507,7 @@ def compute_4d_path_for_flight(
     gamma: Optional[float] = None,
     n_samples: int = 1,
     policy: str = "sample",
+    initial_k_policy: str = "uniform",
     return_4d: bool = True,
     seed: Optional[int] = None,
     device: Optional[Union[str, torch.device]] = None,
@@ -695,6 +698,7 @@ def compute_4d_path_for_flight(
         n_samples=n_samples,
         gamma=effective_gamma,
         policy=policy,
+        initial_k_policy=initial_k_policy,
         seed=seed,
         initial_rho=initial_rho,
         initial_phase=initial_phase,
