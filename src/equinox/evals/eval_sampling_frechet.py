@@ -1,12 +1,12 @@
 """Evaluate sampled routes with discrete Frechet distance.
 
 Usage example:
-    /Users/thinhhoang/miniforge3/envs/equinox/bin/python -m equinox.evals.eval_sampling_frechet \\
-        --case-dir data/cases/LGAV_LFPG \\
-        --results-dir gauge_pot_dis \\
-        --n-samples 200 \\
-        --policy sample \\
-        --resample-spacing-nm 25 \\
+    /Users/thinhhoang/miniforge3/envs/equinox/bin/python -m equinox.evals.eval_sampling_frechet \
+        --case-dir data/cases/LGAV_LFPG \
+        --results-dir results_full \
+        --n-samples 150 \
+        --policy sample \
+        --resample-spacing-nm 25 \
         --device cpu
 
 Metric notes (all distances are in nautical miles; smaller is better):
