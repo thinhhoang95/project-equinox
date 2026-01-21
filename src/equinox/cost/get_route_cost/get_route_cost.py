@@ -103,7 +103,7 @@ def get_route_cost(
             continue
             
         # Extract transition parameters
-        u_wp_id, k_u_idx, rho_u_idx, alt_u, phase_u, v_wp_id, k_v_idx, rho_v_idx, alt_v, phase_v = transition
+        u_wp_id, k_u_idx, rho_u_idx, alt_u, phase_u, v_wp_id, k_v_idx, rho_v_idx, alt_v, phase_v = transition[:10]
         
         # Calculate ETA values
         eta_u = _calculate_eta_from_time_bin(k_u_idx, time_params)

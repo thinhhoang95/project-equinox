@@ -167,8 +167,14 @@ def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: i
                     from src.equinox.dp.trespass.thinning import thin_closures
                     thinned_transitions = thin_closures(
                         # Option A: infer max_rho directly from the closure tuples.
-                        source_node_idx, goal_node_idx, None,
-                        components['graph'], backward_transitions
+                        source_node_idx,
+                        goal_node_idx,
+                        None,
+                        components['graph'],
+                        backward_transitions,
+                        wallclock_time_bin_k_tolerance_s=components.get("delta_t_seconds"),
+                        delta_t_seconds_wall_clock=components.get("delta_t_seconds"),
+                        include_wait_edges_in_output=True,
                     )
                     
                     # Save for future use
@@ -511,6 +517,7 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
     logger.info(f"Loading configuration from {config_path}")
     config = RunConfiguration.load_from_yaml(config_path)
     components = config.initialize_all_components()
+    components["delta_t_seconds"] = config.delta_t_seconds
     
     device = torch.device(batch_config.device if torch.cuda.is_available() else "cpu")
     components['device'] = device

@@ -69,7 +69,7 @@ def _display_output_summary(feasible_transitions_list: list, processing_time: fl
     altitude_ranges = []
     
     for transition in feasible_transitions_list:
-        _, _, _, alt_from, phase_from, _, _, _, alt_to, phase_to = transition
+        _, _, _, alt_from, phase_from, _, _, _, alt_to, phase_to = transition[:10]
         
         # Count phases
         phase_names = ["CLIMB", "CRUISE", "DESCENT"]

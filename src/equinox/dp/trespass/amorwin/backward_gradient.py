@@ -4,9 +4,10 @@ import os
 import numpy as np
 from collections import defaultdict
 
+from equinox.dp.trespass.transition_utils import get_base_transition
 
 def backward_gradient_pass(
-    state_transitions: list[tuple[int, int, int, float, int, int, int, float, int, int]],
+    state_transitions: list[tuple],
     avg_tailwind_knots_per_transition: torch.Tensor,
     V_f: torch.Tensor,
     V_b: torch.Tensor,
@@ -105,8 +106,8 @@ def backward_gradient_pass(
         print("Pass 1: Computing link traversal likelihoods...")
     
     with torch.no_grad(): # No gradients needed for this pass
-        for i, trans in enumerate(state_transitions):
-            u_idx, k_u, rho_u, _, phase_u, v_idx, k_v, rho_v, _, phase_v = trans
+    for i, trans in enumerate(state_transitions):
+            u_idx, k_u, rho_u, _, phase_u, v_idx, k_v, rho_v, _, phase_v = get_base_transition(trans)
 
             v_f_u = V_f[u_idx, k_u, rho_u, phase_u]
             v_b_v = V_b[v_idx, k_v, rho_v, phase_v]
@@ -182,7 +183,7 @@ def backward_gradient_pass(
 
                 for i, trans_master_idx in enumerate(transition_indices_for_link):
                     trans = state_transitions[trans_master_idx]
-                    _u_idx, k_u, rho_u, _, phase_u, _v_idx, k_v, rho_v, _, phase_v = trans
+                    _u_idx, k_u, rho_u, _, phase_u, _v_idx, k_v, rho_v, _, phase_v = get_base_transition(trans)
                     v_f_u = V_f[_u_idx, k_u, rho_u, phase_u]
                     v_b_v = V_b[_v_idx, k_v, rho_v, phase_v]
 

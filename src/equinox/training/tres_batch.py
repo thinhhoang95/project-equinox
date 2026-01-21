@@ -365,8 +365,14 @@ def process_flight(flight_series, config, components, case_name, batch_idx, outp
         goal_node_idx = node_to_idx[flight_config.goal_node]
         thinned_transitions = thin_closures(
             # Option A: infer max_rho directly from the closure tuples.
-            source_node_idx, goal_node_idx, None,
-            flight_components['graph'], state_closure_list
+            source_node_idx,
+            goal_node_idx,
+            None,
+            flight_components['graph'],
+            state_closure_list,
+            wallclock_time_bin_k_tolerance_s=flight_config.delta_t_seconds,
+            delta_t_seconds_wall_clock=flight_config.delta_t_seconds,
+            include_wait_edges_in_output=True,
         )
         
         thinned_filename = f"CLSR_{flight_id}_{takeoff_ts}"

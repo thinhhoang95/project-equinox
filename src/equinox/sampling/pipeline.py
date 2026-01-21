@@ -622,6 +622,9 @@ def compute_4d_path_for_flight(
         max_rho_val,
         components["graph"],
         closure_list,
+        wallclock_time_bin_k_tolerance_s=config.delta_t_seconds,
+        delta_t_seconds_wall_clock=config.delta_t_seconds,
+        include_wait_edges_in_output=True,
     )
     if not thinned_transitions:
         raise RuntimeError("Thinning removed all transitions.")

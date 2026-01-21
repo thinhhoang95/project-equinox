@@ -49,7 +49,16 @@ def thin_batch(batch_dir: str, config_path: str):
             print(f"  Loaded {len(closure_list)} closures.")
 
             # Option A: infer max_rho directly from the closure tuples.
-            thinned_closures = thin_closures(origin_node_idx, goal_node_idx, None, G, closure_list)
+            thinned_closures = thin_closures(
+                origin_node_idx,
+                goal_node_idx,
+                None,
+                G,
+                closure_list,
+                wallclock_time_bin_k_tolerance_s=config.delta_t_seconds,
+                delta_t_seconds_wall_clock=config.delta_t_seconds,
+                include_wait_edges_in_output=True,
+            )
             
             print(f"  Thinned to {len(thinned_closures)} closures.")
 

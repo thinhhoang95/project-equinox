@@ -2089,7 +2089,16 @@ def validate_implementation():
     
     # Check thin_closures signature
     sig = inspect.signature(thin_closures)
-    expected_params = ['source_node_idx', 'goal_node_idx', 'max_rho', 'G', 'closures']
+    expected_params = [
+        'source_node_idx',
+        'goal_node_idx',
+        'max_rho',
+        'G',
+        'closures',
+        'wallclock_time_bin_k_tolerance_s',
+        'delta_t_seconds_wall_clock',
+        'include_wait_edges_in_output',
+    ]
     actual_params = list(sig.parameters.keys())
     if actual_params == expected_params:
         logger.info("✓ thin_closures function signature is correct")

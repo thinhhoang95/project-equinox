@@ -11,12 +11,13 @@ from equinox.route.get_wind import get_wind
 # For type hinting, actual instances are passed as arguments
 from equinox.cost.cost_rev1 import CostRev1 
 from equinox.wind.wind_model import WindModel
+from equinox.dp.trespass.transition_utils import get_base_transition
 
 # Conversion factor from meters per second to knots
 MPS_TO_KNOTS = 1.94384
 
 def forward_soft_value_iteration(
-    state_transitions: list[tuple[int, int, int, int, float, int, int, int, int, float]],
+    state_transitions: list[tuple],
     # The tuple contains:
     # u_idx: index of the source waypoint
     # k_u_idx: wall-clock time bin index at u_idx
@@ -62,7 +63,7 @@ def forward_soft_value_iteration(
     # We assume a uniform distribution over these valid starting states.
     actual_origin_states = set()
     for st_tuple in state_transitions:
-        u_idx, k_u, rho_u, phase_u, _, _, _, _, _, _ = st_tuple
+        u_idx, k_u, rho_u, _, phase_u, _, _, _, _, _ = get_base_transition(st_tuple)
         if u_idx == origin_node_idx:
             actual_origin_states.add((k_u, rho_u, phase_u))
 
@@ -88,7 +89,7 @@ def forward_soft_value_iteration(
 
     for i, transition_elements in enumerate(sorted_transitions):
         u_idx, k_u, rho_u, u_alt_ft, phase_u, \
-        v_idx, k_v, rho_v, _, phase_v = transition_elements
+        v_idx, k_v, rho_v, _, phase_v = get_base_transition(transition_elements)
         # v_alt_ft is part of the state s_v definition but not directly used for cost(u,v) calculation here.
 
         Z_s_u = Z_val[u_idx, k_u, rho_u, phase_u].item() # .item() to get scalar

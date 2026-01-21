@@ -13,6 +13,7 @@ from equinox.helpers.datetimeh import datestr_to_seconds_since_midnight
 from equinox.wind.wind_model import WindModel
 
 MPS_TO_KNOTS = 1.9438444924406 # 1.9438444924406 m/s to kts
+EPS_BIN_EPS = 1e-9  # small guard against float error
 
 # Phase constants as indices
 PHASE_CLIMB = CLIMB # Typically 0
@@ -25,7 +26,7 @@ def _round_to_bin_idx(value: float, max_bin_idx: int) -> int:
     """Safely rounds a float value to a valid bin index."""
     if torch.isnan(torch.tensor(value)) or torch.isinf(torch.tensor(value)):
         return -1 # Invalid index
-    idx = int(floor(value))
+    idx = int(floor(value + EPS_BIN_EPS))
     if not (0 <= idx <= max_bin_idx): # Max bin index is inclusive
         return -1
     return idx
@@ -99,13 +100,15 @@ def tres_backward(
     list[tuple]
         A list of feasible transition tuples. Each tuple is in the format:
         (node_id_from, eta_bin_from, rho_bin_from, alt_from_rounded_ft, phase_from,
-         node_id_to, eta_bin_to, rho_bin_to, alt_to_rounded_ft, phase_to)
+         node_id_to, eta_bin_to, rho_bin_to, alt_to_rounded_ft, phase_to,
+         eta_from_abs_s, eta_to_abs_s)
         where:
         - node_id_from/to: str, waypoint identifier
         - eta_bin_from/to: int, wall-clock time bin index
         - rho_bin_from/to: int, remaining climb time bin index
         - alt_from/to_rounded_ft: int, altitude in feet, rounded
         - phase_from/to: int, flight phase (0:CLIMB, 1:CRUISE, 2:DESCENT)
+        - eta_from/to_abs_s: float, seconds since midnight (wall-clock absolute)
 
     Raises
     ------
@@ -300,7 +303,8 @@ def tres_backward(
                         # Record feasible transition
                         transition = (
                             u_idx, k_u_std_idx, rho_u_std_idx, round(alt_u_std), phase_u_std,
-                            v_idx, k_v_idx, rho_v_idx, round(alt_v_val), phi_v_idx
+                            v_idx, k_v_idx, rho_v_idx, round(alt_v_val), phi_v_idx,
+                            eta_u_std_ssm, eta_v_ssm_val,
                         )
                         feasible_transitions_list.append(transition)
 
@@ -393,7 +397,8 @@ def tres_backward(
                         # Record feasible transition
                         transition = (
                             u_idx, k_u_trans_idx, rho_u_trans_idx, round(alt_u_trans), phase_u_trans,
-                            v_idx, k_v_idx, rho_v_idx, round(alt_v_val), phi_v_idx
+                            v_idx, k_v_idx, rho_v_idx, round(alt_v_val), phi_v_idx,
+                            eta_u_trans_ssm_val, eta_v_ssm_val,
                         )
                         feasible_transitions_list.append(transition)
                         

@@ -5,11 +5,13 @@ from equinox.route.get_wind import get_wind
 # For type hinting, actual instances are passed as arguments
 from equinox.wind.wind_model import WindModel
 import networkx as nx
+
+from equinox.dp.trespass.transition_utils import get_base_transition
 # Conversion factor from meters per second to knots
 MPS_TO_KNOTS = 1.94384
 
 def backward_soft_value_iteration(
-    state_transitions: list[tuple[int, int, int, float, int, int, int, float, int, int]], # Note: types for alt and phase might be swapped in usage
+    state_transitions: list[tuple], # Note: types for alt and phase might be swapped in usage
     # The tuple, based on apparent usage in forward_svi (unpacking on L262 fwd_svi):
     # (u_idx, k_u, rho_u, u_alt_ft, phase_u,
     #  v_idx, k_v, rho_v, v_alt_ft, phase_v)
@@ -225,7 +227,7 @@ def backward_soft_value_iteration(
         # trans[0]=u_idx, trans[1]=k_u, trans[2]=rho_u, trans[3]=u_alt_ft, trans[4]=phase_u
         # trans[5]=v_idx, trans[6]=k_v, trans[7]=rho_v, trans[8]=v_alt_ft, trans[9]=phase_v
         u_idx, k_u, rho_u, u_alt_ft, phase_u, \
-        v_idx, k_v, rho_v, v_alt_ft, phase_v = trans
+        v_idx, k_v, rho_v, v_alt_ft, phase_v = get_base_transition(trans)
 
         # a) Pull the current log‐mass at v (the "successor" state in backward pass)
         L_s_v = L_val[v_idx, k_v, rho_v, phase_v]

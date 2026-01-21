@@ -64,7 +64,16 @@ def process_batch(batch_dir: str, output_filename: str, config: RunConfiguration
     goal_node_idx = node_to_idx[config.goal_node]
 
     # Option A: infer max_rho directly from the closure tuples.
-    thinned_transitions = thin_closures(source_node_idx, goal_node_idx, None, G, all_transitions)
+    thinned_transitions = thin_closures(
+        source_node_idx,
+        goal_node_idx,
+        None,
+        G,
+        all_transitions,
+        wallclock_time_bin_k_tolerance_s=config.delta_t_seconds,
+        delta_t_seconds_wall_clock=config.delta_t_seconds,
+        include_wait_edges_in_output=True,
+    )
     
     print(f"Thinned down to {len(thinned_transitions)} transitions.")
 

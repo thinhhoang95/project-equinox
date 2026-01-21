@@ -11,11 +11,13 @@ from equinox.route.get_wind import get_wind
 # For type hinting, actual instances are passed as arguments
 from equinox.wind.wind_model import WindModel
 import networkx as nx
+
+from equinox.dp.trespass.transition_utils import get_base_transition
 # Conversion factor from meters per second to knots
 MPS_TO_KNOTS = 1.94384
 
 def forward_soft_value_iteration(
-    state_transitions: list[tuple[int, int, int, float, int, int, int, int, float, int]],
+    state_transitions: list[tuple],
     # The tuple contains, in this exact order:
     # (u_idx, k_u_idx, rho_u_idx, u_alt_ft, phase_u,
     #  v_idx, k_v_idx, rho_v_idx, v_alt_ft, phase_v)
@@ -219,7 +221,7 @@ def forward_soft_value_iteration(
     # 2. Identify which (k_u, rho_u, phase_u) on the origin_node are actually used.
     actual_origin_states = set()
     for st in state_transitions:
-        u_idx, k_u, rho_u, u_alt_ft, phase_u, v_idx, k_v, rho_v, v_alt_ft, phase_v = st
+        u_idx, k_u, rho_u, u_alt_ft, phase_u, v_idx, k_v, rho_v, v_alt_ft, phase_v = get_base_transition(st)
         if u_idx == origin_node_idx:
             actual_origin_states.add((k_u, rho_u, phase_u))
 
@@ -278,7 +280,7 @@ def forward_soft_value_iteration(
     for i, trans in enumerate(sorted_transitions):
         # Unpack exactly according to our documented order:
         u_idx, k_u, rho_u, u_alt_ft, phase_u, \
-        v_idx, k_v, rho_v, v_alt_ft, phase_v = trans
+        v_idx, k_v, rho_v, v_alt_ft, phase_v = get_base_transition(trans)
 
         # a) Pull the current log‐mass at u
         L_s_u = L_val[u_idx, k_u, rho_u, phase_u]
