@@ -1,3 +1,114 @@
+"""
+Thinning module for pruning closure/transition tuples to valid paths.
+
+This module implements state space thinning for dynamic programming transitions in the
+TRESPASS (Trajectory REasoning with State Space Pruning and Sampling) system. It prunes
+transitions (closures) to keep only those that are part of valid paths from a source
+configuration to a goal configuration, optionally merging adjacent time states within
+a tolerance window.
+
+Key Concepts:
+-------------
+- **State**: A 5-tuple (waypoint_idx, k_idx, rho_idx, altitude, phase_idx) representing
+  a flight configuration at a specific waypoint, time bin, remaining climb time bin,
+  altitude, and flight phase.
+  
+- **Closure/Transition**: A tuple representing a state transition. The base format is a
+  10-tuple: (u_idx, k_u, rho_u, alt_u, phase_u, v_idx, k_v, rho_v, alt_v, phase_v),
+  where u and v are the source and destination states. Optionally, closures may include
+  absolute ETA times as fields 11 and 12: (..., eta_u_abs_s, eta_v_abs_s).
+
+- **Thinning**: The process of filtering closures to keep only transitions that are part
+  of valid paths from origin states (at source_node_idx with rho=max_rho) to goal states
+  (at goal_node_idx).
+
+- **Morphing**: The process of merging adjacent k (time bin) states at the same waypoint,
+  rho, altitude, and phase when their ETA ranges are within a tolerance window. This
+  reduces state space size by canonicalizing time bins.
+
+Main Function:
+-------------
+`thin_closures()`: Prunes closures to valid paths, optionally with k-state morphing.
+
+Usage Examples:
+--------------
+Basic usage without morphing:
+
+    >>> import networkx as nx
+    >>> from equinox.dp.trespass.thinning import thin_closures
+    >>> 
+    >>> G = nx.DiGraph()  # Graph structure (used for validation)
+    >>> closures = [
+    ...     (0, 0, 2, 0, 0, 1, 1, 1, 100, 1),  # Transition from waypoint 0 to 1
+    ...     (1, 1, 1, 100, 1, 2, 2, 0, 200, 1),  # Transition from waypoint 1 to 2
+    ...     (0, 0, 2, 0, 0, 3, 1, 1, 100, 1),  # Dead-end transition
+    ... ]
+    >>> 
+    >>> thinned = thin_closures(
+    ...     source_node_idx=0,
+    ...     goal_node_idx=2,
+    ...     max_rho=2,
+    ...     G=G,
+    ...     closures=closures,
+    ...     wallclock_time_bin_k_tolerance_s=0.0,  # No morphing
+    ... )
+    >>> # Returns only closures on valid paths: [(0,0,2,0,0,1,1,1,100,1), (1,1,1,100,1,2,2,0,200,1)]
+
+With morphing to merge adjacent k states:
+
+    >>> closures_with_eta = [
+    ...     (0, 0, 1, 0, 0, 1, 1, 0, 100, 1, 0.0, 600.0),
+    ...     (0, 0, 1, 0, 0, 1, 2, 0, 100, 1, 0.0, 610.0),  # k=2 within tolerance of k=1
+    ...     (1, 2, 0, 100, 1, 2, 3, 0, 100, 1, 610.0, 1200.0),
+    ... ]
+    >>> 
+    >>> thinned = thin_closures(
+    ...     source_node_idx=0,
+    ...     goal_node_idx=2,
+    ...     max_rho=1,
+    ...     G=G,
+    ...     closures=closures_with_eta,
+    ...     wallclock_time_bin_k_tolerance_s=20.0,  # 20 second tolerance
+    ...     delta_t_seconds_wall_clock=600.0,
+    ... )
+    >>> # k=2 states are morphed to k=1, reducing state space
+
+Input/Output Format:
+-------------------
+Input:
+    - closures: List of transition tuples, each with at least 10 fields:
+      (u_idx, k_u, rho_u, alt_u, phase_u, v_idx, k_v, rho_v, alt_v, phase_v)
+      Optional fields 11-12: (eta_u_abs_s, eta_v_abs_s)
+    
+    - source_node_idx: Waypoint index where valid paths start (must have rho=max_rho)
+    - goal_node_idx: Waypoint index where valid paths end
+    - max_rho: Maximum remaining climb time bin index (None to infer from closures)
+    - G: NetworkX DiGraph (used for validation, typically the route graph)
+    - wallclock_time_bin_k_tolerance_s: Tolerance for merging adjacent k states (seconds)
+    - delta_t_seconds_wall_clock: Time bin duration for ETA approximation
+
+Output:
+    - List of closure tuples (same format as input) that are part of valid paths.
+      If morphing is enabled, k indices may be canonicalized to earlier values.
+
+Example Closure Tuple Structure:
+--------------------------------
+    # Base 10-tuple:
+    closure = (3, 56, 0, 32653, 2, 54, 60, 0, 0, 2)
+    #      u: (3, 56, 0, 32653, 2) -> v: (54, 60, 0, 0, 2)
+    #      waypoint 3, k=56, rho=0, alt=32653, phase=2
+    #      -> waypoint 54, k=60, rho=0, alt=0, phase=2
+    
+    # With ETA times (12-tuple):
+    closure_with_eta = (3, 56, 0, 32653, 2, 54, 60, 0, 0, 2, 33600.0, 36000.0)
+    #      eta_u_abs_s=33600.0, eta_v_abs_s=36000.0
+
+Helper Functions:
+---------------
+- `infer_max_rho_from_closures()`: Extracts maximum rho index from closure list
+- Internal functions handle ETA sanitization, state grouping, and graph reachability
+"""
+
 import math
 import networkx as nx
 from collections import defaultdict

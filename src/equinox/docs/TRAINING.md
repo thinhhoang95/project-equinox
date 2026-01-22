@@ -25,11 +25,12 @@ There are two stages in the repo:
 - Pre-training utilities live under `src/equinox/training/prep/`.
 - There is also a convenience runner in `src/equinox/training/prep_all.py` (note: it uses hard-coded paths and is meant as a local script rather than a general CLI).
 
-#### Stage A — precompute *feasible state transitions* and *wind*
+#### Stage A — precompute *feasible state transitions*, snapped routes, and *wind*
 This is done by `src/equinox/training/tres_batch.py` using:
 - forward TRES: `src/equinox/dp/trespass/tres_forward.py`
 - backward TRES: `src/equinox/dp/trespass/tres_backward.py`
 - thinning: `src/equinox/dp/trespass/thinning.py`
+- route snapping (Viterbi): `src/equinox/training/tres_snapping.py`
 - wind amortization: wind model’s `get_average_tailwind_on_edges_knots`
 
 This stage writes, per flight, files like:
@@ -132,17 +133,40 @@ Even after backward TRES, you may have a lot of dead-end state transitions. `thi
 - reachable from any valid origin state, and
 - able to reach any goal state
 
-```6:93:/Volumes/CrucialX/project-equinox/src/equinox/dp/trespass/thinning.py
-def thin_closures(source_node_idx: int, goal_node_idx: int, max_rho: int, G: nx.DiGraph, closures: list[tuple[...] ]):
-    # build state-graph, compute descendants from origins and from goals (on reversed graph),
-    # take intersection, and filter closures to those whose endpoints are both valid.
+It also **morphs adjacent wall-clock bins** (when enabled): if two states share waypoint/phase/rho/alt and their ETA ranges are within `wallclock_time_bin_k_tolerance_s`, they are merged onto the earlier k-bin. This tolerance is *the* wall-clock time bin tolerance for TRES pruning.
+
+**What controls the tolerance**
+- In `tres_batch.py`, we pass `wallclock_time_bin_k_tolerance_s=flight_config.delta_t_seconds`, so the tolerance matches the wall-clock bin width.
+- If `wallclock_time_bin_k_tolerance_s` is `None`, `thin_closures` falls back to `delta_t_seconds_wall_clock` (and if that is also `None`, the tolerance becomes `0.0`, i.e., no morphing).
+- In other words, **`delta_t_seconds` is the primary knob** that determines how aggressively adjacent k-bins are merged during thinning.
+
+```352:375:/Volumes/CrucialX/project-equinox/src/equinox/dp/trespass/thinning.py
+def thin_closures(
+    source_node_idx: int,
+    goal_node_idx: int,
+    max_rho: Optional[int],
+    G: nx.DiGraph,
+    closures: list[tuple],
+    wallclock_time_bin_k_tolerance_s: Optional[float] = None,
+    delta_t_seconds_wall_clock: Optional[float] = None,
+    include_wait_edges_in_output: bool = False,
+):
+    # Build state graph, then filter to states on origin→goal paths.
+    # If wallclock_time_bin_k_tolerance_s > 0, morph nearby k bins by ETA overlap.
 ```
 
 **Why this pruning matters**
 - Soft value iteration and gradient computation cost scale with “number of transitions”.
 - Thinning typically reduces that by removing unreachable branches or branches that can’t reach the goal.
 
-#### 1.4 Wind amortization: precompute tailwind per *state transition*
+#### 1.4 Route snapping: map observed routes onto the feasible graph
+After thinning, `tres_batch.py` builds a feasible waypoint graph from the thinned transitions and uses Viterbi matching to snap each observed route to feasible edges. The output is written to:
+
+- `all_routes_feasibly_snapped.csv`
+
+Those snapped routes are what the training loop uses to compute empirical counts.
+
+#### 1.5 Wind amortization: precompute tailwind per *state transition*
 This is what makes training fast: instead of re-interpolating ERA5 wind during learning, you store a tensor `avg_tailwind_knots` aligned with the thinned transitions order, then pass it into SVI + gradient.
 
 A subtle but important detail: the backward TRES uses a **landing-time anchored wall-clock window**, so wind-time bin conversion must match that reference:
@@ -482,8 +506,10 @@ From `BatchLearningConfig` + CLI:
 - **`checkpoint_interval`**: save model/optimizer/training history periodically.
 - **`num_workers`**: parallel workers for per-flight processing.
 - **`--debug-single-process`**: run without multiprocessing (easier debugging).
+- **`tensorboard_log_dir`, `tensorboard_run_name`, `clear_tensorboard_logs`, `log_interval`**: control TensorBoard logging.
 - **`--randomize`, `--batch-shuffling`, `--random-seed`, `--fixed-batch-index`**: batch selection strategy.
 - **`--disable-edge-preference`**: freeze `preference_matrix_p` at zero (lin_disent only).
+- **`--disable-pref-bw-constraint`**: keep the feature-orthogonality projection but skip the BW (cycle/gauge) constraint in the preference projector.
 
 ---
 
