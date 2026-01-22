@@ -276,7 +276,7 @@ def compute_route_cost_breakdown(
     Args:
         checkpoint_path: Path to the cost model checkpoint.
         case_dir: Case directory containing default.yaml and case assets.
-        routes_csv_path: Optional path to a routes CSV. Defaults to all_routes_sculpted.csv.
+        routes_csv_path: Optional path to a routes CSV. Defaults to tres_runs/all_routes_feasibly_snapped.csv.
         flight_id: Optional flight identifier to select the route. If omitted, row_idx is used.
         takeoff_time: Optional takeoff timestamp to disambiguate flight_id.
         row_idx: Row index to use when flight_id is not provided.
@@ -290,7 +290,7 @@ def compute_route_cost_breakdown(
     routes_csv = (
         routes_csv_path
         if routes_csv_path is not None
-        else str(Path(case_dir) / "all_routes_sculpted.csv")
+        else str(Path(case_dir) / "tres_runs" / "all_routes_feasibly_snapped.csv")
     )
     selection = _select_route_from_csv(
         routes_csv,
@@ -529,6 +529,7 @@ def compute_routes_cost_breakdowns(
                 ax=ax,
                 show_waypoints=show_waypoints,
                 route_alpha=route_alpha,
+                thickness=1,
             )
             ax.set_title(f"Route {route_rank}")
             plt.show()

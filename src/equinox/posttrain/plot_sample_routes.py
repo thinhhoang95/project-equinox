@@ -182,6 +182,8 @@ def plot_sample_routes(
     wind_time_idx: int | None = None,
     wind_altitude_ft: float | None = None,
     show_quiver: bool = True,
+    thickness: float = 1,
+    plot_title: str = None,
 ) -> tuple[plt.Figure, plt.Axes]:
     if graph_path is None:
         graph_path = find_case_graph_gml(case_dir)
@@ -213,6 +215,7 @@ def plot_sample_routes(
         ax=ax,
         show_waypoints=show_waypoints,
         route_alpha=route_alpha,
+        thickness=thickness
     )
     if reference_flight_id or reference_takeoff_timestamp:
         if not reference_flight_id or not reference_takeoff_timestamp:
@@ -227,7 +230,10 @@ def plot_sample_routes(
             reference_takeoff_timestamp,
             ax=ax,
         )
-    ax.set_title(f"Sample routes ({routes_path.name})")
+    if plot_title is None:
+        ax.set_title(f"Sample routes ({routes_path.name})")
+    else:
+        ax.set_title(plot_title)
 
     if output_path is not None:
         fig.savefig(output_path, bbox_inches="tight")

@@ -3,7 +3,7 @@ import networkx as nx
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
-def plot_routes_on_map(graph, routes, ax=None, show_waypoints=True, route_alpha=1.0):
+def plot_routes_on_map(graph, routes, ax=None, show_waypoints=True, route_alpha=1.0, thickness=2):
     """
     Plots waypoints and routes on a map using Cartopy.
 
@@ -60,7 +60,7 @@ def plot_routes_on_map(graph, routes, ax=None, show_waypoints=True, route_alpha=
                 route_lons,
                 route_lats,
                 '-',
-                linewidth=10,
+                linewidth=thickness,
                 alpha=route_alpha,
                 transform=ccrs.Geodetic(),
                 label=f'Route {route_idx+1}',
