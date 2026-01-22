@@ -4,7 +4,7 @@ import math
 import os
 import pickle
 import re
-from collections import Counter, defaultdict, deque
+from collections import Counter, defaultdict
 
 import pandas as pd
 
@@ -14,7 +14,7 @@ from equinox.dp.trespass.continuity import match_next_states
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Check snapped route continuity against CLSR transitions with wait edges."
+        description="Check snapped route continuity against CLSR transitions."
     )
     parser.add_argument(
         "--case-dir",
@@ -34,8 +34,8 @@ def parse_args():
     parser.add_argument(
         "--k-tolerance-bins",
         type=int,
-        default=1,
-        help="Allowed k-bin tolerance for continuity matching (default: 1).",
+        default=0,
+        help="Allowed k-bin tolerance for continuity matching (default: 0).",
     )
     parser.add_argument(
         "--k-tolerance-seconds",
@@ -71,7 +71,6 @@ def parse_clsr_filename(filename: str):
 
 def build_adjacency(transitions):
     edge_adj = defaultdict(list)
-    wait_adj = defaultdict(list)
     for t in transitions:
         if len(t) < 10:
             continue
@@ -79,30 +78,13 @@ def build_adjacency(transitions):
         u_state = (u_idx, k_u, rho_u, ph_u)
         v_state = (v_idx, k_v, rho_v, ph_v)
         edge_adj[(u_idx, v_idx)].append((u_state, v_state))
-        if u_idx == v_idx:
-            wait_adj[u_state].append(v_state)
-    return edge_adj, wait_adj
-
-
-def expand_wait(states, node_idx, wait_adj):
-    visited = set(states)
-    dq = deque(states)
-    while dq:
-        state = dq.popleft()
-        for nxt in wait_adj.get(state, []):
-            if nxt[0] != node_idx:
-                continue
-            if nxt not in visited:
-                visited.add(nxt)
-                dq.append(nxt)
-    return visited
+    return edge_adj
 
 
 def has_continuous_path(
     route_nodes,
     node_to_idx,
     edge_adj,
-    wait_adj,
     k_tolerance_bins,
     backward_snap_counts=None,
 ):
@@ -119,7 +101,6 @@ def has_continuous_path(
         return False, f"missing_edge:{route_nodes[0]}->{route_nodes[1]}"
 
     current_states = {u_state for (u_state, _) in first_opts}
-    current_states = expand_wait(current_states, u0, wait_adj)
 
     for u_name, v_name in zip(route_nodes[:-1], route_nodes[1:]):
         u_idx = node_to_idx[u_name]
@@ -134,7 +115,7 @@ def has_continuous_path(
             return False, f"no_chain:{u_name}->{v_name}"
         if match_kind == "backward" and backward_snap_counts is not None:
             backward_snap_counts[(u_name, v_name)] += 1
-        current_states = expand_wait(next_states, v_idx, wait_adj)
+        current_states = next_states
 
     return True, ""
 
@@ -197,12 +178,11 @@ def main():
                 failures.append((flight_id, takeoff_ts, f"load_error:{exc}"))
                 continue
 
-            edge_adj, wait_adj = build_adjacency(transitions)
+            edge_adj = build_adjacency(transitions)
             ok, reason = has_continuous_path(
                 route,
                 node_to_idx,
                 edge_adj,
-                wait_adj,
                 k_tolerance_bins,
                 backward_snap_counts,
             )
@@ -221,7 +201,7 @@ def main():
             print(f"  {flight_id}_{takeoff_ts}: {reason}")
         raise SystemExit(1)
 
-    print("All routes have a continuous state path (with wait edges).")
+    print("All routes have a continuous state path.")
 
 
 if __name__ == "__main__":

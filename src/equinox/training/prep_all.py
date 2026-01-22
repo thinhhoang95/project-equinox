@@ -300,7 +300,7 @@ def prep_default_yaml():
     yaml_content = f"""aircraft_model: NARROW_BODY_JET
 charges_file_path: {relative_charges_path}
 climb_phase_switch_allowance_climb_time_bins: 10
-cruise_altitude_ft: 35000.0
+cruise_altitude_ft: auto
 cruise_speed_kts: 450.0
 delta_t_seconds: 600
 device_preference: cuda

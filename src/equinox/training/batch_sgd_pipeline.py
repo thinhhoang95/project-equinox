@@ -174,7 +174,7 @@ def load_flight_tres_results(case_dir: str, flight_id: str, takeoff_timestamp: i
                         backward_transitions,
                         wallclock_time_bin_k_tolerance_s=components.get("delta_t_seconds"),
                         delta_t_seconds_wall_clock=components.get("delta_t_seconds"),
-                        include_wait_edges_in_output=True,
+                        include_wait_edges_in_output=False,
                     )
                     
                     # Save for future use

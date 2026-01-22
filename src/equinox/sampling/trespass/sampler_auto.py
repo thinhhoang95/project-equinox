@@ -164,7 +164,7 @@ def thinning(config: RunConfiguration, components: dict):
             closure_list,
             wallclock_time_bin_k_tolerance_s=config.delta_t_seconds,
             delta_t_seconds_wall_clock=config.delta_t_seconds,
-            include_wait_edges_in_output=True,
+            include_wait_edges_in_output=False,
         )
         max_rho_val = max(
             max(t[2] for t in closure_list),

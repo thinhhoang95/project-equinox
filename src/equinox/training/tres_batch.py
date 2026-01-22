@@ -55,7 +55,7 @@ Required columns:
 - route: Space-separated waypoint names (e.g., "LEMD NAREX EGLL")
 - takeoff_time: Unix timestamp of takeoff (integer)
 - landing_time: Unix timestamp of landing (integer)
-- cruise_altitude: Cruise altitude in feet (float)
+- cruise_altitude: Cruise altitude in meters (float). When config cruise_altitude_ft is "auto", this value is converted to feet per flight.
 - origin: Origin airport ICAO code (e.g., "LEMD")
 - destination: Destination airport ICAO code (e.g., "EGLL")
 
@@ -64,9 +64,9 @@ Optional columns:
 
 Example input CSV (all_routes_sculpted.csv):
     flight_id,route,takeoff_time,landing_time,cruise_altitude,origin,destination,flight_time_s
-    FL001,LEMD NAREX EGLL,1680393600,1680404400,35000,LEMD,EGLL,10800
-    FL002,LEMD BILBA EGLL,1680397200,1680408000,37000,LEMD,EGLL,10800
-    FL003,LEMD NAREX LONON EGLL,1680400800,1680411600,35000,LEMD,EGLL,10800
+    FL001,LEMD NAREX EGLL,1680393600,1680404400,10668,LEMD,EGLL,10800
+    FL002,LEMD BILBA EGLL,1680397200,1680408000,11278,LEMD,EGLL,10800
+    FL003,LEMD NAREX LONON EGLL,1680400800,1680411600,10668,LEMD,EGLL,10800
 
 Configuration File
 ------------------
@@ -87,7 +87,7 @@ Example configuration file (default.yaml):
     wind_data_dir: /path/to/era5/data
     delta_t_seconds: 600
     max_flight_duration_hours: 5.0
-    cruise_altitude_ft: 35000.0
+    cruise_altitude_ft: auto
     cruise_speed_kts: 450.0
 
 Output Structure
@@ -117,8 +117,8 @@ Output Files Description:
 
 Example Output CSV (all_routes_feasibly_snapped.csv):
     flight_id,route,takeoff_time,landing_time,cruise_altitude,origin,destination,flight_time_s
-    FL001,LEMD NAREX EGLL,1680393600,1680404400,35000,LEMD,EGLL,10800
-    FL002,LEMD BILBA EGLL,1680397200,1680408000,37000,LEMD,EGLL,10800
+    FL001,LEMD NAREX EGLL,1680393600,1680404400,10668,LEMD,EGLL,10800
+    FL002,LEMD BILBA EGLL,1680397200,1680408000,11278,LEMD,EGLL,10800
 
 Usage Example
 -------------
@@ -189,7 +189,7 @@ Multiprocessing Notes
 ---------------------
 - Uses 'spawn' context for cross-platform compatibility (Windows/macOS)
 - Each worker process creates its own WindDate model for the flight's date
-- Shared components (graph, cost_model, performance_model) are copied per process
+- Shared components (graph, cost_model) are copied per process; performance_model is rebuilt per flight to honor per-flight cruise_altitude_ft (including "auto" from CSV)
 - CSV writes are synchronized using retry logic with random backoff
 
 Dependencies
@@ -274,7 +274,27 @@ def process_flight(flight_series, config, components, case_name, batch_idx, outp
     flight_config.landing_time_str = dt_landing.strftime(time_format)
     flight_config.estimated_takeoff_time_str = flight_config.takeoff_time_str
     flight_config.estimated_landing_time_str = flight_config.landing_time_str
-    
+
+    cruise_altitude_setting = flight_config.cruise_altitude_ft
+    if isinstance(cruise_altitude_setting, str) and cruise_altitude_setting.strip().lower() == "auto":
+        cruise_altitude_m = flight_series.get('cruise_altitude')
+        if cruise_altitude_m is None or pd.isna(cruise_altitude_m):
+            logging.error(
+                "cruise_altitude_ft=auto but CSV missing cruise_altitude for flight %s",
+                flight_id
+            )
+            return
+        try:
+            cruise_altitude_m = float(cruise_altitude_m)
+        except (TypeError, ValueError):
+            logging.error(
+                "Invalid cruise_altitude '%s' for flight %s with cruise_altitude_ft=auto",
+                cruise_altitude_m,
+                flight_id
+            )
+            return
+        flight_config.cruise_altitude_ft = cruise_altitude_m * 3.280839895
+
     flight_components = components.copy()
     try:
         # Create a WindDate model for the specific flight date
@@ -289,6 +309,14 @@ def process_flight(flight_series, config, components, case_name, batch_idx, outp
         import sys
         sys.exit(1)
         return  # Skip this flight if wind model initialization fails
+    try:
+        flight_components['performance_model'] = flight_config.initialize_performance_model()
+    except Exception as e:
+        logging.error(
+            f"Failed to initialize Performance for flight {flight_id}: {e}",
+            exc_info=True
+        )
+        return
 
     # Prepare output directory and filenames
     output_dir = os.path.join(output_dir_base, f"batch{batch_idx}")
@@ -372,7 +400,7 @@ def process_flight(flight_series, config, components, case_name, batch_idx, outp
             state_closure_list,
             wallclock_time_bin_k_tolerance_s=flight_config.delta_t_seconds,
             delta_t_seconds_wall_clock=flight_config.delta_t_seconds,
-            include_wait_edges_in_output=True,
+            include_wait_edges_in_output=False,
         )
         
         thinned_filename = f"CLSR_{flight_id}_{takeoff_ts}"

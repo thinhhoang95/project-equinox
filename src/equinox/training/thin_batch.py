@@ -72,7 +72,7 @@ def process_batch(batch_dir: str, output_filename: str, config: RunConfiguration
         all_transitions,
         wallclock_time_bin_k_tolerance_s=config.delta_t_seconds,
         delta_t_seconds_wall_clock=config.delta_t_seconds,
-        include_wait_edges_in_output=True,
+        include_wait_edges_in_output=False,
     )
     
     print(f"Thinned down to {len(thinned_transitions)} transitions.")
