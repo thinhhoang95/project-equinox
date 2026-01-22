@@ -1,5 +1,138 @@
 """
-See docs at POSTTRAIN.md
+Post-training checkpoint helpers for loading and visualizing cost model parameters.
+
+This module provides utilities for working with trained cost model checkpoints, including:
+- Loading cost model parameters (common feature weights and preference matrices) from PyTorch checkpoints
+- Mapping preference matrices to graph edges
+- Filtering preferences based on CLSR (feasible state-transition closure) support
+- Visualizing edge preferences on geographic maps using Cartopy
+
+The module is designed to work with disentangled linear cost models that learn:
+1. Common feature weights (shared across all edges)
+2. Edge-specific preference matrices (node-to-node preferences)
+
+Usage Examples:
+---------------
+
+Example 1: Load cost model parameters from a checkpoint
+    >>> from equinox.posttrain.checkpoint_helpers import load_cost_model_parameters
+    >>> 
+    >>> checkpoint_path = "data/cases/LEMD_EGLL/batch_sgd_results/checkpoint_iter_100.pt"
+    >>> params = load_cost_model_parameters(checkpoint_path)
+    >>> 
+    >>> # Output structure:
+    >>> print(params["common"])  # {"bias": 0.5, "ac_dist": 1.2, "time": 0.8, ...}
+    >>> print(params["preference_matrix"].shape)  # torch.Size([num_nodes, num_nodes])
+    >>> print(params["feature_names"])  # ("bias", "ac_dist", "time", ...)
+
+Example 2: Load checkpoint and map preferences to graph edges
+    >>> from equinox.posttrain.checkpoint_helpers import load_checkpoint_edge_preferences
+    >>> 
+    >>> checkpoint_path = "data/cases/LEMD_EGLL/batch_sgd_results/checkpoint_iter_100.pt"
+    >>> gml_path = "data/cases/LEMD_EGLL/graphs/routes.gml"
+    >>> 
+    >>> payload = load_checkpoint_edge_preferences(checkpoint_path, gml_path)
+    >>> 
+    >>> # Output structure:
+    >>> edge_prefs = payload["edge_preferences"]  # Dict[(str, str), float]
+    >>> print(edge_prefs[("MADRID", "PENIL")])  # 0.75
+    >>> print(payload["common"])  # Common feature weights
+    >>> print(payload["graph"])  # NetworkX graph with edge attributes
+    >>> print(payload["node_to_idx"])  # Node name -> index mapping
+
+Example 3: Attach preferences directly to graph edges
+    >>> import networkx as nx
+    >>> from equinox.posttrain.checkpoint_helpers import (
+    ...     attach_preferences_to_graph,
+    ...     load_cost_model_parameters,
+    ...     load_graph_from_gml,
+    ... )
+    >>> 
+    >>> checkpoint_path = "data/cases/LEMD_EGLL/batch_sgd_results/checkpoint_iter_100.pt"
+    >>> gml_path = "data/cases/LEMD_EGLL/graphs/routes.gml"
+    >>> 
+    >>> params = load_cost_model_parameters(checkpoint_path)
+    >>> graph, node_to_idx, _ = load_graph_from_gml(gml_path)
+    >>> graph = attach_preferences_to_graph(
+    ...     graph, node_to_idx, params["preference_matrix"], attr_name="preference"
+    ... )
+    >>> 
+    >>> # Access preference as edge attribute:
+    >>> first_edge = list(graph.edges())[0]
+    >>> print(graph.edges[first_edge]["preference"])  # 0.65
+
+Example 4: Visualize edge preferences on a geographic map
+    >>> from equinox.posttrain.checkpoint_helpers import (
+    ...     load_checkpoint_edge_preferences,
+    ...     plot_edge_preferences_cartopy,
+    ... )
+    >>> 
+    >>> checkpoint_path = "data/cases/LEMD_EGLL/batch_sgd_results/checkpoint_iter_100.pt"
+    >>> gml_path = "data/cases/LEMD_EGLL/graphs/routes.gml"
+    >>> 
+    >>> payload = load_checkpoint_edge_preferences(checkpoint_path, gml_path)
+    >>> ax = plot_edge_preferences_cartopy(
+    ...     payload["graph"],
+    ...     edge_preferences=payload["edge_preferences"],
+    ...     cmap="coolwarm",
+    ...     linewidth=1.2,
+    ...     filter_non_clsr=True,  # Only show edges with CLSR support
+    ... )
+    >>> # Returns matplotlib axes with colored edges on a Cartopy map
+
+Example 5: Filter preferences to CLSR-supported edges only
+    >>> from equinox.posttrain.checkpoint_helpers import (
+    ...     filter_edge_preferences_to_support,
+    ...     load_checkpoint_edge_preferences,
+    ...     load_clsr_transition_edge_counts,
+    ... )
+    >>> 
+    >>> case_dir = "data/cases/LEMD_EGLL"
+    >>> checkpoint_path = f"{case_dir}/results_full/final_results.pt"
+    >>> gml_path = f"{case_dir}/graphs/routes.gml"
+    >>> 
+    >>> payload = load_checkpoint_edge_preferences(checkpoint_path, gml_path)
+    >>> support = load_clsr_transition_edge_counts(case_dir, gml_path)
+    >>> edge_prefs_filtered = filter_edge_preferences_to_support(
+    ...     payload["edge_preferences"], support
+    ... )
+    >>> 
+    >>> # edge_prefs_filtered only contains edges that appear in CLSR files
+    >>> print(len(edge_prefs_filtered))  # Number of supported edges
+
+Input/Output Examples:
+---------------------
+
+Input: Checkpoint file structure
+    A PyTorch checkpoint file (.pt) containing one of:
+    - "model_state_dict" key with "common_weights" and "preference_matrix_p"
+    - "final_model_state" key with the same structure
+    - Direct state dict with "common_weights" and "preference_matrix_p"
+
+Input: GML graph file
+    A GraphML file containing a NetworkX graph with nodes having "lon" and "lat" attributes
+    for geographic visualization.
+
+Output: load_cost_model_parameters()
+    Returns dict with keys:
+    - "common": Dict[str, float] - Feature name -> weight mapping
+    - "preference_matrix": torch.Tensor - Shape [num_nodes, num_nodes]
+    - "feature_names": Tuple[str, ...] - Ordered feature names
+
+Output: load_checkpoint_edge_preferences()
+    Returns dict with keys:
+    - "common": Dict[str, float] - Common feature weights
+    - "preference_matrix": torch.Tensor - Full preference matrix
+    - "edge_preferences": Dict[Tuple[str, str], float] - Edge (u, v) -> preference value
+    - "edge_preferences_clsr": Optional[Dict[Tuple[str, str], float]] - Filtered to CLSR support
+    - "clsr_edge_counts": Optional[Dict[Tuple[str, str], int]] - Transition counts per edge
+    - "graph": nx.Graph - NetworkX graph with edge attributes
+    - "node_to_idx": Dict[str, int] - Node name -> index mapping
+
+See Also:
+---------
+- POSTTRAIN.md: Detailed documentation with additional examples
+- equinox.cost.cost_linear_disentangled: The cost model architecture
 """
 
 from __future__ import annotations
@@ -326,7 +459,7 @@ def plot_edge_preferences_cartopy(
 
     created_ax = ax is None
     if created_ax:
-        fig = plt.figure(figsize=(10, 6))
+        fig = plt.figure(figsize=(40, 34)) # 10, 6
         ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
 
     ax.add_feature(cfeature.COASTLINE)
@@ -345,7 +478,7 @@ def plot_edge_preferences_cartopy(
     for u, v in graph.edges():
         if filter_non_clsr:
             support = graph.edges[u, v].get(clsr_transition_attr)
-            if support == 0:
+            if support is None or support == 0:
                 continue
 
         if edge_preferences is not None:

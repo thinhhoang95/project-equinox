@@ -96,4 +96,5 @@ edge_prefs = filter_edge_preferences_to_support(payload["edge_preferences"], sup
 
 If you use `load_checkpoint_edge_preferences(...)`, CLSR support is automatically attached
 to `payload["graph"]` as the edge attribute `clsr_transition_count`, and
-`plot_edge_preferences_cartopy(...)` hides `clsr_transition_count == 0` edges by default.
+`plot_edge_preferences_cartopy(...)` hides edges without CLSR support
+(missing or zero `clsr_transition_count`) by default.

@@ -3,11 +3,12 @@
 Usage example:
     /Users/thinhhoang/miniforge3/envs/equinox/bin/python -m equinox.evals.eval_sampling_frechet \
         --case-dir data/cases/LGAV_LFPG \
-        --results-dir results_full \
-        --n-samples 150 \
+        --results-dir results_nopref \
+        --n-samples 100 \
         --policy sample \
         --resample-spacing-nm 25 \
-        --device cpu
+        --device cpu \
+        --top-k 3
 
 Metric notes (all distances are in nautical miles; smaller is better):
     min_frechet_nm_all: Best (closest) sampled route to the reference; lower means
@@ -22,6 +23,8 @@ Metric notes (all distances are in nautical miles; smaller is better):
     *_unique metrics are computed after de-duplicating sampled routes (support view).
     coverage_all_tau_*: Fraction of samples with distance <= tau; higher is better.
     hit_tau_*: Whether any sample is within tau; 1.0 means at least one close route.
+    min_frechet_nm_top_k_cost: For each flight, select the lowest Frechet distance
+        among the top-k lowest-cost samples; aggregated in summary.json.
 """
 
 from __future__ import annotations
@@ -41,6 +44,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import networkx as nx
 import numpy as np
 import torch
+import yaml
 
 from equinox.evals.frechet import discrete_frechet
 from equinox.evals.routes import (
@@ -53,6 +57,7 @@ from equinox.evals.routes import (
     resample_polyline,
     route_nodes_to_coords,
 )
+from equinox.evals.wind_optimal_baseline import choose_min_time_sample
 from equinox.helpers.haversine import haversine
 from equinox.sampling.pipeline import compute_4d_path_for_dataset
 from equinox.sampling.trespass.inference import compute_checkpoint_hash, resolve_checkpoint
@@ -108,6 +113,7 @@ def _prepare_route(
 def _compute_metrics(
     *,
     sample_routes: Sequence[Sequence[str]],
+    sample_costs: Optional[Sequence[float]],
     reference_route: Sequence[str],
     node_coords: Dict[str, Point],
     missing_policy: str,
@@ -115,6 +121,9 @@ def _compute_metrics(
     coverage_thresholds: Sequence[float],
     top_k: int,
 ) -> Tuple[Dict[str, object], List[Dict[str, object]]]:
+    if sample_costs is not None and len(sample_costs) != len(sample_routes):
+        raise ValueError("sample_costs must have the same length as sample_routes.")
+
     reference_nodes, reference_coords, missing_ref = _prepare_route(
         reference_route,
         node_coords,
@@ -124,10 +133,11 @@ def _compute_metrics(
 
     route_counts: Dict[Tuple[str, ...], int] = {}
     route_coords: Dict[Tuple[str, ...], List[Point]] = {}
+    cost_samples: List[Tuple[Tuple[str, ...], float]] = []
     dropped_samples = 0
     missing_samples = 0
 
-    for route in sample_routes:
+    for idx, route in enumerate(sample_routes):
         try:
             cleaned_nodes, coords, missing = _prepare_route(
                 route,
@@ -148,6 +158,13 @@ def _compute_metrics(
         route_counts[key] = route_counts.get(key, 0) + 1
         if key not in route_coords:
             route_coords[key] = coords
+        if sample_costs is not None:
+            try:
+                cost_value = float(sample_costs[idx])
+            except (TypeError, ValueError):
+                cost_value = None
+            if cost_value is not None and math.isfinite(cost_value):
+                cost_samples.append((key, cost_value))
 
     if not route_counts:
         raise ValueError("No valid sampled routes to evaluate.")
@@ -206,6 +223,17 @@ def _compute_metrics(
         )
         metrics[f"hit_tau_{label}"] = float(np.min(distances_all_arr) <= tau)
 
+    if top_k > 0 and cost_samples:
+        sorted_by_cost = sorted(cost_samples, key=lambda item: item[1])
+        best_by_cost = sorted_by_cost[: min(top_k, len(sorted_by_cost))]
+        best_by_cost_distances = [
+            distance_by_route[route_key] for route_key, _ in best_by_cost
+        ]
+        if best_by_cost_distances:
+            metrics["min_frechet_nm_top_k_cost"] = float(
+                min(best_by_cost_distances)
+            )
+
     closest_routes: List[Dict[str, object]] = []
     if top_k > 0:
         sorted_routes = sorted(
@@ -258,6 +286,7 @@ def _evaluate_flight(spec: FlightSpec) -> Dict[str, object]:
     top_k = context["top_k"]
     base_seed = context["seed"]
     node_coords = context["node_coords"]
+    delta_t_seconds_wall_clock = context["delta_t_seconds_wall_clock"]
 
     flight_key = _sanitize_flight_key(spec.flight_id, spec.takeoff_time)
     output_dir = Path(output_root) / "inference" / flight_key
@@ -290,6 +319,7 @@ def _evaluate_flight(spec: FlightSpec) -> Dict[str, object]:
         sample_routes = [sample.route for sample in result.samples]
         metrics, closest_routes = _compute_metrics(
             sample_routes=sample_routes,
+            sample_costs=[sample.total_cost for sample in result.samples],
             reference_route=spec.reference_route,
             node_coords=node_coords,
             missing_policy=missing_policy,
@@ -297,6 +327,36 @@ def _evaluate_flight(spec: FlightSpec) -> Dict[str, object]:
             coverage_thresholds=coverage_thresholds,
             top_k=top_k,
         )
+
+        wind_optimal_elapsed_time_s = None
+        wind_optimal_frechet_nm = None
+        try:
+            states_list = [sample.states for sample in result.samples]
+            choice = choose_min_time_sample(states_list, delta_t_seconds_wall_clock)
+            wind_optimal_elapsed_time_s = float(choice.elapsed_time_seconds)
+            baseline_route = result.samples[choice.sample_index].route
+            _, baseline_coords, _ = _prepare_route(
+                baseline_route,
+                node_coords,
+                missing_policy=missing_policy,
+                resample_spacing_nm=resample_spacing_nm,
+            )
+            _, reference_coords, _ = _prepare_route(
+                spec.reference_route,
+                node_coords,
+                missing_policy=missing_policy,
+                resample_spacing_nm=resample_spacing_nm,
+            )
+            wind_optimal_frechet_nm = float(
+                discrete_frechet(
+                    baseline_coords,
+                    reference_coords,
+                    point_dist_fn=_point_distance_nm,
+                )
+            )
+        except Exception:
+            wind_optimal_elapsed_time_s = None
+            wind_optimal_frechet_nm = None
 
         if closest_routes:
             closest_path = Path(output_root) / "closest_routes" / f"{flight_key}.json"
@@ -316,6 +376,8 @@ def _evaluate_flight(spec: FlightSpec) -> Dict[str, object]:
             "n_samples_requested": int(n_samples),
             "routes_txt": str(routes_txt_path),
             "svi_cache_hit": bool(result.metadata.get("svi_cache_hit")),
+            "wind_optimal_from_samples_elapsed_time_s": wind_optimal_elapsed_time_s,
+            "wind_optimal_from_samples_frechet_nm": wind_optimal_frechet_nm,
             **metrics,
         }
     except Exception as exc:
@@ -354,6 +416,7 @@ def _aggregate_metrics(
         "median_frechet_nm_all",
         "max_frechet_nm_all",
         "var_frechet_nm2_all",
+        "min_frechet_nm_top_k_cost",
         "min_frechet_nm_unique",
         "mean_frechet_nm_unique",
         "median_frechet_nm_unique",
@@ -361,6 +424,8 @@ def _aggregate_metrics(
         "var_frechet_nm2_unique",
         "duplicate_rate",
         "entropy_bits",
+        "wind_optimal_from_samples_elapsed_time_s",
+        "wind_optimal_from_samples_frechet_nm",
     ]
 
     for key in metric_keys:
@@ -425,6 +490,7 @@ def _write_metrics_csv(
         "median_frechet_nm_all",
         "max_frechet_nm_all",
         "var_frechet_nm2_all",
+        "min_frechet_nm_top_k_cost",
         "min_frechet_nm_unique",
         "mean_frechet_nm_unique",
         "median_frechet_nm_unique",
@@ -434,6 +500,8 @@ def _write_metrics_csv(
         "dropped_waypoints_samples",
         "invalid_sample_routes",
         "svi_cache_hit",
+        "wind_optimal_from_samples_elapsed_time_s",
+        "wind_optimal_from_samples_frechet_nm",
         "routes_txt",
     ]
 
@@ -470,6 +538,25 @@ def _load_graph(case_dir: Path, config_path: Optional[Path]) -> nx.Graph:
         graph_path = find_case_graph_gml(case_dir)
 
     return nx.read_gml(graph_path)
+
+
+def _load_delta_t_seconds(config_path: Path) -> float:
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    with config_path.open("r", encoding="utf-8") as handle:
+        config_dict = yaml.safe_load(handle)
+    if not isinstance(config_dict, dict):
+        raise ValueError(f"Invalid configuration in {config_path}; expected a mapping.")
+    delta_t_seconds = config_dict.get("delta_t_seconds")
+    if delta_t_seconds is None:
+        raise ValueError(f"delta_t_seconds is missing in the case config: {config_path}")
+    try:
+        delta_t_seconds = float(delta_t_seconds)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("delta_t_seconds must be a numeric value.") from exc
+    if delta_t_seconds <= 0 or not math.isfinite(delta_t_seconds):
+        raise ValueError("delta_t_seconds must be a positive finite value.")
+    return delta_t_seconds
 
 
 def _build_run_id(
@@ -625,7 +712,7 @@ def main() -> None:
         "--top-k",
         type=int,
         default=5,
-        help="Store top-k closest unique routes per flight.",
+        help="Store top-k closest unique routes per flight and compute top-k cost stats.",
     )
     parser.add_argument(
         "--torch-threads",
@@ -650,6 +737,7 @@ def main() -> None:
     case_dir = Path(args.case_dir)
     config_path = Path(args.config) if args.config else find_case_yaml(case_dir)
     snapped_csv = find_snapped_routes_csv(case_dir)
+    delta_t_seconds_wall_clock = _load_delta_t_seconds(config_path)
 
     checkpoint_path = _resolve_checkpoint_with_results_dir(
         case_dir,
@@ -723,6 +811,7 @@ def main() -> None:
         "top_k": args.top_k,
         "seed": args.seed,
         "node_coords": node_coords,
+        "delta_t_seconds_wall_clock": delta_t_seconds_wall_clock,
     }
 
     from concurrent.futures import ProcessPoolExecutor, as_completed
