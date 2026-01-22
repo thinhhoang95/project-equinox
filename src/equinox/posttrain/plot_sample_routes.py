@@ -133,6 +133,26 @@ def load_reference_route(
     return route_text.split()
 
 
+def load_snapped_routes(case_dir: Path) -> list[list[str]]:
+    csv_path = find_snapped_routes_csv(case_dir)
+    with csv_path.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames:
+            raise ValueError(f"Reference CSV {csv_path} has no headers.")
+        if "route" not in reader.fieldnames:
+            raise ValueError(f"Reference CSV {csv_path} missing route column.")
+
+        routes: list[list[str]] = []
+        for row in reader:
+            route_text = (row.get("route") or "").strip()
+            if not route_text:
+                continue
+            nodes = route_text.split()
+            if nodes:
+                routes.append(nodes)
+    return routes
+
+
 def plot_reference_route(
     graph: nx.Graph,
     case_dir: Path,
@@ -232,6 +252,48 @@ def plot_sample_routes(
         )
     if plot_title is None:
         ax.set_title(f"Sample routes ({routes_path.name})")
+    else:
+        ax.set_title(plot_title)
+
+    if output_path is not None:
+        fig.savefig(output_path, bbox_inches="tight")
+    if show:
+        plt.show()
+
+    return fig, ax
+
+
+def plot_snapped_routes(
+    case_dir: Path,
+    graph_path: Path | None = None,
+    output_path: Path | None = None,
+    show: bool = True,
+    show_waypoints: bool = True,
+    route_alpha: float = 1.0,
+    thickness: float = 1,
+    plot_title: str | None = None,
+) -> tuple[plt.Figure, plt.Axes]:
+    if graph_path is None:
+        graph_path = find_case_graph_gml(case_dir)
+
+    graph = nx.read_gml(graph_path)
+    routes = load_snapped_routes(case_dir)
+    if not 0.0 <= route_alpha <= 1.0:
+        raise ValueError("route_alpha must be between 0.0 and 1.0")
+
+    fig = plt.figure(figsize=(18, 8))
+    ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+    plot_routes_on_map(
+        graph,
+        routes,
+        ax=ax,
+        show_waypoints=show_waypoints,
+        route_alpha=route_alpha,
+        thickness=thickness,
+    )
+
+    if plot_title is None:
+        ax.set_title("All snapped routes")
     else:
         ax.set_title(plot_title)
 

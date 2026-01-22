@@ -220,6 +220,7 @@ def plot_edge_preferences_cartopy(
     percentile: Optional[float] = None,
     percentile_mode: str = "both",
     show_colorbar: bool = True,
+    show_waypoints: bool = False,
     show: bool = True,
 ):
     """
@@ -250,6 +251,7 @@ def plot_edge_preferences_cartopy(
     values = []
     segment_lons = []
     segment_lats = []
+    segment_nodes = []
 
     for u, v in graph.edges():
         if edge_preferences is not None:
@@ -266,6 +268,7 @@ def plot_edge_preferences_cartopy(
         values.append(float(pref))
         segment_lons.append((lon1, lon2))
         segment_lats.append((lat1, lat2))
+        segment_nodes.append((u, v))
 
     if not segments:
         raise ValueError("No edge preferences found to plot.")
@@ -279,9 +282,17 @@ def plot_edge_preferences_cartopy(
         values_np = values_np[mask]
         segment_lons = [lons for lons, keep in zip(segment_lons, mask) if keep]
         segment_lats = [lats for lats, keep in zip(segment_lats, mask) if keep]
+        segment_nodes = [nodes for nodes, keep in zip(segment_nodes, mask) if keep]
 
     used_lons = [lon for pair in segment_lons for lon in pair]
     used_lats = [lat for pair in segment_lats for lat in pair]
+    if show_waypoints:
+        used_nodes = {node for pair in segment_nodes for node in pair}
+        for node in sorted(used_nodes):
+            data = graph.nodes[node]
+            lon, lat = data["lon"], data["lat"]
+            ax.plot(lon, lat, "o", color="blue", markersize=3, transform=ccrs.Geodetic())
+            ax.text(lon + 0.01, lat + 0.01, str(node), fontsize=6, transform=ccrs.Geodetic())
     if preference_color_range is not None:
         vmin, vmax = preference_color_range
         if vmin >= vmax:
