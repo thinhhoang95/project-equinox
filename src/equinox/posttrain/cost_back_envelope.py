@@ -363,6 +363,8 @@ def compute_routes_cost_breakdowns(
     plot_route: bool = True,
     show_waypoints: bool = False,
     route_alpha: float = 1.0,
+    limit: int = 10,
+    sort_by: str = "total",
 ) -> List[Dict[str, Any]]:
     """
     Compute and print per-edge cost breakdowns for each unique route in routes_path.
@@ -371,6 +373,17 @@ def compute_routes_cost_breakdowns(
     """
     if not 0.0 <= route_alpha <= 1.0:
         raise ValueError("route_alpha must be between 0.0 and 1.0")
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    sort_by_lower = sort_by.lower()
+    sort_key_map = {
+        "total": "cost_total",
+        "time": "cost_time",
+        "preference": "cost_preference",
+    }
+    if sort_by_lower not in sort_key_map:
+        valid = ", ".join(sorted(sort_key_map.keys()))
+        raise ValueError(f"sort_by must be one of: {valid}")
 
     routes = _parse_routes_txt(Path(routes_path))
     if not routes:
@@ -447,8 +460,10 @@ def compute_routes_cost_breakdowns(
         )
 
     sorted_entries = sorted(
-        route_entries, key=lambda entry: entry["totals"]["cost_total"]
+        route_entries,
+        key=lambda entry: entry["totals"][sort_key_map[sort_by_lower]],
     )
+    sorted_entries = sorted_entries[:limit]
 
     results: List[Dict[str, Any]] = []
     for route_rank, entry in enumerate(sorted_entries, start=1):
@@ -460,14 +475,23 @@ def compute_routes_cost_breakdowns(
         columns = [
             "u_node",
             "v_node",
+            "u_idx",
+            "v_idx",
             "distance",
             "airspace_charge",
             "tailwind_kts",
             "tailwind_is_fallback",
+            "feature_bias",
+            "feature_ac_dist",
+            "feature_time",
+            "weight_bias",
+            "weight_ac_dist",
+            "weight_time",
             "cost_bias",
             "cost_ac_dist",
             "cost_time",
             "cost_preference",
+            "cost_common",
             "cost_total",
         ]
         if all(column in display_frame.columns for column in columns):
@@ -617,6 +641,19 @@ def _parse_routes_breakdown_args(
         default=1.0,
         help="Opacity for route lines (0.0 to 1.0).",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Maximum number of routes to print (sorted by sort-by).",
+    )
+    parser.add_argument(
+        "--sort-by",
+        type=str,
+        default="total",
+        choices=("total", "time", "preference"),
+        help="Sort routes by lowest cost component.",
+    )
     return parser.parse_args(argv)
 
 
@@ -634,6 +671,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         plot_route=args.plot_route,
         show_waypoints=args.show_waypoints,
         route_alpha=args.route_alpha,
+        limit=args.limit,
+        sort_by=args.sort_by,
     )
     return 0
 

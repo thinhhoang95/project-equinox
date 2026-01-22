@@ -77,6 +77,37 @@ def _set_origin_goal(components: Dict[str, Any], origin_node: Optional[str], goa
         components["goal_node_idx"] = components["node_to_idx"][components["goal_node"]]
 
 
+def _resolve_auto_cruise_altitude(
+    config: Any,
+    components: Dict[str, Any],
+    flight_metadata: Dict[str, Any],
+    *,
+    flight_id: Optional[str],
+    takeoff_timestamp: Optional[int],
+) -> None:
+    cruise_altitude_setting = config.cruise_altitude_ft
+    if not (isinstance(cruise_altitude_setting, str) and cruise_altitude_setting.strip().lower() == "auto"):
+        return
+
+    if not flight_id or takeoff_timestamp is None:
+        raise ValueError("cruise_altitude_ft=auto requires flight_id and takeoff_timestamp.")
+
+    cruise_altitude_m = flight_metadata.get("cruise_altitude") if flight_metadata else None
+    if cruise_altitude_m is None or str(cruise_altitude_m).strip() == "":
+        raise ValueError(
+            f"cruise_altitude_ft=auto but cruise_altitude missing for {flight_id}_{takeoff_timestamp}."
+        )
+    try:
+        cruise_altitude_m = float(cruise_altitude_m)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Invalid cruise_altitude '{cruise_altitude_m}' for {flight_id}_{takeoff_timestamp}."
+        ) from exc
+
+    config.cruise_altitude_ft = cruise_altitude_m * 3.280839895
+    components["performance_model"] = config.initialize_performance_model()
+
+
 def _seconds_to_hhmmss_int(seconds: float) -> int:
     total = int(round(seconds))
     hours = total // 3600
@@ -365,6 +396,13 @@ def compute_4d_path_for_dataset(
         takeoff_timestamp=takeoff_timestamp,
     )
     _infer_origin_goal(components, flight_meta.get("flight_metadata", {}))
+    _resolve_auto_cruise_altitude(
+        config,
+        components,
+        flight_meta.get("flight_metadata", {}),
+        flight_id=flight_id,
+        takeoff_timestamp=takeoff_timestamp,
+    )
 
     if components.get("origin_node") is None or components.get("goal_node") is None:
         raise ValueError("Origin/goal nodes are missing; check case config or flight metadata.")

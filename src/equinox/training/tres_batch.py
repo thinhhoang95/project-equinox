@@ -442,7 +442,12 @@ def process_flight(flight_series, config, components, case_name, batch_idx, outp
         # Get the original route from flight data and snap it to the feasible graph
         original_route_str = flight_series.get('route', '')
         snapped_route_str = snap_route_to_feasible_graph(
-            original_route_str, feasible_graph, flight_components['graph']
+            original_route_str,
+            feasible_graph,
+            flight_components['graph'],
+            thinned_transitions=thinned_transitions,
+            node_to_idx=flight_components['node_to_idx'],
+            idx_to_node=idx_to_node,
         )
         
         # Write snapped route information directly to CSV

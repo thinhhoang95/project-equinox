@@ -97,6 +97,8 @@ snap_route_to_feasible_graph:
 """
 
 import logging
+from bisect import bisect_right
+from collections import defaultdict, deque
 
 import networkx as nx
 
@@ -135,9 +137,363 @@ def create_feasible_graph(original_graph, waypoint_transitions, idx_to_node):
     return feasible_graph
 
 
-def snap_route_to_feasible_graph(original_route_str, feasible_graph, original_graph):
+def build_state_adjacency(thinned_transitions):
+    """
+    Build adjacency structures for state-level continuity checks and repairs.
+    """
+    edge_adj = defaultdict(list)
+    state_adj = defaultdict(list)
+    states_by_waypoint = defaultdict(set)
+
+    for transition in thinned_transitions:
+        if len(transition) < 10:
+            continue
+        (
+            u_idx,
+            k_u,
+            rho_u,
+            _alt_u,
+            ph_u,
+            v_idx,
+            k_v,
+            rho_v,
+            _alt_v,
+            ph_v,
+        ) = transition[:10]
+        u_state = (u_idx, k_u, rho_u, ph_u)
+        v_state = (v_idx, k_v, rho_v, ph_v)
+        edge_adj[(u_idx, v_idx)].append((u_state, v_state))
+        state_adj[u_state].append(v_state)
+        states_by_waypoint[u_idx].add(u_state)
+        states_by_waypoint[v_idx].add(v_state)
+
+    return edge_adj, state_adj, states_by_waypoint
+
+
+def _index_current_states(current_states):
+    index = defaultdict(list)
+    for u_idx, k_idx, rho, phase in current_states:
+        index[(u_idx, rho, phase)].append(k_idx)
+    for k_list in index.values():
+        k_list.sort()
+    return index
+
+
+def _pick_k_forward(k_list, k_req, k_tolerance_bins):
+    low = k_req - k_tolerance_bins
+    idx = bisect_right(k_list, k_req)
+    if idx == 0:
+        return None
+    candidate = k_list[idx - 1]
+    if candidate < low:
+        return None
+    return candidate
+
+
+def _pick_k_backward(k_list, k_req, k_tolerance_bins):
+    high = k_req + k_tolerance_bins
+    idx = bisect_right(k_list, k_req)
+    if idx >= len(k_list):
+        return None
+    candidate = k_list[idx]
+    if candidate > high:
+        return None
+    return candidate
+
+
+def _match_next_states_with_backpointer(opts, current_states, k_tolerance_bins):
+    if not current_states:
+        return {}, "none"
+
+    exact = {}
+    for u_state, v_state in opts:
+        if u_state in current_states and v_state not in exact:
+            exact[v_state] = u_state
+    if exact:
+        return exact, "exact"
+    if k_tolerance_bins <= 0:
+        return {}, "none"
+
+    index = _index_current_states(current_states)
+    forward = {}
+    backward = {}
+    for u_state, v_state in opts:
+        u_idx, k_req, rho, phase = u_state
+        k_list = index.get((u_idx, rho, phase))
+        if not k_list:
+            continue
+        k_match = _pick_k_forward(k_list, k_req, k_tolerance_bins)
+        if k_match is not None:
+            if v_state not in forward:
+                forward[v_state] = (u_idx, k_match, rho, phase)
+            continue
+        k_match = _pick_k_backward(k_list, k_req, k_tolerance_bins)
+        if k_match is not None:
+            if v_state not in backward:
+                backward[v_state] = (u_idx, k_match, rho, phase)
+
+    if forward:
+        return forward, "forward"
+    if backward:
+        return backward, "backward"
+    return {}, "none"
+
+
+def realize_state_chain_for_route(
+    route_nodes,
+    node_to_idx,
+    edge_adj,
+    *,
+    k_tolerance_bins=0,
+    states_by_waypoint=None,
+):
+    """
+    Attempt to realize a waypoint route as a continuous state chain.
+    """
+    if len(route_nodes) < 2:
+        return None, [], {
+            "reason": "route_too_short",
+            "index": None,
+            "current_states": set(),
+        }
+
+    for node in route_nodes:
+        if node not in node_to_idx:
+            return None, [], {
+                "reason": f"unknown_node:{node}",
+                "index": None,
+                "current_states": set(),
+            }
+
+    backpointers = []
+    match_kinds = []
+
+    u_name = route_nodes[0]
+    v_name = route_nodes[1]
+    u_idx = node_to_idx[u_name]
+    v_idx = node_to_idx[v_name]
+    opts = edge_adj.get((u_idx, v_idx), [])
+    if not opts:
+        current_states = set()
+        if states_by_waypoint is not None:
+            current_states = states_by_waypoint.get(u_idx, set())
+        return None, match_kinds, {
+            "reason": f"missing_edge:{u_name}->{v_name}",
+            "index": 0,
+            "current_states": current_states,
+        }
+
+    step_mapping = {}
+    for u_state, v_state in opts:
+        if v_state not in step_mapping:
+            step_mapping[v_state] = u_state
+    backpointers.append(step_mapping)
+    match_kinds.append("init")
+    current_states = set(step_mapping.keys())
+
+    for i in range(1, len(route_nodes) - 1):
+        u_name = route_nodes[i]
+        v_name = route_nodes[i + 1]
+        u_idx = node_to_idx[u_name]
+        v_idx = node_to_idx[v_name]
+        opts = edge_adj.get((u_idx, v_idx), [])
+        if not opts:
+            return None, match_kinds, {
+                "reason": f"missing_edge:{u_name}->{v_name}",
+                "index": i,
+                "current_states": current_states,
+            }
+        step_mapping, match_kind = _match_next_states_with_backpointer(
+            opts, current_states, k_tolerance_bins
+        )
+        if not step_mapping:
+            return None, match_kinds, {
+                "reason": f"no_chain:{u_name}->{v_name}",
+                "index": i,
+                "current_states": current_states,
+            }
+        backpointers.append(step_mapping)
+        match_kinds.append(match_kind)
+        current_states = set(step_mapping.keys())
+
+    if not current_states:
+        return None, match_kinds, {
+            "reason": "no_terminal_state",
+            "index": len(route_nodes) - 2,
+            "current_states": current_states,
+        }
+
+    end_state = next(iter(current_states))
+    state_chain = [end_state]
+    for step_idx in reversed(range(len(backpointers))):
+        prev_state = backpointers[step_idx][state_chain[-1]]
+        state_chain.append(prev_state)
+    state_chain.reverse()
+    return state_chain, match_kinds, None
+
+
+def _reconstruct_state_path(predecessor_map, end_state):
+    path = [end_state]
+    while predecessor_map[path[-1]] is not None:
+        path.append(predecessor_map[path[-1]])
+    path.reverse()
+    return path
+
+
+def find_state_path_to_waypoint(
+    state_adj,
+    start_states,
+    target_waypoint_idx,
+    *,
+    max_hops=None,
+    max_nodes=None,
+):
+    if not start_states:
+        return None
+
+    queue = deque(start_states)
+    predecessor_map = {state: None for state in start_states}
+    depth = {state: 0 for state in start_states}
+
+    if any(state[0] == target_waypoint_idx for state in start_states):
+        for state in start_states:
+            if state[0] == target_waypoint_idx:
+                return [state]
+
+    while queue:
+        current = queue.popleft()
+        current_depth = depth[current]
+        if max_hops is not None and current_depth >= max_hops:
+            continue
+        for nxt in state_adj.get(current, []):
+            if nxt in predecessor_map:
+                continue
+            predecessor_map[nxt] = current
+            depth[nxt] = current_depth + 1
+            if max_nodes is not None and len(predecessor_map) >= max_nodes:
+                return None
+            if nxt[0] == target_waypoint_idx:
+                return _reconstruct_state_path(predecessor_map, nxt)
+            queue.append(nxt)
+    return None
+
+
+def _state_path_to_waypoints(state_path, idx_to_node):
+    if not state_path:
+        return None
+    waypoint_indices = [state[0] for state in state_path]
+    condensed = [waypoint_indices[0]]
+    for idx in waypoint_indices[1:]:
+        if idx != condensed[-1]:
+            condensed.append(idx)
+    try:
+        return [idx_to_node[idx] for idx in condensed]
+    except KeyError:
+        return None
+
+
+def _realize_route_with_state_repair(
+    route_nodes,
+    node_to_idx,
+    edge_adj,
+    state_adj,
+    states_by_waypoint,
+    idx_to_node,
+    *,
+    k_tolerance_bins=0,
+    max_state_repair_attempts=3,
+    max_state_repair_hops=12,
+    max_state_repair_nodes=50000,
+):
+    repairs = 0
+    route_nodes = list(route_nodes)
+
+    while True:
+        state_chain, match_kinds, failure = realize_state_chain_for_route(
+            route_nodes,
+            node_to_idx,
+            edge_adj,
+            k_tolerance_bins=k_tolerance_bins,
+            states_by_waypoint=states_by_waypoint,
+        )
+        if state_chain:
+            return route_nodes, state_chain, match_kinds, repairs
+
+        if not failure or repairs >= max_state_repair_attempts:
+            return None
+
+        reason = failure.get("reason", "")
+        if reason.startswith("unknown_node") or reason == "route_too_short":
+            return None
+
+        fail_idx = failure.get("index")
+        if fail_idx is None or fail_idx >= len(route_nodes) - 1:
+            return None
+
+        u_name = route_nodes[fail_idx]
+        v_name = route_nodes[fail_idx + 1]
+        u_idx = node_to_idx.get(u_name)
+        v_idx = node_to_idx.get(v_name)
+        if u_idx is None or v_idx is None:
+            return None
+
+        current_states = failure.get("current_states") or states_by_waypoint.get(
+            u_idx, set()
+        )
+        if not current_states:
+            return None
+
+        path_states = find_state_path_to_waypoint(
+            state_adj,
+            current_states,
+            v_idx,
+            max_hops=max_state_repair_hops,
+            max_nodes=max_state_repair_nodes,
+        )
+        if not path_states:
+            return None
+
+        path_nodes = _state_path_to_waypoints(path_states, idx_to_node)
+        if not path_nodes or path_nodes[0] != u_name or path_nodes[-1] != v_name:
+            return None
+        if len(path_nodes) <= 2:
+            return None
+
+        logging.info(
+            "Repairing snapped route segment %s->%s with %s hops",
+            u_name,
+            v_name,
+            len(path_nodes) - 1,
+        )
+        route_nodes = (
+            route_nodes[: fail_idx + 1]
+            + path_nodes[1:]
+            + route_nodes[fail_idx + 2 :]
+        )
+        repairs += 1
+
+
+def snap_route_to_feasible_graph(
+    original_route_str,
+    feasible_graph,
+    original_graph,
+    *,
+    thinned_transitions=None,
+    node_to_idx=None,
+    idx_to_node=None,
+    k_tolerance_bins=0,
+    allow_state_repair=True,
+    max_state_repair_hops=12,
+    max_state_repair_nodes=50000,
+    max_state_repair_attempts=3,
+    return_details=False,
+):
     """
     Snap the original route to the feasible graph using viterbi matching.
+
+    When thinned_transitions and node_to_idx are provided, the snapped route is
+    post-validated against state transitions and optionally repaired to enforce
+    continuity (returns None if no valid state chain can be found).
     """
     if not original_route_str or not isinstance(original_route_str, str):
         return None
@@ -173,7 +529,67 @@ def snap_route_to_feasible_graph(original_route_str, feasible_graph, original_gr
             return None
 
         full_nodes = [best_edges[0][0]] + [edge[1] for edge in best_edges]
-        return " ".join(full_nodes)
+        snapped_nodes = full_nodes
+        state_chain = None
+        match_kinds = None
+        repairs = 0
+
+        if thinned_transitions is not None and node_to_idx is not None:
+            edge_adj, state_adj, states_by_waypoint = build_state_adjacency(
+                thinned_transitions
+            )
+            if idx_to_node is None:
+                idx_to_node = {v: k for k, v in node_to_idx.items()}
+
+            if allow_state_repair:
+                result = _realize_route_with_state_repair(
+                    snapped_nodes,
+                    node_to_idx,
+                    edge_adj,
+                    state_adj,
+                    states_by_waypoint,
+                    idx_to_node,
+                    k_tolerance_bins=k_tolerance_bins,
+                    max_state_repair_attempts=max_state_repair_attempts,
+                    max_state_repair_hops=max_state_repair_hops,
+                    max_state_repair_nodes=max_state_repair_nodes,
+                )
+                if not result:
+                    logging.warning("State repair failed for snapped route")
+                    return None
+                snapped_nodes, state_chain, match_kinds, repairs = result
+            else:
+                state_chain, match_kinds, failure = realize_state_chain_for_route(
+                    snapped_nodes,
+                    node_to_idx,
+                    edge_adj,
+                    k_tolerance_bins=k_tolerance_bins,
+                    states_by_waypoint=states_by_waypoint,
+                )
+                if not state_chain:
+                    reason = failure["reason"] if failure else "unknown"
+                    logging.warning("State realization failed for snapped route: %s", reason)
+                    return None
+        elif thinned_transitions is not None or node_to_idx is not None:
+            logging.warning(
+                "State realization skipped (thinned_transitions=%s, node_to_idx=%s)",
+                thinned_transitions is not None,
+                node_to_idx is not None,
+            )
+
+        route_str = " ".join(snapped_nodes)
+        if return_details:
+            rho_sequence = (
+                [state[2] for state in state_chain] if state_chain else None
+            )
+            return {
+                "route": route_str,
+                "state_chain": state_chain,
+                "rho_sequence": rho_sequence,
+                "match_kinds": match_kinds,
+                "repairs": repairs,
+            }
+        return route_str
 
     except Exception as e:
         logging.error("Viterbi matching failed: %s", e)
