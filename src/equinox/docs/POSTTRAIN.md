@@ -71,3 +71,29 @@ plot_edge_preferences_cartopy(
     linewidth=1.2,
 )
 ```
+
+### Important: filter out edges not present in CLSR
+
+Some edges in `routes.gml` may never appear in any feasible state-transition closure (`CLSR_*.pkl`).
+For those edges, `preference_matrix_p[u, v]` is typically unidentifiable and can look arbitrarily
+"strong" when plotted. You can filter to only CLSR-supported edges:
+
+```python
+from equinox.posttrain import (
+    filter_edge_preferences_to_support,
+    load_checkpoint_edge_preferences,
+    load_clsr_transition_edge_counts,
+)
+
+case_dir = "data/cases/LEMD_EGLL"
+checkpoint_path = f"{case_dir}/results_full/final_results.pt"
+gml_path = f"{case_dir}/graphs/routes.gml"
+
+payload = load_checkpoint_edge_preferences(checkpoint_path, gml_path)
+support = load_clsr_transition_edge_counts(case_dir, gml_path)
+edge_prefs = filter_edge_preferences_to_support(payload["edge_preferences"], support)
+```
+
+If you use `load_checkpoint_edge_preferences(...)`, CLSR support is automatically attached
+to `payload["graph"]` as the edge attribute `clsr_transition_count`, and
+`plot_edge_preferences_cartopy(...)` hides `clsr_transition_count == 0` edges by default.

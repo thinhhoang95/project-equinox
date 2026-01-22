@@ -4,13 +4,18 @@ See docs at POSTTRAIN.md
 
 from __future__ import annotations
 
+import logging
+import pickle
+from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-import numpy as np
 import networkx as nx
+import numpy as np
 import torch
 
 from equinox.cost.cost_linear_disentangled import DEFAULT_FEATURE_NAMES
+
+logger = logging.getLogger(__name__)
 
 
 def _load_checkpoint_payload(
@@ -130,14 +135,96 @@ def load_checkpoint_edge_preferences(
     edge_preferences = map_preferences_to_graph_edges(
         params["preference_matrix"], graph, node_to_idx
     )
+
+    clsr_edge_counts = None
+    edge_preferences_clsr = None
+    try:
+        case_dir_guess = str(Path(gml_path).resolve().parent.parent)
+        clsr_edge_counts = load_clsr_transition_edge_counts(case_dir_guess, gml_path)
+        edge_preferences_clsr = filter_edge_preferences_to_support(
+            edge_preferences, clsr_edge_counts
+        )
+        for (u, v), count in clsr_edge_counts.items():
+            if graph.has_edge(u, v):
+                graph.edges[u, v]["clsr_transition_count"] = int(count)
+    except Exception as exc:
+        logger.debug(
+            "Could not load/attach CLSR support for %s (non-fatal): %s",
+            gml_path,
+            exc,
+        )
+
     params.update(
         {
             "edge_preferences": edge_preferences,
+            "edge_preferences_clsr": edge_preferences_clsr,
+            "clsr_edge_counts": clsr_edge_counts,
             "graph": graph,
             "node_to_idx": node_to_idx,
         }
     )
     return params
+
+
+def load_clsr_transition_edge_counts(
+    case_dir: str,
+    gml_path: str,
+) -> Dict[Tuple[str, str], int]:
+    """
+    Load the union support of waypoint edges that appear in any `CLSR_*.pkl` file.
+
+    This is useful because route graphs may contain edges that never appear in the
+    feasible state-transition closures (CLSR). Any learned `preference_matrix_p[u, v]`
+    for such edges is typically unidentifiable and can look arbitrarily "strong" when plotted.
+
+    Returns:
+        dict mapping (u_name, v_name) -> number of state transitions observed across all CLSR files.
+    """
+    case_path = Path(case_dir)
+    tres_dir = case_path / "tres_runs"
+    if not tres_dir.exists():
+        raise FileNotFoundError(f"tres_runs dir not found under case_dir: {tres_dir}")
+
+    _, _, idx_to_node = load_graph_from_gml(gml_path)
+
+    counts: Dict[Tuple[str, str], int] = {}
+    clsr_paths = sorted(tres_dir.glob("batch*/CLSR_*.pkl"))
+    for clsr_path in clsr_paths:
+        if clsr_path.name.startswith("._"):
+            continue
+        with open(clsr_path, "rb") as f:
+            transitions = pickle.load(f)
+        for t in transitions:
+            if not isinstance(t, tuple) or len(t) < 6:
+                continue
+            u_idx = int(t[0])
+            v_idx = int(t[5])
+            u = idx_to_node.get(u_idx)
+            v = idx_to_node.get(v_idx)
+            if u is None or v is None:
+                continue
+            key = (u, v)
+            counts[key] = counts.get(key, 0) + 1
+
+    return counts
+
+
+def filter_edge_preferences_to_support(
+    edge_preferences: Mapping[Tuple[str, str], float],
+    supported_edges: Mapping[Tuple[str, str], int] | Mapping[Tuple[str, str], bool],
+) -> Dict[Tuple[str, str], float]:
+    """
+    Filter an (u, v)->preference mapping to edges that are supported.
+
+    Supported edges can be:
+      - the dict returned by `load_clsr_transition_edge_counts(...)`, or
+      - any mapping with `True`/nonzero values for supported edges.
+    """
+    return {
+        edge: value
+        for edge, value in edge_preferences.items()
+        if supported_edges.get(edge)
+    }
 
 
 def attach_preferences_to_graph(
@@ -212,6 +299,8 @@ def plot_edge_preferences_cartopy(
     *,
     edge_preferences: Optional[Mapping[Tuple[str, str], float]] = None,
     preference_attr: str = "preference cost",
+    filter_non_clsr: bool = True,
+    clsr_transition_attr: str = "clsr_transition_count",
     ax=None,
     cmap: str = "coolwarm",
     linewidth: float = 1.5,
@@ -237,7 +326,7 @@ def plot_edge_preferences_cartopy(
 
     created_ax = ax is None
     if created_ax:
-        fig = plt.figure(figsize=(12, 10))
+        fig = plt.figure(figsize=(10, 6))
         ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
 
     ax.add_feature(cfeature.COASTLINE)
@@ -254,6 +343,11 @@ def plot_edge_preferences_cartopy(
     segment_nodes = []
 
     for u, v in graph.edges():
+        if filter_non_clsr:
+            support = graph.edges[u, v].get(clsr_transition_attr)
+            if support == 0:
+                continue
+
         if edge_preferences is not None:
             pref = edge_preferences.get((u, v))
         else:

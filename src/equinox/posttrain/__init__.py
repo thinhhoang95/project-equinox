@@ -1,5 +1,7 @@
 from equinox.posttrain.checkpoint_helpers import (
     attach_preferences_to_graph,
+    filter_edge_preferences_to_support,
+    load_clsr_transition_edge_counts,
     load_checkpoint_edge_preferences,
     load_cost_model_parameters,
     load_graph_from_gml,
@@ -10,6 +12,8 @@ from equinox.posttrain.checkpoint_helpers import (
 
 __all__ = [
     "attach_preferences_to_graph",
+    "filter_edge_preferences_to_support",
+    "load_clsr_transition_edge_counts",
     "load_checkpoint_edge_preferences",
     "load_cost_model_parameters",
     "load_graph_from_gml",
