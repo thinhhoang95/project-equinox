@@ -18,7 +18,7 @@ The algorithm is a classic Hidden-Markov-Model map-matcher (Newson & Krumm 2009)
 """
 
 from __future__ import annotations
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import math
 import heapq
 
@@ -61,12 +61,14 @@ def candidate_sets(obs_pts: List[Tuple[float, float]],
     cand_dists = []
 
     for lat, lon in obs_pts:
-        dists, idx = tree.query([[lat, lon]], k=k)
+        k_eff = min(k, len(idx2node))
+        _dists, idx = tree.query([[lat, lon]], k=k_eff)
         nodes = [idx2node[i] for i in idx[0]]
         cand_nodes.append(nodes)
-        cand_dists.append(dists[0])   # kilometres here, we'll convert later
-    # convert KDTree's default metres to NM
-    cand_dists = [[d / 1852.0 for d in row] for row in cand_dists]
+        cand_dists.append([
+            haversine_nm(lat, lon, G.nodes[n]["lat"], G.nodes[n]["lon"])
+            for n in nodes
+        ])
     return cand_nodes, cand_dists
 
 
@@ -107,8 +109,30 @@ def viterbi_match(G: nx.Graph,
                   obs_pts: List[Tuple[float, float]],
                   k: int = 15,
                   sigma: float = 0.3,
-                  beta: float = 1.5):
+                  beta: float = 1.5,
+                  start_node: Optional[str] = None,
+                  end_node: Optional[str] = None):
     cand_nodes, cand_dists = candidate_sets(obs_pts, G, k)
+    if not cand_nodes:
+        raise ValueError("No observation points provided for Viterbi matching.")
+
+    if start_node is not None:
+        if start_node not in G.nodes:
+            raise ValueError(f"start_node '{start_node}' not found in graph.")
+        start_lat = G.nodes[start_node]["lat"]
+        start_lon = G.nodes[start_node]["lon"]
+        start_dist = haversine_nm(obs_pts[0][0], obs_pts[0][1], start_lat, start_lon)
+        cand_nodes[0] = [start_node]
+        cand_dists[0] = [start_dist]
+
+    if end_node is not None:
+        if end_node not in G.nodes:
+            raise ValueError(f"end_node '{end_node}' not found in graph.")
+        end_lat = G.nodes[end_node]["lat"]
+        end_lon = G.nodes[end_node]["lon"]
+        end_dist = haversine_nm(obs_pts[-1][0], obs_pts[-1][1], end_lat, end_lon)
+        cand_nodes[-1] = [end_node]
+        cand_dists[-1] = [end_dist]
 
     # pre-compute great-circle gaps between consecutive observations
     obs_gaps = [haversine_nm(*obs_pts[i],

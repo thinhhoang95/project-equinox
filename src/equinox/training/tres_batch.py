@@ -445,6 +445,8 @@ def process_flight(flight_series, config, components, case_name, batch_idx, outp
             original_route_str,
             feasible_graph,
             flight_components['graph'],
+            origin=flight_series.get('origin'),
+            destination=flight_series.get('destination'),
             thinned_transitions=thinned_transitions,
             node_to_idx=flight_components['node_to_idx'],
             idx_to_node=idx_to_node,

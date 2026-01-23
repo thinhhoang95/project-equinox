@@ -89,7 +89,7 @@ snap_route_to_feasible_graph:
     Output:
         Space-separated string of waypoint names snapped to feasible path
             Example: "KJFK KORD KLAX" (if all waypoints are feasible)
-            Returns None if:
+            Raises if:
                 - original_route_str is empty or invalid
                 - Not enough waypoints found (< 2)
                 - Feasible graph has no edges
@@ -478,6 +478,8 @@ def snap_route_to_feasible_graph(
     feasible_graph,
     original_graph,
     *,
+    origin=None,
+    destination=None,
     thinned_transitions=None,
     node_to_idx=None,
     idx_to_node=None,
@@ -493,10 +495,10 @@ def snap_route_to_feasible_graph(
 
     When thinned_transitions and node_to_idx are provided, the snapped route is
     post-validated against state transitions and optionally repaired to enforce
-    continuity (returns None if no valid state chain can be found).
+    continuity (raises on matching or state-chain failures).
     """
     if not original_route_str or not isinstance(original_route_str, str):
-        return None
+        raise ValueError("original_route_str is empty or invalid.")
 
     waypoint_names = original_route_str.split()
 
@@ -509,12 +511,10 @@ def snap_route_to_feasible_graph(
             logging.warning("Waypoint '%s' not found in original graph", waypoint_name)
 
     if len(obs_pts) < 2:
-        logging.warning("Not enough waypoints found in graph (%s)", len(obs_pts))
-        return None
+        raise RuntimeError(f"Not enough waypoints found in graph ({len(obs_pts)}).")
 
     if feasible_graph.number_of_edges() == 0:
-        logging.warning("Feasible graph has no edges")
-        return None
+        raise RuntimeError("Feasible graph has no edges.")
 
     for u, v in feasible_graph.edges():
         if "length_nm" not in feasible_graph.edges[u, v]:
@@ -522,75 +522,78 @@ def snap_route_to_feasible_graph(
             lat2, lon2 = feasible_graph.nodes[v]["lat"], feasible_graph.nodes[v]["lon"]
             feasible_graph.edges[u, v]["length_nm"] = haversine_nm(lat1, lon1, lat2, lon2)
 
-    try:
-        _, best_edges = viterbi_match(feasible_graph, obs_pts, k=50, beta=0.5)
-        if not best_edges:
-            logging.warning("No edges found in snapped route")
-            return None
+    start_node = origin if origin else None
+    end_node = destination if destination else None
+    _, best_edges = viterbi_match(
+        feasible_graph,
+        obs_pts,
+        k=50,
+        beta=0.5,
+        start_node=start_node,
+        end_node=end_node,
+    )
+    if not best_edges:
+        raise RuntimeError("No edges found in snapped route.")
 
-        full_nodes = [best_edges[0][0]] + [edge[1] for edge in best_edges]
-        snapped_nodes = full_nodes
-        state_chain = None
-        match_kinds = None
-        repairs = 0
+    full_nodes = [best_edges[0][0]] + [edge[1] for edge in best_edges]
+    snapped_nodes = full_nodes
+    state_chain = None
+    match_kinds = None
+    repairs = 0
 
-        if thinned_transitions is not None and node_to_idx is not None:
-            edge_adj, state_adj, states_by_waypoint = build_state_adjacency(
-                thinned_transitions
+    if thinned_transitions is not None and node_to_idx is not None:
+        edge_adj, state_adj, states_by_waypoint = build_state_adjacency(
+            thinned_transitions
+        )
+        if idx_to_node is None:
+            idx_to_node = {v: k for k, v in node_to_idx.items()}
+
+        if allow_state_repair:
+            result = _realize_route_with_state_repair(
+                snapped_nodes,
+                node_to_idx,
+                edge_adj,
+                state_adj,
+                states_by_waypoint,
+                idx_to_node,
+                k_tolerance_bins=k_tolerance_bins,
+                max_state_repair_attempts=max_state_repair_attempts,
+                max_state_repair_hops=max_state_repair_hops,
+                max_state_repair_nodes=max_state_repair_nodes,
             )
-            if idx_to_node is None:
-                idx_to_node = {v: k for k, v in node_to_idx.items()}
-
-            if allow_state_repair:
-                result = _realize_route_with_state_repair(
-                    snapped_nodes,
-                    node_to_idx,
-                    edge_adj,
-                    state_adj,
-                    states_by_waypoint,
-                    idx_to_node,
-                    k_tolerance_bins=k_tolerance_bins,
-                    max_state_repair_attempts=max_state_repair_attempts,
-                    max_state_repair_hops=max_state_repair_hops,
-                    max_state_repair_nodes=max_state_repair_nodes,
+            if not result:
+                raise RuntimeError("State repair failed for snapped route.")
+            snapped_nodes, state_chain, match_kinds, repairs = result
+        else:
+            state_chain, match_kinds, failure = realize_state_chain_for_route(
+                snapped_nodes,
+                node_to_idx,
+                edge_adj,
+                k_tolerance_bins=k_tolerance_bins,
+                states_by_waypoint=states_by_waypoint,
+            )
+            if not state_chain:
+                reason = failure["reason"] if failure else "unknown"
+                raise RuntimeError(
+                    f"State realization failed for snapped route: {reason}"
                 )
-                if not result:
-                    logging.warning("State repair failed for snapped route")
-                    return None
-                snapped_nodes, state_chain, match_kinds, repairs = result
-            else:
-                state_chain, match_kinds, failure = realize_state_chain_for_route(
-                    snapped_nodes,
-                    node_to_idx,
-                    edge_adj,
-                    k_tolerance_bins=k_tolerance_bins,
-                    states_by_waypoint=states_by_waypoint,
-                )
-                if not state_chain:
-                    reason = failure["reason"] if failure else "unknown"
-                    logging.warning("State realization failed for snapped route: %s", reason)
-                    return None
-        elif thinned_transitions is not None or node_to_idx is not None:
-            logging.warning(
-                "State realization skipped (thinned_transitions=%s, node_to_idx=%s)",
-                thinned_transitions is not None,
-                node_to_idx is not None,
-            )
+    elif thinned_transitions is not None or node_to_idx is not None:
+        logging.warning(
+            "State realization skipped (thinned_transitions=%s, node_to_idx=%s)",
+            thinned_transitions is not None,
+            node_to_idx is not None,
+        )
 
-        route_str = " ".join(snapped_nodes)
-        if return_details:
-            rho_sequence = (
-                [state[2] for state in state_chain] if state_chain else None
-            )
-            return {
-                "route": route_str,
-                "state_chain": state_chain,
-                "rho_sequence": rho_sequence,
-                "match_kinds": match_kinds,
-                "repairs": repairs,
-            }
-        return route_str
-
-    except Exception as e:
-        logging.error("Viterbi matching failed: %s", e)
-        return None
+    route_str = " ".join(snapped_nodes)
+    if return_details:
+        rho_sequence = (
+            [state[2] for state in state_chain] if state_chain else None
+        )
+        return {
+            "route": route_str,
+            "state_chain": state_chain,
+            "rho_sequence": rho_sequence,
+            "match_kinds": match_kinds,
+            "repairs": repairs,
+        }
+    return route_str
