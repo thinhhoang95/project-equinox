@@ -3,7 +3,7 @@
 Usage example:
     /Users/thinhhoang/miniforge3/envs/equinox/bin/python -m equinox.evals.eval_sampling_frechet \
         --case-dir data/cases/LGAV_LFPG \
-        --results-dir results_nopref \
+        --results-dir results_nogaugezeroridge \
         --n-samples 100 \
         --policy sample \
         --resample-spacing-nm 25 \

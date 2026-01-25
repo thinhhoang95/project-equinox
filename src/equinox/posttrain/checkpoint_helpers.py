@@ -444,6 +444,7 @@ def plot_edge_preferences_cartopy(
     show_colorbar: bool = True,
     show_waypoints: bool = False,
     show: bool = True,
+    figsize: Tuple[float, float] = (10, 6),
 ):
     """
     Plot edge preferences on a Cartopy map using colored links.
@@ -459,7 +460,7 @@ def plot_edge_preferences_cartopy(
 
     created_ax = ax is None
     if created_ax:
-        fig = plt.figure(figsize=(40, 34)) # 10, 6
+        fig = plt.figure(figsize=figsize)
         ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
 
     ax.add_feature(cfeature.COASTLINE)

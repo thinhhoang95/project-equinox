@@ -75,7 +75,6 @@ from src.equinox.dp.trespass.amorwin.backward_gradient import backward_gradient_
 from src.equinox.preferences.disentanglement import (
     build_edge_list,
     build_feature_matrix,
-    compute_empirical_counts_from_routes,
     d_weighted_normalize_features,
     GaugeFixedPreferenceProjector,
     _EPS
@@ -1272,14 +1271,9 @@ def run_batch_sgd_pipeline(case_dir: str, config_path: str, batch_config: BatchL
         pref_edge_u = edge_u_cpu.to(device)
         pref_edge_v = edge_v_cpu.to(device)
 
-        global_counts = compute_empirical_counts_from_routes(
-            routes_df["route"],
-            components["node_to_idx"],
-            components["num_nodes"],
-        )
-        d_e = global_counts[edge_u_cpu, edge_v_cpu].to(device=device, dtype=torch.float64)
-        pref_projection_eps = _EPS
-        w_e = d_e + pref_projection_eps
+        edge_count = edge_u_cpu.shape[0]
+        d_e = torch.ones(edge_count, device=device, dtype=torch.float64)
+        w_e = torch.ones_like(d_e)
 
         mean_tailwind_e = _compute_mean_tailwind_per_edge(
             routes_df=routes_df,
