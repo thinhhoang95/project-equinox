@@ -8,6 +8,7 @@ import networkx as nx
 logger = logging.getLogger(__name__)
 
 _EPS = 1e-4 # minimal count for non-traversed edge, to improve numerical stability
+# note that if identity matrices were used for W of BWp = 0 condition, then _EPS does not do anything.
 
 
 def build_edge_list(
