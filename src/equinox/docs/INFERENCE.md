@@ -114,6 +114,92 @@ res = compute_4d_path_for_dataset(
 )
 ```
 
+## Scenario runs: rerouting and preference remap
+
+`compute_4d_path_for_dataset` supports scenario inputs for:
+- graph shaping (for example, avoid sectors),
+- checkpoint preference remapping by nearest-neighbor matching,
+- recomputing transitions on the scenario graph.
+
+### Avoid sectors and recompute transitions
+
+```python
+from equinox.sampling.pipeline import (
+    GraphScenario,
+    compute_4d_path_for_dataset,
+)
+
+res = compute_4d_path_for_dataset(
+    case_dir="data/cases/LGAV_LFPG",
+    checkpoint_path="data/cases/LGAV_LFPG/batch_sgd_results/checkpoint_iter_200.pt",
+    flight_id="392AECAFR98CQ",
+    takeoff_timestamp=1682781206,
+    n_samples=20,
+    policy="sample",
+    graph_scenario=GraphScenario(
+        mode="edge_filter",
+        sectors_to_avoid=["LFBBZ3"],
+        sectors_geojson_path="data/airspace/sectors.geojson",
+    ),
+    transition_mode="recompute",
+)
+
+print(res.metadata["transition_metadata"])
+print(res.metadata["graph_scenario"])
+```
+
+### Remap checkpoint preferences + force zero edges
+
+```python
+from equinox.sampling.pipeline import (
+    GraphScenario,
+    PreferenceScenario,
+    compute_4d_path_for_dataset,
+)
+
+res = compute_4d_path_for_dataset(
+    case_dir="data/cases/LGAV_LFPG",
+    checkpoint_path="data/cases/LGAV_LFPG/batch_sgd_results/checkpoint_iter_200.pt",
+    flight_id="392AECAFR98CQ",
+    takeoff_timestamp=1682781206,
+    graph_scenario=GraphScenario(
+        mode="edge_filter",
+        sectors_to_avoid=["LFBBZ3"],
+    ),
+    preference_scenario=PreferenceScenario(
+        source="checkpoint",
+        remap_method="node_nn",
+        max_nn_distance_nm=8.0,
+        unmatched_value=0.0,
+        zero_edges=[("MOU", "NARAK"), ("NARAK", "RESMI")],
+    ),
+    transition_mode="recompute",
+    n_samples=20,
+)
+
+print(res.metadata["preference_scenario"])
+print(res.metadata["scenario_hash"])
+```
+
+### Preference ablation (all-zero preferences)
+
+```python
+from equinox.sampling.pipeline import PreferenceScenario, compute_4d_path_for_dataset
+
+res = compute_4d_path_for_dataset(
+    case_dir="data/cases/LGAV_LFPG",
+    checkpoint_path="data/cases/LGAV_LFPG/batch_sgd_results/checkpoint_iter_200.pt",
+    flight_id="392AECAFR98CQ",
+    takeoff_timestamp=1682781206,
+    preference_scenario=PreferenceScenario(
+        source="checkpoint",
+        remap_method="node_nn",
+        zero_all=True,
+    ),
+    transition_mode="recompute",
+)
+```
+
 ## Notes and guardrails
 
 - Inference requires case configs with `cost_model_version: lin_disent`. Legacy
@@ -121,5 +207,7 @@ res = compute_4d_path_for_dataset(
 - Checkpoints created by recent training runs include config snapshots and a
   graph fingerprint. The inference metadata reports whether the checkpoint
   fingerprint matches the case graph.
+- Scenario runs include a `scenario_hash` in metadata and SVI cache keying to
+  avoid cache collisions between different graph/preference settings.
 - 4D reconstruction uses `get_4d_trajectory` and requires a takeoff timestamp
   for time anchoring.
