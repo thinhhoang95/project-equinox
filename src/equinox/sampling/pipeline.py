@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -80,6 +81,8 @@ class GraphScenario:
     sectors_geojson_path: str = "data/airspace/sectors.geojson"
     mode: Literal["edge_filter", "regenerate"] = "edge_filter"
     regenerate_args: Optional[GraphRegenerateArgs] = None
+    post_sector_connectivity_repair: bool = False
+    connectivity_repair_iterations: int = 20
 
 
 @dataclass
@@ -176,6 +179,85 @@ def _validate_graph_for_inference(graph: nx.DiGraph, origin_node: str, goal_node
         raise ValueError("No path from origin to goal after applying graph scenario.")
 
 
+def _compute_initial_bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    lat1_rad, lon1_rad = math.radians(lat1), math.radians(lon1)
+    lat2_rad, lon2_rad = math.radians(lat2), math.radians(lon2)
+    dlon = lon2_rad - lon1_rad
+    x = math.sin(dlon) * math.cos(lat2_rad)
+    y = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(dlon)
+    return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
+
+
+def _nodes_that_cannot_reach_goal(graph: nx.DiGraph, goal_node: str) -> List[str]:
+    reachable = set(nx.ancestors(graph, goal_node))
+    reachable.add(goal_node)
+    return list(set(graph.nodes()) - reachable)
+
+
+def _nodes_source_cannot_reach(graph: nx.DiGraph, source_node: str) -> List[str]:
+    reachable = set(nx.descendants(graph, source_node))
+    reachable.add(source_node)
+    return list(set(graph.nodes()) - reachable)
+
+
+def _repair_connectivity_after_sector_removal(
+    graph: nx.DiGraph,
+    *,
+    source_id: str,
+    destination_id: str,
+    n_iter: int,
+) -> Dict[str, Any]:
+    from equinox.training.prep.graph_scripts.improve_connectivity import improve_graph_connectivity
+
+    if source_id not in graph.nodes or destination_id not in graph.nodes:
+        return {
+            "enabled": True,
+            "applied": False,
+            "reason": "origin_or_goal_missing_in_graph",
+            "iterations": int(n_iter),
+            "edges_added_total": 0,
+        }
+
+    main_bearing = _compute_initial_bearing_deg(
+        float(graph.nodes[source_id]["lat"]),
+        float(graph.nodes[source_id]["lon"]),
+        float(graph.nodes[destination_id]["lat"]),
+        float(graph.nodes[destination_id]["lon"]),
+    )
+    edges_added_total = 0
+    iterations_executed = 0
+    for _ in range(max(0, int(n_iter))):
+        orphan_goal_nodes = _nodes_that_cannot_reach_goal(graph, destination_id)
+        orphan_source_nodes = _nodes_source_cannot_reach(graph, source_id)
+        edge_before = graph.number_of_edges()
+        graph = improve_graph_connectivity(
+            graph,
+            orphan_goal_nodes,
+            orphan_source_nodes,
+            main_bearing=main_bearing,
+            radius_nm=400,
+            bearing_tolerance_deg=85,
+            n_degree_connections=4,
+            n_nearest_connections=4,
+        )
+        edge_after = graph.number_of_edges()
+        added = max(0, edge_after - edge_before)
+        edges_added_total += added
+        iterations_executed += 1
+        if added == 0:
+            break
+
+    return {
+        "enabled": True,
+        "applied": True,
+        "iterations_requested": int(n_iter),
+        "iterations_executed": int(iterations_executed),
+        "edges_added_total": int(edges_added_total),
+        "remaining_goal_orphans": len(_nodes_that_cannot_reach_goal(graph, destination_id)),
+        "remaining_source_orphans": len(_nodes_source_cannot_reach(graph, source_id)),
+    }
+
+
 def _prepare_graph_for_scenario(
     *,
     config: Any,
@@ -192,6 +274,7 @@ def _prepare_graph_for_scenario(
     if mode == "edge_filter":
         graph = components["graph"].copy()
         removed_edges = 0
+        connectivity_repair_report: Dict[str, Any] = {"enabled": False}
         if graph_scenario.sectors_to_avoid:
             before = graph.number_of_edges()
             graph, _ = remove_edges_through_sectors(
@@ -201,6 +284,13 @@ def _prepare_graph_for_scenario(
                 output_dir=None,
             )
             removed_edges = before - graph.number_of_edges()
+            if graph_scenario.post_sector_connectivity_repair:
+                connectivity_repair_report = _repair_connectivity_after_sector_removal(
+                    graph,
+                    source_id=components["origin_node"],
+                    destination_id=components["goal_node"],
+                    n_iter=graph_scenario.connectivity_repair_iterations,
+                )
         updated = dict(components)
         updated["graph"] = graph
         _validate_graph_for_inference(graph, updated["origin_node"], updated["goal_node"])
@@ -212,6 +302,7 @@ def _prepare_graph_for_scenario(
             "edges_removed": removed_edges,
             "num_nodes": graph.number_of_nodes(),
             "num_edges": graph.number_of_edges(),
+            "connectivity_repair": connectivity_repair_report,
         }
 
     # mode == regenerate

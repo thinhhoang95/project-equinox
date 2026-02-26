@@ -14,6 +14,8 @@ from equinox.wind.wind_model import WindModel
 
 MPS_TO_KNOTS = 1.9438444924406 # 1.9438444924406 m/s to kts
 EPS_BIN_EPS = 1e-9  # small guard against float error
+SECONDS_PER_DAY = 24 * 3600
+DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 
 # Phase constants as indices
 PHASE_CLIMB = CLIMB # Typically 0
@@ -30,6 +32,22 @@ def _round_to_bin_idx(value: float, max_bin_idx: int) -> int:
     if not (0 <= idx <= max_bin_idx): # Max bin index is inclusive
         return -1
     return idx
+
+
+def _unwrap_seconds_since_midnight(
+    *,
+    reference_dt: datetime,
+    target_dt: datetime,
+    target_ssm: float,
+) -> float:
+    """
+    Convert wrapped seconds-since-midnight into a monotonic wall-clock timeline.
+
+    The returned value preserves date progression relative to `reference_dt` and can
+    exceed 86400 for overnight flights.
+    """
+    day_offset = (target_dt.date() - reference_dt.date()).days
+    return float(target_ssm + day_offset * SECONDS_PER_DAY)
 
 
 def tres_backward(
@@ -108,7 +126,8 @@ def tres_backward(
         - rho_bin_from/to: int, remaining climb time bin index
         - alt_from/to_rounded_ft: int, altitude in feet, rounded
         - phase_from/to: int, flight phase (0:CLIMB, 1:CRUISE, 2:DESCENT)
-        - eta_from/to_abs_s: float, seconds since midnight (wall-clock absolute)
+        - eta_from/to_abs_s: float, monotonic wall-clock seconds that may exceed 86400
+          for overnight flights.
 
     Raises
     ------
@@ -130,10 +149,28 @@ def tres_backward(
         raise ValueError(f"Goal node {goal_node_id} not found in graph.")
     g_idx = node_to_idx[goal_node_id]
 
-    estimated_landing_ssm = datestr_to_seconds_since_midnight(estimated_landing_time_str)
-    eta_takeoff_ssm = datestr_to_seconds_since_midnight(eta_takeoff_str)
+    takeoff_dt = datetime.strptime(eta_takeoff_str, DATETIME_FMT)
+    landing_dt = datetime.strptime(estimated_landing_time_str, DATETIME_FMT)
+    if landing_dt < takeoff_dt:
+        raise ValueError(
+            f"estimated_landing_time_str={estimated_landing_time_str!r} is earlier than "
+            f"eta_takeoff_str={eta_takeoff_str!r}."
+        )
 
-    max_time_overall_seconds = estimated_landing_ssm
+    eta_takeoff_ssm = datestr_to_seconds_since_midnight(eta_takeoff_str)
+    estimated_landing_ssm = datestr_to_seconds_since_midnight(estimated_landing_time_str)
+    eta_takeoff_wall_clock_sec = _unwrap_seconds_since_midnight(
+        reference_dt=takeoff_dt,
+        target_dt=takeoff_dt,
+        target_ssm=eta_takeoff_ssm,
+    )
+    estimated_landing_wall_clock_sec = _unwrap_seconds_since_midnight(
+        reference_dt=takeoff_dt,
+        target_dt=landing_dt,
+        target_ssm=estimated_landing_ssm,
+    )
+
+    max_time_overall_seconds = estimated_landing_wall_clock_sec
     min_time_overall_seconds = max_time_overall_seconds - max_flight_duration_hours * 3600
     num_time_bins = int((max_time_overall_seconds - min_time_overall_seconds) / delta_t_seconds_wall_clock) + 1
 
@@ -161,7 +198,7 @@ def tres_backward(
     # the last transition in the list will be used.
     
     # Initialize at goal node
-    goal_node_time_since_min_overall = estimated_landing_ssm - min_time_overall_seconds
+    goal_node_time_since_min_overall = estimated_landing_wall_clock_sec - min_time_overall_seconds
     landing_time_bin_idx = _round_to_bin_idx(goal_node_time_since_min_overall / delta_t_seconds_wall_clock, num_time_bins -1)
     
     if landing_time_bin_idx == -1:
@@ -175,7 +212,7 @@ def tres_backward(
     goal_state_tuple = (g_idx, landing_time_bin_idx, rho_g_idx, phase_g_idx)
     # V[goal_state_tuple] = 0.0 # V removed
     active_alt[goal_state_tuple] = current_final_alt
-    active_eta[goal_state_tuple] = float(estimated_landing_ssm)
+    active_eta[goal_state_tuple] = float(estimated_landing_wall_clock_sec)
     active_phase_return[goal_state_tuple] = phase_g_idx
 
     # --- 2. Topological Generations ---
@@ -280,7 +317,7 @@ def tres_backward(
 
 
             # --- Path 1: Standard Propagation (CRZ-CRZ, DES-DES, CRZ-DES) ---
-            if alt_u_std >= 0 and not np.isnan(eta_u_std_ssm) and phase_u_std != PHASE_CLIMB and eta_u_std_ssm >= eta_takeoff_ssm:
+            if alt_u_std >= 0 and not np.isnan(eta_u_std_ssm) and phase_u_std != PHASE_CLIMB and eta_u_std_ssm >= eta_takeoff_wall_clock_sec:
                 k_u_std_idx = _round_to_bin_idx((eta_u_std_ssm - min_time_overall_seconds) / delta_t_seconds_wall_clock, num_time_bins -1)
                 rho_u_std_idx = 0 # For CRUISE or DESCENT at u, remaining climb is 0
                 
@@ -323,7 +360,7 @@ def tres_backward(
             # --- Path 2: Transitions-based Propagation (CLIMB focus) ---
             if (u_idx, v_idx) in transitions_map_by_indices:
                 eps_u_bins, alt_u_ft_from_trans, eps_v_bins = transitions_map_by_indices[(u_idx, v_idx)]
-                v_actual_elapsed_bins_from_takeoff = (eta_v_ssm_val - eta_takeoff_ssm) / delta_t_seconds_climb
+                v_actual_elapsed_bins_from_takeoff = (eta_v_ssm_val - eta_takeoff_wall_clock_sec) / delta_t_seconds_climb
                 alt_u_trans = alt_u_ft_from_trans
                 
                 phase_u_trans = -1
@@ -346,12 +383,12 @@ def tres_backward(
 
                     # --- BUG FIX: Directly compute wall-clock time from elapsed climb time (epsilon) ---
                     # OLD: eta_u_trans_ssm_val = eta_v_ssm_val - edge_climb_time_seconds
-                    eta_u_trans_ssm_val = eta_takeoff_ssm + (eps_u_bins * delta_t_seconds_climb)
+                    eta_u_trans_ssm_val = eta_takeoff_wall_clock_sec + (eps_u_bins * delta_t_seconds_climb)
                     valid_transition_to_climb_path = True
 
                     # DEBUGGING
                     # if u_idx == 331: # LERM
-                    #     print(f'2.1> {v_node} <- LERM ADMT PTH 2 CLB/CLB ETAV = {eta_v_ssm_val:.0f} > {eta_takeoff_ssm:.0f}')
+                    #     print(f'2.1> {v_node} <- LERM ADMT PTH 2 CLB/CLB ETAV = {eta_v_ssm_val:.0f} > {eta_takeoff_wall_clock_sec:.0f}')
                     #     pass
                 
                 # SWITCHING FROM CRUISE TO CLIMB <--- THIS IS THE ONLY PLACE WHERE WE SWITCH FROM CRUISE TO CLIMB
@@ -368,12 +405,12 @@ def tres_backward(
                     if edge_climb_time_seconds >= 0: # Must be a forward progression in climb time
                         # --- BUG FIX: Directly compute wall-clock time from elapsed climb time (epsilon) ---
                         # OLD: eta_u_trans_ssm_val = eta_v_ssm_val - edge_climb_time_seconds
-                        eta_u_trans_ssm_val = eta_takeoff_ssm + (eps_u_bins * delta_t_seconds_climb)
+                        eta_u_trans_ssm_val = eta_takeoff_wall_clock_sec + (eps_u_bins * delta_t_seconds_climb)
                         valid_transition_to_climb_path = True
 
                         # # DEBUGGING
                         # if u_idx == 331: # LERM
-                        #     print(f'2.2> {v_node} <- {u_node} ADMT PTH 2 CRZ/CLB ETAV = {eta_v_ssm_val:.0f} > {eta_takeoff_ssm:.0f}')
+                        #     print(f'2.2> {v_node} <- {u_node} ADMT PTH 2 CRZ/CLB ETAV = {eta_v_ssm_val:.0f} > {eta_takeoff_wall_clock_sec:.0f}')
                         #     pass
 
                 else:
@@ -383,7 +420,7 @@ def tres_backward(
                 
                 # THESE CONDITIONS WILL VERIFY THE TRANSITION PATH ONE MORE TIME WITH MORE CONDITIONS
                 # BUT THE SWITCHING LOGIC IS ALREADY HANDLED ABOVE!
-                if valid_transition_to_climb_path and alt_u_trans >= 0 and not np.isnan(eta_u_trans_ssm_val) and rho_u_trans_idx != -1 and eta_u_trans_ssm_val >= eta_takeoff_ssm:
+                if valid_transition_to_climb_path and alt_u_trans >= 0 and not np.isnan(eta_u_trans_ssm_val) and rho_u_trans_idx != -1 and eta_u_trans_ssm_val >= eta_takeoff_wall_clock_sec:
                     k_u_trans_idx = _round_to_bin_idx((eta_u_trans_ssm_val - min_time_overall_seconds) / delta_t_seconds_wall_clock, num_time_bins-1)
 
                     if k_u_trans_idx != -1:
